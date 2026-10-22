@@ -1,0 +1,15 @@
+# mutant_id: M022
+# target: scripts/adr.py
+# operator: drop-check
+# behaviour: an ADR component must be a literal path
+--- a/scripts/adr.py
++++ b/scripts/adr.py
+@@ -91,7 +91,7 @@
+     """
+     if component.startswith("/") or ".." in component.split("/"):
+         return "must be a relative path inside the repository"
+-    if GLOB_CHARS & set(component):
++    if False:
+         return "must be a literal path, not a glob; list each file the decision governs"
+     return None
+ 

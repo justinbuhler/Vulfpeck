@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Rule 3, write half: re-sync the CodeGraph index when main moves in the main checkout.
+#
+# git runs this after `git pull`, `git pull --rebase` that only fast-forwards, and
+# `git merge --ff-only` (measured: all three fire post-merge). scripts/land.sh's
+# fast-forward of the main checkout (`git -C "$MAIN_WT" merge --ff-only`, swap_main) runs
+# the same merge, so it fires this hook too. It does NOT run when land.sh has no main
+# worktree and falls back to `git update-ref`, nor for a merge made by a GitHub button,
+# which never touches the checkout; the SessionStart hook
+# (scripts/codegraph_freshness.py --sync-if-stale) covers what slips by.
+#
+# Four properties, each pinned by tests/test_codegraph_sync.py:
+#   1. Main checkout only. core.hooksPath=.githooks is shared by every linked worktree,
+#      but the index describes the main checkout (CG-03 flags any other tree), so a
+#      worktree skips silently. Linked worktrees read the index; they never sync it.
+#   2. Never fails the git operation. No `set -e`; every path ends in `exit 0`.
+#   3. One sync at a time. A non-blocking lock directory, .omc/codegraph-sync.lock, is
+#      shared with the SessionStart hook; if it is held the sync is skipped, not queued.
+#   4. Never blocks it. The sync runs detached in the background, output to a gitignored
+#      log, because a sync can take longer than anyone wants a pull to wait.
+#
+# Not post-checkout or post-rewrite, deliberately. post-rewrite fires only
+# when local commits are rewritten, which main forbids; post-checkout fires on every
+# worktree add (land.sh makes one per gate) and on branch switches the main checkout does
+# not make.
+
+# git exports these into hooks and they override cwd for every git command below.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE \
+      GIT_CEILING_DIRECTORIES
+
+command -v codegraph >/dev/null 2>&1 || exit 0
+
+top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+[ -n "$top" ] || exit 0
+# The first `git worktree list --porcelain` entry is always the main working tree.
+main=$(git worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')
+[ -n "$main" ] || exit 0
+top=$(cd "$top" 2>/dev/null && pwd -P) || exit 0
+main=$(cd "$main" 2>/dev/null && pwd -P) || exit 0
+[ "$top" = "$main" ] || exit 0
+
+[ -d "$top/.codegraph" ] || exit 0
+
+log_dir="$top/.omc"
+mkdir -p "$log_dir" 2>/dev/null || exit 0
+log="$log_dir/codegraph-sync.log"
+lock="$log_dir/codegraph-sync.lock"
+
+# Same protocol as codegraph_freshness.acquire_sync_lock: mkdir is the atomic test-and-set,
+# and a lock older than 5 minutes belongs to a dead holder and is broken once.
+if ! mkdir "$lock" 2>/dev/null; then
+  [ -n "$(find "$lock" -maxdepth 0 -mmin +5 2>/dev/null)" ] || exit 0
+  rmdir "$lock" 2>/dev/null || exit 0
+  mkdir "$lock" 2>/dev/null || exit 0
+fi
+
+# stdin from /dev/null and both output streams redirected, so git is not left waiting
+# on a pipe the background process still holds.
+(
+  trap 'rmdir "$lock" 2>/dev/null' EXIT
+  printf '%s post-merge: codegraph sync %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$top"
+  codegraph sync --quiet "$top"
+  rc=$?
+  printf '%s post-merge: exit %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$rc"
+) </dev/null >>"$log" 2>&1 &
+
+exit 0

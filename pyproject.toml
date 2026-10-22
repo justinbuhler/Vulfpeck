@@ -1,0 +1,21 @@
+[project]
+name = "vulfpeck"
+version = "0.1.0"
+description = "Vulfpeck"
+requires-python = ">=3.14"
+
+# Prefer the standard library. Add a runtime dependency only with a stated reason.
+dependencies = []
+
+[tool.uv]
+package = false
+
+# ruff is not a dependency: the land gate and pre-commit run it ephemerally via
+# `uvx ruff check .`. Start narrow, widen deliberately.
+[tool.ruff.lint]
+select = ["E9", "F"]
+ignore = ["F401", "F541", "F841"]
+
+# Scripts run with PYTHONPATH=.:scripts (run.sh); this tells editors the same.
+[tool.pyright]
+extraPaths = ["scripts", "."]

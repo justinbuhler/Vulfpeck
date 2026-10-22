@@ -1,0 +1,15 @@
+# mutant_id: M026
+# target: .claude/hooks/readonly_guard.py
+# operator: widen-set
+# behaviour: another worktree's branch may only advance
+--- a/.claude/hooks/readonly_guard.py
++++ b/.claude/hooks/readonly_guard.py
+@@ -164,7 +164,7 @@
+                    if was.get(r) != now.get(r) and r != "refs/heads/main" and not (
+                        before.get("branch") and r == "refs/heads/" + before["branch"]))
+     advanced = [r for r in moved if r in writers and was.get(r) and now.get(r)
+-                and is_ancestor(top, was[r], now[r])]
++                ]
+     moved = [r for r in moved if r not in advanced]
+     if advanced:
+         noted.append(f"branches checked out in other worktrees advanced: {', '.join(advanced[:6])}")

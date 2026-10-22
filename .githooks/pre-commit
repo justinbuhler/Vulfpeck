@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Lint before every commit. The suite gates the land, not the commit.
+#
+# Lint only, not the suite, because the suite needs what the land provides: the
+# merged tree and the untracked inputs harness.toml land.copy_untracked names. A
+# suite run here would fail for want of them, --no-verify would become routine,
+# and a gate bypassed by default gates nothing. scripts/land.sh runs the full
+# gate on the merged tree before it moves refs/heads/main, so no commit reaches
+# main having been gated by lint alone.
+#
+# Not pre-push either: pushes to branches are frequent, and the suite at every
+# push would gate almost everything at the cost of the whole suite each time.
+# --no-verify should no longer be routine here. A failure here is a lint failure.
+# Bypass once:  git commit --no-verify
+# `main` is landed onto, never committed to. scripts/land.sh moves refs/heads/main
+# with update-ref from a detached scratch worktree, so it never trips this and needs
+# no bypass token. See AGENTS.md ORCH-12.
+if [ "$(git symbolic-ref --quiet --short HEAD 2>/dev/null)" = main ]; then
+  echo "✗ direct commit on main is not a sanctioned path; use ./scripts/land.sh"
+  exit 1
+fi
+
+# git exports these into hooks, and they override cwd for every git command a
+# test runs - so a test that builds a throwaway repo operates on THIS repository
+# instead, clobbering the index and moving the branch ref: a test fixture's
+# commit once landed on three real branches this way.
+# Scrubbing here protects every worktree at once, including the ten still
+# carrying an unscrubbed copy of that test, which a fix on main cannot reach.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE \
+      GIT_CEILING_DIRECTORIES
+
+# The lint command comes from harness.toml through scripts/gate.sh, the same
+# definition the land and CI run. The gate script is found beside this hook, so
+# it is this repository's own copy.
+exec "$(dirname "$0")/../scripts/gate.sh" --lint-only

@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.env.*
+*.har
+output/
+.omc/
+.codegraph/
+.claude/settings.local.json
+.claude/session-reads.txt
+.claude/worktrees/
+.rtk/
+.ruff_cache/
+.pytest_cache/
+tmp/

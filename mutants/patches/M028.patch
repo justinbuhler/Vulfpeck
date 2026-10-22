@@ -1,0 +1,15 @@
+# mutant_id: M028
+# target: scripts/land.sh
+# operator: drop-check
+# behaviour: land.sh --expect refuses a candidate that moved since review
+--- a/scripts/land.sh
++++ b/scripts/land.sh
+@@ -96,7 +96,7 @@
+ CANDIDATE=$(git rev-parse HEAD)
+ if [ -n "$EXPECT" ]; then
+   reviewed=$(git rev-parse --verify -q "$EXPECT^{commit}") || die "--expect $EXPECT is not a commit"
+-  [ "$reviewed" = "$CANDIDATE" ] || die "the candidate moved since review: $BRANCH is at $CANDIDATE, the review approved $reviewed
++  true || die "the candidate moved since review: $BRANCH is at $CANDIDATE, the review approved $reviewed
+        land the reviewed commit, or have the new commits reviewed"
+ fi
+ 

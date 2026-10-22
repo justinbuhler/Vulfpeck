@@ -1,0 +1,15 @@
+# mutant_id: M027
+# target: .claude/harness/agent_harness.py
+# operator: drop-check
+# behaviour: enqueue refuses a directory
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -468,7 +468,7 @@
+         if not resolved.is_relative_to(worktree):
+             die(f"{resolved} is outside task {args.task!r}'s worktree {worktree}")
+         # A directory (or `.`) is a pattern in disguise: git stages everything under it.
+-        if resolved == worktree or resolved.is_dir():
++        if False:
+             die(f"--file {name!r} is a directory; name each file literally")
+         files.append(str(resolved.relative_to(worktree)))
+     if not files:

@@ -1,0 +1,15 @@
+# mutant_id: M010
+# target: scripts/harness_events.py
+# operator: constant
+# behaviour: each record chains from the line before it
+--- a/scripts/harness_events.py
++++ b/scripts/harness_events.py
+@@ -112,7 +112,7 @@
+             fcntl.flock(handle, fcntl.LOCK_EX)
+             try:
+                 previous = last_line(handle)
+-                event["prev"] = line_hash(previous) if previous else GENESIS
++                event["prev"] = GENESIS
+                 handle.seek(0, os.SEEK_END)
+                 handle.write((json.dumps(event, sort_keys=True) + "\n").encode("utf-8"))
+                 handle.flush()

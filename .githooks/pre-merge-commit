@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# The commit gate cannot see a merge: git runs THIS hook for a merge that creates
+# a commit, and pre-commit not at all. So `git merge <branch>` on main moved the
+# trunk while ORCH-12 said the lander was the only way to move it - a hole
+# exactly the size of a merge commit, used deliberately once on 2026-09-02 to
+# reconcile local main with origin/main because the lander correctly refuses that.
+#
+# A fast-forward creates no commit and never reaches here, which is what the
+# lander's swap_main and sync_with_origin rely on to move main at all.
+#
+# Bypass once, deliberately:  git merge --no-verify
+if [ "$(git symbolic-ref --quiet --short HEAD 2>/dev/null)" = main ]; then
+  echo "✗ merge commit on main is not a sanctioned path; use ./scripts/land.sh"
+  echo "  (a fast-forward is fine - this only blocks merges that create a commit)"
+  exit 1
+fi
+exit 0

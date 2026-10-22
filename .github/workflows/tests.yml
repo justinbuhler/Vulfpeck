@@ -1,0 +1,28 @@
+name: tests
+# Gates main and every PR on GitHub with scripts/gate.sh: setup, lint and suite
+# from harness.toml, the same gate scripts/land.sh runs on the merged tree.
+# scripts/github_bootstrap.sh makes this job required on main.
+#
+# The harness itself needs Python 3.11+ and uv (setup-uv below). A project in
+# another language adds its own toolchain step (setup-node, setup-go, ...)
+# before the gate; the gate's commands come from harness.toml, not from here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: ./scripts/gate.sh

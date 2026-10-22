@@ -1,0 +1,15 @@
+# mutant_id: M012
+# target: .claude/harness/agent_harness.py
+# operator: drop-guard
+# behaviour: a commit made outside the queue is refused at land
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -768,7 +768,7 @@
+     landed = [r for r in read_ledger(root)
+               if r.get("task") == request["task"] and r.get("status") == "LANDED"]
+     expected = landed[-1]["sha"] if landed else request["baseline_sha"]
+-    if before_sha != expected:
++    if False:
+         return fail(f"HEAD is {str(before_sha)[:9]}, expected {expected[:9]} (the task's "
+                     f"last landed commit or baseline): a commit was made outside the "
+                     f"queue; agents enqueue, they never commit")

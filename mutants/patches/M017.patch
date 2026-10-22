@@ -1,0 +1,15 @@
+# mutant_id: M017
+# target: .claude/hooks/session_guard.py
+# operator: drop-guard
+# behaviour: a repository other than the project is never linted
+--- a/.claude/hooks/session_guard.py
++++ b/.claude/hooks/session_guard.py
+@@ -164,7 +164,7 @@
+     project = os.environ.get("CLAUDE_PROJECT_DIR") or str(ROOT)
+     mine = git(project, "rev-parse", "--path-format=absolute", "--git-common-dir")
+     theirs = git(top, "rev-parse", "--path-format=absolute", "--git-common-dir")
+-    return bool(mine) and mine == theirs
++    return True
+ 
+ 
+ def main():

@@ -1,0 +1,15 @@
+# mutant_id: M014
+# target: .claude/hooks/session_guard.py
+# operator: drop-guard
+# behaviour: failing lint blocks a stop once, then lets the session stop
+--- a/.claude/hooks/session_guard.py
++++ b/.claude/hooks/session_guard.py
+@@ -123,7 +123,7 @@
+             if failed:
+                 tail = "\n".join(text.strip().splitlines()[-TAIL:])
+                 subject = f"{now['branch']}@{now['head'][:9]}"
+-                if payload.get("stop_hook_active"):
++                if False:
+                     record("session_guard", "block-overridden", "lint-failing", subject, payload)
+                     out["systemMessage"] = f"session_guard: lint still fails ({command}):\n{tail}"
+                 else:

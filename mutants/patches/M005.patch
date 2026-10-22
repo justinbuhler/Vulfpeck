@@ -1,0 +1,15 @@
+# mutant_id: M005
+# target: scripts/land.sh
+# operator: drop-guard
+# behaviour: land.copy_untracked never overwrites a tracked file
+--- a/scripts/land.sh
++++ b/scripts/land.sh
+@@ -138,7 +138,7 @@
+       rsync -a --exclude-from="$TRACKED" "$src/" "$LWT/$rel/" \
+         || die "could not copy $rel into the lander worktree"
+     else
+-      if git -C "$LWT" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
++      if false; then
+         say "⚠ land.copy_untracked lists $rel, which the candidate tracks; not copied"
+         continue
+       fi

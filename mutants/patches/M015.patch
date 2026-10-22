@@ -1,0 +1,15 @@
+# mutant_id: M015
+# target: scripts/adr.py
+# operator: widen-set
+# behaviour: only a proposed or accepted ADR covers a governed file
+--- a/scripts/adr.py
++++ b/scripts/adr.py
+@@ -39,7 +39,7 @@
+ from pathlib import Path
+ 
+ STATUSES = ("proposed", "accepted", "rejected", "deprecated", "superseded")
+-COVERING = ("proposed", "accepted")
++COVERING = STATUSES
+ SECTIONS = ("Context", "Decision", "Consequences")
+ FIELDS = ("Status", "Date", "Components", "Supersedes", "Superseded-by")
+ NAME = re.compile(r"(\d{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.md")

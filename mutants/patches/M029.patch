@@ -1,0 +1,15 @@
+# mutant_id: M029
+# target: .claude/hooks/readonly_guard.py
+# operator: drop-check
+# behaviour: a second snapshot row in one run is tampering
+--- a/.claude/hooks/readonly_guard.py
++++ b/.claude/hooks/readonly_guard.py
+@@ -210,7 +210,7 @@
+         finished = [i for i, r in enumerate(mine) if r.get("decision") in FINISHED]
+         run = mine[finished[-1] + 1:] if finished else mine
+         found = [r.get("reason", "")[len("sha256:"):] for r in run if r.get("decision") == "snapshot"]
+-        if len(found) > 1:
++        if False:
+             return None, f"{len(found)} snapshot rows are logged for this run; the hook writes one"
+         return (found[0], None) if found else (None, "no snapshot was recorded for this agent")
+     except Exception as exc:

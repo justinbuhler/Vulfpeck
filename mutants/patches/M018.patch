@@ -1,0 +1,15 @@
+# mutant_id: M018
+# target: scripts/adr.py
+# operator: drop-check
+# behaviour: a stale ADR index fails check
+--- a/scripts/adr.py
++++ b/scripts/adr.py
+@@ -232,7 +232,7 @@
+     if INDEX_START not in text or INDEX_END not in text:
+         return None
+     current = text.split(INDEX_START, 1)[1].split(INDEX_END, 1)[0].strip()
+-    if current != render_index(records):
++    if False:
+         return "README.md: the ADR index is stale (python3 scripts/adr.py index)"
+     return None
+ 

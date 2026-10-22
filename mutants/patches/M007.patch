@@ -1,0 +1,15 @@
+# mutant_id: M007
+# target: .claude/settings.json
+# operator: drop-guard
+# behaviour: a crashing Agent gate fails closed
+--- a/.claude/settings.json
++++ b/.claude/settings.json
+@@ -11,7 +11,7 @@
+           },
+           {
+             "type": "command",
+-            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/model_router.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"model_router.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
++            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/model_router.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"model_router.py crashed (rc=$rc); failing closed\" >&2; exit 0; }",
+             "timeout": 5
+           }
+         ]

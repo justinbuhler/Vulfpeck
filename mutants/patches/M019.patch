@@ -1,0 +1,15 @@
+# mutant_id: M019
+# target: .claude/hooks/adr_gate.py
+# operator: drop-guard
+# behaviour: a Write into another repository passes the ADR gate
+--- a/.claude/hooks/adr_gate.py
++++ b/.claude/hooks/adr_gate.py
+@@ -88,7 +88,7 @@
+     # /var (macOS: /private/var) compares equal to git's resolved top level.
+     path = Path(os.path.realpath(cwd / raw))
+     top = top_of(path)
+-    if top is None or not trusted(top):
++    if top is None:
+         return 0
+     try:
+         rel = path.relative_to(top).as_posix()

@@ -1,0 +1,15 @@
+# mutant_id: M009
+# target: .claude/hooks/model_router.py
+# operator: drop-call
+# behaviour: a denied Agent call is recorded
+--- a/.claude/hooks/model_router.py
++++ b/.claude/hooks/model_router.py
+@@ -108,7 +108,7 @@
+             "permissionDecision": "deny",
+             "permissionDecisionReason": denial,
+         }}))
+-        record("model_router", "deny", "tier-mismatch", subject, payload)
++        pass
+     else:
+         record("model_router", "allow", "tier-match" if tier(kind) else "unlisted", subject, payload)
+     return 0

@@ -1,0 +1,41 @@
+# How this repository builds, read by scripts/harness_config.py. Every key is
+# optional; an absent key keeps the default shown in that file. Unknown keys are
+# an error. See README.md "Adopting the harness" for other languages.
+
+[project]
+name = "vulfpeck"                       # names the lander cache: ~/.cache/<name>-land
+
+[commands]
+setup = "uv sync --frozen --quiet"      # before lint and tests; "" to skip
+lint = "uvx ruff check ."               # pre-commit, the land gate and CI
+test = "./scripts/standalone_tests.sh"  # run by scripts/run.sh
+pipeline = ""                           # run.sh without --tests, after the tests
+
+[tests]
+# Python regex; the last match's group 1 is the number of checks run. A run that
+# exits 0 without reporting a non-zero count fails. "" trusts the exit code.
+count_pattern = '(\d+) checks total'
+
+[land]
+copy_untracked = []                     # inputs the gate needs that git does not carry
+
+[adr]
+dir = "docs/adr"                        # NNNN-slug.md, managed by scripts/adr.py
+# A file matching one of these needs a proposed or accepted ADR naming it in
+# `Components:`, before it is created and at every land.
+require_for = [".claude/hooks/**", ".claude/agents/**", ".claude/skills/**",
+               ".claude/workflows/**", ".claude/harness/**", ".githooks/**",
+               "scripts/**", "mutants/*.py"]
+exempt = []
+
+[hooks]
+watched_files = ["harness.toml", "scripts/paths.py", "scripts/harness_config.py",
+                 "scripts/gate.sh", "scripts/land.sh", "scripts/run.sh", ".claude/settings.json"]
+watched_dirs = [".githooks/"]
+skip_dirs = [".venv", "__pycache__", "node_modules", ".git"]
+
+[[mapped_tests]]
+match = "*.py"
+self = "test_*.py"
+tests = ["{dir}/tests/test_{name}", "tests/test_{name}"]
+command = "uv run --no-sync python3 {test}"

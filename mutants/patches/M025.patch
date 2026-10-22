@@ -1,0 +1,15 @@
+# mutant_id: M025
+# target: .claude/hooks/readonly_guard.py
+# operator: drop-check
+# behaviour: a rewritten start snapshot blocks the stop
+--- a/.claude/hooks/readonly_guard.py
++++ b/.claude/hooks/readonly_guard.py
+@@ -276,7 +276,7 @@
+         # A snapshot exists, so its row was written at the start. A log that is
+         # now missing, broken or doubled cannot vouch for it: block, do not note.
+         changed.insert(0, f"the start snapshot cannot be verified: {problem}")
+-    elif logged != hashlib.sha256(text.encode()).hexdigest():
++    elif False:
+         changed.insert(0, "the start snapshot was rewritten after it was recorded")
+     if not changed:
+         path.unlink()

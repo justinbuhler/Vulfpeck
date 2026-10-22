@@ -1,0 +1,15 @@
+# mutant_id: M020
+# target: .claude/hooks/readonly_guard.py
+# operator: drop-field
+# behaviour: a read-only agent moving any ref blocks its stop
+--- a/.claude/hooks/readonly_guard.py
++++ b/.claude/hooks/readonly_guard.py
+@@ -135,7 +135,7 @@
+     lines = sorted(status.splitlines())
+     config = git(top, "config", "--local", "--list") or ""
+     return {
+-        "refs": refs(top),
++        "refs": {},
+         "writer_branches": sorted(writer_branches(top)),
+         "gitdir_sha": gitdir_state(top),
+         "config_sha": hashlib.sha256(config.encode()).hexdigest(),

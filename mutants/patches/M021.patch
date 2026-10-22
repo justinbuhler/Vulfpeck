@@ -1,0 +1,15 @@
+# mutant_id: M021
+# target: .claude/harness/agent_harness.py
+# operator: drop-check
+# behaviour: the lander refuses staged paths nobody queued
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -828,7 +828,7 @@
+                  cwd=worktree).stdout.split("\0")
+     queued = {Path(f).as_posix() for f in request["files"]}
+     extra = sorted(p for p in staged if p and p not in queued)
+-    if extra:
++    if False:
+         return fail(f"the worktree index holds staged changes nobody queued: "
+                     f"{', '.join(extra[:5])}; agents enqueue, they never stage")
+ 

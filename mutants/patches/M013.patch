@@ -1,0 +1,15 @@
+# mutant_id: M013
+# target: .claude/hooks/queue_guard.py
+# operator: narrow-set
+# behaviour: git commit in a task worktree is denied
+--- a/.claude/hooks/queue_guard.py
++++ b/.claude/hooks/queue_guard.py
+@@ -19,7 +19,7 @@
+ from pathlib import Path
+ 
+ ROOT = Path(__file__).resolve().parents[2]
+-VERBS = {"commit", "commit-tree", "update-ref"}
++VERBS = {"commit-tree", "update-ref"}
+ 
+ 
+ def record(*args, **kwargs):

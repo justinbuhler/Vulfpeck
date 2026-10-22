@@ -1,0 +1,15 @@
+# mutant_id: M016
+# target: .claude/hooks/adr_gate.py
+# operator: invert-guard
+# behaviour: creating a governed file no ADR names is denied
+--- a/.claude/hooks/adr_gate.py
++++ b/.claude/hooks/adr_gate.py
+@@ -96,7 +96,7 @@
+         return 0
+     records, _ = adr.load_all(top / adr_dir)
+     found = adr.covering(records, rel)
+-    if found:
++    if True:
+         record("adr_gate", "allow", f"adr-{found[0]['number']}", rel, payload)
+         return 0
+     record("adr_gate", "deny", "no-adr", rel, payload)
