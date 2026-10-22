@@ -15,9 +15,9 @@ CONTROL=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(python3 "$CONTROL/paths.py") || exit 1
 cd "$ROOT" || exit 1
 # The configured gate and direct suite share the same inherited OS mutex.
-LOCK_TOOL="$(cd "$(dirname "$0")" && pwd)/harness_lock.py"
+LOCK_TOOL="$CONTROL/harness_lock.py"
 if ! python3 "$LOCK_TOOL" --root "$PWD" --name verification --check-held; then
-  exec python3 "$LOCK_TOOL" --root "$PWD" --name verification -- bash "$0" "$@"
+  exec python3 "$LOCK_TOOL" --root "$PWD" --name verification -- bash "$CONTROL/run.sh" "$@"
 fi
 
 . "$CONTROL/harness_env.sh"

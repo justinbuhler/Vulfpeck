@@ -100,6 +100,9 @@ Native profiles use individually owned `.codex/agents` files.
 Existing deny/ask rules, credentials, plugins, custom hooks and narrower Smartsheet limits survive.
 An existing domain `harness.toml`, unowned destination or ambiguous native policy requires explicit reconciliation before adoption.
 Linked installation targets are refused; installed primary-discovered hooks retain the event's checkout as their governed root.
+Git uses the absolute owned primary dispatcher directory across worktrees.
+Pass-through dispatchers retain prior hook events and their relative paths in each invoking checkout, preserving arguments, input and refusal status.
+Mapped edit hooks import the owned reader and resolve their governed checkout independently of domain scripts.
 Native project trust and exact hook approval remain separate from installation.
 
 For an upgrade, plan and apply the next committed release against the unchanged owned generation.

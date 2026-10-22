@@ -3,6 +3,20 @@
 Dated failures, measurements, limitations, and implementation history (AGENTS.md ownership pointers).
 Newest first. Each entry: date, what happened, how it was measured, what changed.
 
+## 2026-10-22 - installed domain hook propagation corrections
+
+Independent scoped review requested changes because adoption disconnected prior Git hook events, linked Git resolved the owned relative hook path locally, mapped edits required an unowned domain reader, and relative runner invocation lost its location after changing directory.
+Real disposable Git and installed-hook cases reproduce these failures in `tmp/json/installer-domain-before.json` and `tmp/txt/installer-domain-before.log`.
+The corrective cases exercise prior commit-msg and pre-push refusal, distinct worktree-relative hooks, actual edit registrations, and relative runner reexecution.
+The installer now records an absolute owned dispatcher path and preserves prior relative hook paths and event dispatchers across adoption, upgrade and restore.
+Mapped edits import owned code and normalize the execution root; the runner reuses its absolute control directory.
+Focused before/after and individual fault detections are retained in `tmp/json/installer-domain-corrections.json`; parent integration and release review remain separate.
+
+The subsequent real native preflight rejected the inherited environment set map before inference, without an authorizing receipt.
+A leaf `set.PATH` override recursively merged other user set keys; replacing the aggregate map is not supported by the inspected native merge semantics.
+The native lane's correction filters inherited keys with `shell_environment_policy.include_only=["PATH"]`, retains public PATH and verifies the effective environment.
+The retained failure is `tmp/json/native-review-live-codex-corrected-proof.json`; no global configuration changed.
+
 ## 2026-10-22 - receipt fixture race and owned installation
 
 The full configured gate on immutable e641bd4 failed in the concurrent land fixture with a missing worker result.

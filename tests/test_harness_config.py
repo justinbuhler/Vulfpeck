@@ -153,6 +153,11 @@ r = run_sh("echo '5 tests passed'; exit 5", r"(\d+) tests passed")
 check("run.sh propagates a failing test command", r.returncode != 0, r.stdout)
 r = run_sh("", "")
 check("an empty test command is refused", r.returncode != 0, r.stdout)
+relative = fixture('[commands]\nsetup = ""\ntest = "echo relative-runner-ran; exit 7"\n[tests]\ncount_pattern = ""\n')
+(relative / "nested").mkdir()
+r = sh(["../scripts/run.sh", "--tests"], relative / "nested")
+check("relative source runner retains its configured failure through lock reexec", r.returncode == 7 and "relative-runner-ran" in r.stdout,
+      r.stdout + r.stderr)
 
 # --- gate.sh: setup, lint, suite in order; a failure stops the rest ------------
 def gate(lint_status, args=()):
@@ -177,8 +182,8 @@ check("--lint-only runs lint and nothing else", r.returncode == 0 and log == ["l
 HOOK = REPO / ".claude" / "hooks" / "test_for_edited_module.py"
 
 
-def hook(root, edited):
-    payload = json.dumps({"tool_input": {"file_path": str(root / edited)}, "cwd": str(root)})
+def hook(root, edited, cwd=None):
+    payload = json.dumps({"tool_input": {"file_path": str(root / edited)}, "cwd": str(cwd or root)})
     return subprocess.run([sys.executable, str(HOOK)], input=payload, capture_output=True,
                           text=True, env={**env(), "CLAUDE_PROJECT_DIR": str(root)}, timeout=60)
 
@@ -196,6 +201,10 @@ check("a configured rule maps app.ts to app.test.ts and runs it",
 (d3 / "src" / "app.test.ts").write_text("echo broken; exit 1\n")
 r = hook(d3, "src/app.ts")
 check("a failing mapped test exits 2 with its output", r.returncode == 2 and "broken" in r.stderr,
+      r.stdout + r.stderr)
+(d3 / "nested").mkdir()
+r = hook(d3, "src/app.ts", cwd=d3 / "nested")
+check("mapped edits from a subdirectory use the governed root and owned reader", r.returncode == 2 and "broken" in r.stderr,
       r.stdout + r.stderr)
 r = hook(d3, "src/app.test.ts")
 check("editing a test file runs that test", r.returncode == 2 and "broken" in r.stderr, r.stderr)

@@ -26,6 +26,7 @@ PAYLOAD = tuple(f"scripts/{name}" for name in SCRIPTS) + tuple(f".claude/hooks/{
 PROFILES = tuple(f".codex/agents/{name}.toml" for name in ("explorer", "executor", "reviewer", "planner"))
 APP = "asdk_app_6a1ed9b99f888191aac2020e4cb301ff"
 MANIFEST = ".vulfpeck/manifest.json"
+OWNED_GIT_HOOKS = ("pre-commit", "pre-merge-commit", "post-checkout", "post-merge")
 
 
 def digest(data: bytes) -> str:
@@ -216,9 +217,9 @@ def restricted_policy(text: str, source_text: str) -> tuple[str, list[dict]]:
     return text, changes
 
 
-def local_hook_path(root: Path) -> str | None:
-    """Read only the repository-local hook override for reversible adoption."""
-    result = subprocess.run(["git", "-C", str(root), "config", "--local", "--get", "core.hooksPath"],
+def local_hook_path(root: Path, *, local: bool = True) -> str | None:
+    """Read the local override or effective expanded prior hook path."""
+    result = subprocess.run(["git", "-C", str(root), "config", "--local" if local else "--path", "--get", "core.hooksPath"],
                             env=git_environment(), capture_output=True, text=True)
     if result.returncode not in (0, 1):
         raise ValueError("cannot inspect local Git hook path")
@@ -229,6 +230,8 @@ def dispatcher(name: str, previous: str) -> bytes:
     """Chain the prior hook before the owned control, preserving its exit status."""
     prior = shlex.quote(str(Path(previous) / name))
     start = f'#!/bin/sh\nif [ -x {prior} ]; then\n  {prior} "$@" || exit $?\nfi\n'
+    if name not in OWNED_GIT_HOOKS:
+        return (start + 'exit 0\n').encode()
     start += 'root=$(git rev-parse --show-toplevel) || exit 1\n'
     start += 'primary=$(git worktree list --porcelain | sed -n \'1s/^worktree //p\')\n[ -n "$primary" ] || exit 1\n'
     if name in ("pre-commit", "pre-merge-commit"):
@@ -259,17 +262,32 @@ def plan(source: Path, revision: str, target: Path, commands: dict) -> dict:
     if previous is None and Path(prior_directory).resolve() == target / ".vulfpeck/git-hooks":
         raise ValueError("unregistered owned Git hook path would recurse into its dispatcher")
     inherited = previous["initial_hook_path"] if previous else before_hook
-    if previous and before_hook != ".vulfpeck/git-hooks":
+    if previous and before_hook != previous.get("owned_hook_path", ".vulfpeck/git-hooks"):
         raise ValueError("owned Git hook path was changed")
+    if previous and "prior_hook_path" not in previous and inherited is None:
+        raise ValueError("old generation lacks the effective prior hook path; restore before upgrading")
+    prior_path = (previous.get("prior_hook_path", inherited or prior_directory) if previous else
+                  local_hook_path(target, local=False) or prior_directory)
+    owned_hook_path = str(target / ".vulfpeck/git-hooks")
+    events = set(OWNED_GIT_HOOKS)
+    if previous:
+        events.update(Path(name).name for name in previous["files"] if name.startswith(".vulfpeck/git-hooks/"))
+    for line in git(target, "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree "):
+            prior = Path(prior_path)
+            directory = prior if prior.is_absolute() else Path(line.removeprefix("worktree ")) / prior
+            if directory.is_dir():
+                events.update(path.name for path in directory.iterdir() if path.is_file())
     value = dict(schema_version=1, operation="install", source=str(source), revision=revision,
                  target=str(target), common=str(common_dir(target)), previous=previous,
                  generation=secrets.token_hex(16), files=[], conflicts=[], commands=commands,
-                 prior_hook_directory=prior_directory, initial_hook_path=inherited, before_hook_path=before_hook)
+                 prior_hook_directory=prior_directory, prior_hook_path=prior_path, owned_hook_path=owned_hook_path,
+                 initial_hook_path=inherited, before_hook_path=before_hook)
     value["source_tree"] = git(source, "rev-parse", revision + "^{tree}")
     value["target_head"] = git(target, "rev-parse", "HEAD")
     value["target_status"] = git(target, "status", "--porcelain")
     value["git_config_diff"] = {"scope": "local", "key": "core.hooksPath", "before": before_hook,
-                                "after": ".vulfpeck/git-hooks"}
+                                "after": owned_hook_path}
     contents = {}
     for name in PAYLOAD:
         contents[".vulfpeck/" + name] = blob(source, revision, name)
@@ -278,8 +296,8 @@ def plan(source: Path, revision: str, target: Path, commands: dict) -> dict:
     config = "[commands]\n" + "".join(f"{key} = {json.dumps(commands[key])}\n" for key in ("setup", "lint", "test"))
     config += "\n[tests]\ncount_pattern = " + json.dumps(commands["count_pattern"]) + "\n"
     contents[".vulfpeck/harness.toml"] = config.encode()
-    for name in ("pre-commit", "pre-merge-commit", "post-checkout", "post-merge"):
-        contents[f".vulfpeck/git-hooks/{name}"] = dispatcher(name, prior_directory)
+    for name in sorted(events):
+        contents[f".vulfpeck/git-hooks/{name}"] = dispatcher(name, prior_path)
     if previous and set(previous["files"]) - set(contents):
         raise ValueError("release removes owned components; restore the previous installation before adopting it")
     for relative, content in contents.items():
@@ -409,7 +427,7 @@ def undo(target: Path, journal: dict, *, apply_changes: bool = True) -> dict:
                     raise ValueError("prior owned policy cannot be restored")
         configs[relative] = text
     hook_path = local_hook_path(target)
-    if hook_path not in (value["before_hook_path"], ".vulfpeck/git-hooks"):
+    if hook_path not in (value["before_hook_path"], value["owned_hook_path"]):
         raise ValueError("Git hook path edited during restore")
     result = dict(operation="restore", target=str(target), generation=value["generation"],
                   previous_generation=previous["generation"] if previous else None,
@@ -467,7 +485,7 @@ def verify(target: Path) -> dict:
     for relative, entries in manifest["registrations"].items():
         merge_registrations(destination(target, relative).read_text(), entries, entries)
     restore_policy(destination(target, ".codex/config.toml").read_text(), manifest["policy"])
-    if local_hook_path(target) != ".vulfpeck/git-hooks":
+    if local_hook_path(target) != manifest.get("owned_hook_path", ".vulfpeck/git-hooks"):
         raise ValueError("owned Git hook path changed")
     resolved = subprocess.check_output(["python3", str(target / ".vulfpeck/scripts/paths.py")], cwd=target,
                                        env=git_environment(), text=True).strip()
@@ -542,7 +560,8 @@ def _apply_steps(value: dict) -> dict:
     save(directory / "journal.json", journal)
     atomic_write(target, path, text.encode(), path.stat().st_mode & 0o777 if path.exists() else 0o644)
     manifest = {key: value[key] for key in ("schema_version", "generation", "source", "revision", "commands",
-                "registrations", "policy", "prior_hook_directory", "initial_hook_path", "initial_config_exists")}
+                "registrations", "policy", "prior_hook_directory", "prior_hook_path", "owned_hook_path",
+                "initial_hook_path", "initial_config_exists")}
     manifest["files"] = {item["path"]: item["after"] for item in value["files"]}
     manifest["file_modes"] = {item["path"]: item["mode"] for item in value["files"]}
     manifest["registration_hashes"] = {name: {item["id"]: canonical(item["entry"]) for item in entries}
@@ -552,7 +571,7 @@ def _apply_steps(value: dict) -> dict:
     manifest["previous_generation"] = previous["generation"] if previous else None
     save(directory / "manifest.json", manifest)
     atomic_write(target, destination(target, MANIFEST), (json.dumps(manifest, indent=2) + "\n").encode())
-    git(target, "config", "--local", "core.hooksPath", ".vulfpeck/git-hooks")
+    git(target, "config", "--local", "core.hooksPath", value["owned_hook_path"])
     proof = verify(target)
     journal.update(status="COMPLETE", verification=proof)
     save(directory / "journal.json", journal)

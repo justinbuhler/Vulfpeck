@@ -29,14 +29,14 @@ import sys
 import time
 from pathlib import Path
 
-from paths import REPO as ROOT, SCRIPTS
+from paths import REPO as ROOT, SCRIPTS, root_for
 
 
-def git(*args):
+def git(*args, root=ROOT):
     """Return git's stdout in the repository, or "" when git cannot answer."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     try:
-        done = subprocess.run(["git", *args], cwd=ROOT, capture_output=True,
+        done = subprocess.run(["git", *args], cwd=root, capture_output=True,
                               text=True, timeout=5, env=env)
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -179,9 +179,21 @@ def findings(runtime="claude", report=None):
     need(bool(shutil.which("flock") or shutil.which("lockf")), "flock/lockf found",
          "neither flock nor lockf is on PATH; scripts/run.sh cannot serialise the suite")
     hooks_path = git("config", "--get", "core.hooksPath")
-    expected_hooks = ".vulfpeck/git-hooks" if SCRIPTS.parent.name == ".vulfpeck" else ".githooks"
+    installed = SCRIPTS.parent.name == ".vulfpeck"
+    expected_hooks = str(ROOT / ".vulfpeck/git-hooks") if installed else ".githooks"
     need(hooks_path == expected_hooks, f"core.hooksPath is {expected_hooks}",
          f"core.hooksPath is {hooks_path or 'unset'}; expected {expected_hooks}")
+    if installed:
+        try:
+            import harness_install
+            harness_install.verify(ROOT)
+            checkout = root_for(Path.cwd())
+            resolved = git("rev-parse", "--path-format=absolute", "--git-path", "hooks", root=checkout)
+            need(Path(resolved).resolve() == ROOT / ".vulfpeck/git-hooks",
+                 "core.hooksPath resolves owned primary dispatchers from this checkout",
+                 "this checkout does not resolve the registered primary dispatcher directory")
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            problems.append(f"owned Git hook discovery is unverified: {exc}")
     if ((ROOT / "harness.toml").is_file() or (ROOT / ".vulfpeck/harness.toml").is_file()) and sys.version_info >= (3, 11):
         sys.path.insert(0, str(SCRIPTS))
         try:

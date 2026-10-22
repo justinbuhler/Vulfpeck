@@ -2,7 +2,7 @@
 
 Status: proposed
 Date: 2026-10-22
-Components: scripts/harness_install.py, scripts/paths.py, scripts/native_hook_adapter.py, scripts/harness_env.sh, scripts/gate.sh, scripts/run.sh, scripts/land.sh, scripts/harness_config.py, scripts/harness_doctor.py, .claude/hooks/session_guard.py, .claude/hooks/readonly_guard.py, .claude/hooks/adr_gate.py
+Components: scripts/harness_install.py, scripts/paths.py, scripts/native_hook_adapter.py, scripts/harness_env.sh, scripts/gate.sh, scripts/run.sh, scripts/land.sh, scripts/harness_config.py, scripts/harness_doctor.py, .claude/hooks/session_guard.py, .claude/hooks/readonly_guard.py, .claude/hooks/adr_gate.py, .claude/hooks/test_for_edited_module.py
 
 ## Context
 
@@ -19,6 +19,8 @@ Intersect existing narrower Smartsheet tool limits and preserve disabled policy.
 Apply only unchanged preimages under a common Git mutex, retaining owned hashes, nonsecret restoration values, and a journal.
 Restore only owned changes and refuse edited owned files or registrations.
 Never redirect an installation from a linked checkout to its primary checkout.
+Git discovers the primary owned dispatcher directory by absolute path, while pass-through dispatchers preserve prior relative hook paths in the invoking checkout.
+Mapped edits import the payload's config reader and resolve the governed checkout separately.
 
 ## Consequences
 

@@ -69,7 +69,7 @@ def main():
     for name in release_names:
         path = source / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        if name == "scripts/native_review.py":
+        if name in ("scripts/native_review.py", "scripts/harness_receipts.py"):
             path.write_bytes(install.blob(REPO, candidate, name))
         else:
             shutil.copy2(REPO / name, path)
@@ -84,6 +84,8 @@ def main():
         ".codex/agents/custom.toml": 'name = "domain-agent"\n',
         "scripts/test_domain.sh": "#!/bin/sh\nprintf 'test\\n' >> steps\n[ ! -f fail-tests ] || exit 9\nprintf '2 checks total\\n'\n",
         ".prior-hooks/pre-commit": "#!/bin/sh\nprintf 'prior\\n' >> hook-log\n[ ! -f prior-fail ] || exit 17\n",
+        ".prior-hooks/commit-msg": "#!/bin/sh\nprintf 'commit-msg %s\\n' \"$PWD\" >> prior-events\n[ ! -f reject-message ] || exit 19\n",
+        ".prior-hooks/pre-push": "#!/bin/sh\nprintf 'pre-push %s %s %s\\n' \"$PWD\" \"$1\" \"$2\" >> prior-events\n[ ! -f reject-push ] || exit 23\n",
     }
     for name, text in protected.items():
         write(target, name, text, 0o755 if name.endswith(".sh") or name.startswith(".prior-hooks/") else 0o644)
@@ -145,7 +147,29 @@ def main():
     write(target, "fail-tests", "fail\n")
     gate = run(target, [str(target / ".vulfpeck/scripts/gate.sh")])
     check("installed gate propagates an actual domain test failure", gate.returncode == 9, gate.stdout + gate.stderr)
+    relative_runner = run(target / "subdir", ["../.vulfpeck/scripts/run.sh", "--tests"])
+    check("relative installed runner preserves the configured test failure after lock reexec", relative_runner.returncode == 9,
+          relative_runner.stdout + relative_runner.stderr)
     (target / "fail-tests").unlink()
+    relative_runner = run(target / "subdir", ["../.vulfpeck/scripts/run.sh", "--tests"])
+    check("relative installed runner executes the configured domain tests", relative_runner.returncode == 0,
+          relative_runner.stdout + relative_runner.stderr)
+    # The mapped hook must use owned code even when the domain scripts are absent or hostile.
+    write(target, "pkg/mod.py", "value = 1\n")
+    write(target, "pkg/tests/test_mod.py", "print('owned-mapped-failure'); raise SystemExit(7)\n")
+    mapped_cmd = next(hook["command"] for group in merged["hooks"]["PostToolUse"] for hook in group["hooks"]
+                      if "test_for_edited_module.py" in hook["command"])
+    mapped_event = dict(hook_event_name="PostToolUse", tool_name="Edit", tool_input={"file_path":str(target / "pkg/mod.py")},
+                        cwd=str(target / "subdir"))
+    mapped = run(target, ["sh", "-c", mapped_cmd], json.dumps(mapped_event), {"CLAUDE_PROJECT_DIR":str(target)})
+    check("installed edit registration runs a failing mapped test without a domain reader", mapped.returncode == 2
+          and "owned-mapped-failure" in mapped.stderr, mapped.stdout + mapped.stderr)
+    write(target, "scripts/harness_config.py", "raise RuntimeError('domain config reader must never be imported')\n")
+    mapped = run(target, ["sh", "-c", mapped_cmd], json.dumps(mapped_event), {"CLAUDE_PROJECT_DIR":str(target)})
+    check("installed mapped test ignores the hostile domain config reader", mapped.returncode == 2
+          and "owned-mapped-failure" in mapped.stderr and "domain config reader must never" not in mapped.stderr,
+          mapped.stdout + mapped.stderr)
+    (target / "scripts/harness_config.py").unlink()
     cmd = next(hook["command"] for group in merged["hooks"]["PreToolUse"] for hook in group["hooks"]
                if "require_agent_model.py" in hook["command"])
     event = dict(hook_event_name="PreToolUse", tool_name="Agent", tool_input={"subagent_type": "general-purpose"}, cwd=str(target))
@@ -159,14 +183,32 @@ def main():
           and json.loads(denied.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny", denied.stderr)
     linked = directory / "linked"
     git(target, "worktree", "add", "-q", "-b", "linked", str(linked))
+    write(linked, ".prior-hooks/pre-push", protected[".prior-hooks/pre-push"].replace("exit 23", "exit 29"), 0o755)
     check("linked installation request refuses instead of rewriting primary", refused(lambda: install.plan(source, release_a, linked, adoption), "primary"))
     event["cwd"] = str(linked)
     denied = run(linked, ["sh", "-c", native_cmd], json.dumps(event))
     check("primary-discovered native hook executes against the linked checkout", denied.returncode == 0
           and json.loads(denied.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny", denied.stderr)
+    write(linked, "reject-message", "reject\n")
+    linked_commit = run(linked, ["git", "-C", str(linked), "commit", "--allow-empty", "-qm", "linked refused"])
+    check("linked Git discovery preserves its worktree-relative commit-msg refusal", linked_commit.returncode != 0
+          and str(linked) in (linked / "prior-events").read_text(), linked_commit.stdout + linked_commit.stderr)
+    (linked / "reject-message").unlink()
+    linked_commit = run(linked, ["git", "-C", str(linked), "commit", "--allow-empty", "-qm", "linked accepted"])
+    check("linked Git discovery reaches owned lint and the prior commit-msg hook", linked_commit.returncode == 0
+          and (linked / "steps").is_file() and (linked / "steps").read_text().splitlines()[-1:] == ["lint"], linked_commit.stdout + linked_commit.stderr)
+    write(linked, "reject-push", "reject\n")
+    linked_push = run(linked, ["git", "-C", str(linked), "hook", "run", "pre-push", "--", "domain", "https://example.invalid"])
+    check("linked Git preserves its distinct relative pre-push arguments and refusal status", linked_push.returncode == 29
+          and f"pre-push {linked} domain https://example.invalid" in (linked / "prior-events").read_text(), linked_push.stdout + linked_push.stderr)
+    (linked / "reject-push").unlink()
+    doctor = run(linked, [sys.executable, str(target / ".vulfpeck/scripts/harness_doctor.py"), "--runtime", "codex", "--json"])
+    doctor_report = json.loads(doctor.stdout) if doctor.returncode == 0 else {}
+    check("installed doctor proves linked Git resolves the registered primary dispatcher", doctor.returncode == 0
+          and "core.hooksPath resolves owned primary dispatchers from this checkout" in doctor_report.get("passes", []), doctor.stdout + doctor.stderr)
     gate = run(linked, [str(target / ".vulfpeck/scripts/gate.sh")])
     check("linked gate uses owned code with checkout-local test execution", gate.returncode == 0
-          and (linked / "steps").read_text().splitlines() == ["setup", "lint", "test"], gate.stdout + gate.stderr)
+          and (linked / "steps").read_text().splitlines()[-3:] == ["setup", "lint", "test"], gate.stdout + gate.stderr)
     write(linked, "harness.toml", '[commands]\ntest = "false"\n')
     gate = run(linked, [str(target / ".vulfpeck/scripts/gate.sh")])
     check("conflicting checkout-owned command policy is refused", gate.returncode != 0 and "conflicts" in gate.stderr, gate.stderr)
@@ -177,6 +219,10 @@ def main():
     (target / "prior-fail").unlink()
     commit = run(target, ["git", "-C", str(target), "commit", "--allow-empty", "-qm", "owned hook fixture"])
     check("real Git dispatcher chains prior hook and installed lint", commit.returncode == 0, commit.stderr)
+    write(target, "reject-message", "reject\n")
+    refused_message = run(target, ["git", "-C", str(target), "commit", "--allow-empty", "-qm", "must reject message"])
+    check("adoption preserves a prior commit-msg refusal", refused_message.returncode != 0, refused_message.stdout + refused_message.stderr)
+    (target / "reject-message").unlink()
     edited = target / ".vulfpeck/scripts/paths.py"
     pristine = edited.read_bytes()
     edited.write_bytes(pristine + b"# user edit\n")
@@ -184,6 +230,7 @@ def main():
     check("restore refuses an edited owned file", refused(lambda: install.restore(target), "edited"))
     edited.write_bytes(pristine)
     edited.chmod(0o600)
+    check("upgrade refuses an edited owned mode", refused(lambda: install.plan(source, release_a, target, adoption), "edited"))
     check("owned mode edits also block restore", refused(lambda: install.restore(target), "edited"))
     edited.chmod(0o644)
     registration_path = target / ".codex/hooks.json"
@@ -205,6 +252,10 @@ def main():
     release_b = git(source, "rev-parse", "HEAD")
     upgrade = install.plan(source, release_b, target, adoption)
     proof_b = install.apply(upgrade)
+    write(target, "reject-push", "reject\n")
+    upgraded_push = run(target, ["git", "-C", str(target), "hook", "run", "pre-push", "--", "domain", "https://example.invalid"])
+    check("upgrade preserves a prior pre-push refusal", upgraded_push.returncode == 23, upgraded_push.stdout + upgraded_push.stderr)
+    (target / "reject-push").unlink()
     check("upgrade installs the exact committed next payload", install.digest((target / ".vulfpeck/scripts/harness_doctor.py").read_bytes())
           == install.digest(install.blob(source, release_b, "scripts/harness_doctor.py")))
     upgraded = json.loads((target / ".claude/settings.json").read_text())
@@ -216,6 +267,9 @@ def main():
     restored_b = install.restore(target, apply_changes=True, expected_plan=restore_b)
     check("restore recovers the prior owned generation", install.current_manifest(target)["revision"] == release_a
           and restored_b["verification"]["status"] == "VERIFIED_LOCAL_INSTALLATION")
+    restored_hook = run(linked, ["git", "-C", str(linked), "hook", "run", "pre-push", "--", "restored", "https://example.invalid"])
+    check("generation restore preserves linked prior Git hook discovery", restored_hook.returncode == 0
+          and f"pre-push {linked} restored https://example.invalid" in (linked / "prior-events").read_text(), restored_hook.stderr)
     restore_a = install.restore(target)
     restored_a = install.restore(target, apply_changes=True, expected_plan=restore_a)
     final_claude = json.loads((target / ".claude/settings.json").read_text())
@@ -226,6 +280,10 @@ def main():
           and json.loads((target / ".codex/hooks.json").read_text()) == native)
     check("final restore recovers original policy bytes and Git hook path", (target / ".codex/config.toml").read_text() == config
           and install.local_hook_path(target) == ".prior-hooks")
+    write(linked, "reject-message", "reject\n")
+    final_hook = run(linked, ["git", "-C", str(linked), "commit", "--allow-empty", "-qm", "restore must reject"])
+    check("final restore recovers worktree-relative prior commit-msg refusal", final_hook.returncode != 0, final_hook.stderr)
+    (linked / "reject-message").unlink()
     check("restore removes only owned files and preserves protected domain bytes", not (target / ".vulfpeck/scripts/paths.py").exists()
           and all((target / name).read_text() == text for name, text in protected.items()))
 
@@ -275,12 +333,14 @@ def main():
           and not any((fresh / item["path"]).exists() for item in interrupted["files"])
           and install.local_hook_path(fresh) == ".prior-hooks")
     pending = install.plan(source, release_b, fresh, adoption)
+    preexisting_plan = install.plan(source, release_b, fresh, adoption)
     calls.clear()
     def interrupt_process(root, path, content, mode=0o644):
         calls.append(str(path))
+        result = original_write(root, path, content, mode)
         if len(calls) == 4:
             raise KeyboardInterrupt("controlled process interruption")
-        return original_write(root, path, content, mode)
+        return result
     install.atomic_write = interrupt_process
     try:
         try:
@@ -291,9 +351,11 @@ def main():
         install.atomic_write = original_write
     check("process interruption blocks a later install until explicit restore",
           refused(lambda: install.plan(source, release_b, fresh, adoption), "incomplete"))
+    check("an already planned install cannot cross an interrupted generation",
+          refused(lambda: install.apply(preexisting_plan), "incomplete"))
     recovery = install.restore(fresh, generation=pending["generation"])
     install.restore(fresh, generation=pending["generation"], apply_changes=True, expected_plan=recovery)
-    check("explicit generation restore recovers an interrupted process", install.incomplete(fresh) is None
+    check("pre-write journal lets restore recover a post-write process interruption", install.incomplete(fresh) is None
           and not any((fresh / item["path"]).exists() for item in pending["files"]))
     verification_failure = install.plan(source, release_b, fresh, adoption)
     real_verify = install.verify
