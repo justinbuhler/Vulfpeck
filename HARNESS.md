@@ -65,7 +65,10 @@ Claude routing and the interactive parent model remain unchanged.
 
 ## Adopting it in another repository
 
-Requirements: git, bash, Python 3.11+ and uv for the harness's own scripts, `rsync`, and `flock` or `lockf`. macOS or Linux.
+Requirements: git, bash, Python 3.11+ and uv for the harness's own scripts, `rsync`, and `flock` or `lockf`.
+The offline cleanup-protocol test also needs Node, supplied by CI; it uses the bundled interpreter when CodeGraph is installed and PATH Node otherwise.
+CodeGraph remains optional.
+macOS or Linux.
 
 1. Copy `AGENTS.md`, `CLAUDE.md`, `HARNESS.md`, `harness.toml`, `.claude/`, `.githooks/`, `.github/`, `scripts/`, `tests/` and `mutants/` into the repository.
 2. Edit `harness.toml`. For example, a Node project:

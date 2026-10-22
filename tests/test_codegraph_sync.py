@@ -448,9 +448,23 @@ finally:
             os.environ[key] = value
 
 print("\nnative writer protocol prevents a cleanup race")
-# The installed interpreter runs fake native modules; no real daemon or index is touched.
-real_node = Path(shutil.which("codegraph")).resolve().parents[1] / "node"
-assert real_node.is_file(), "CodeGraph's installed Node runtime is required for its cleanup adapter test"
+# A Node interpreter runs fake native modules; CodeGraph itself is optional.
+def node_runtime():
+    """Select bundled CodeGraph Node when available, otherwise Node on PATH."""
+    codegraph = shutil.which("codegraph")
+    bundled = Path(codegraph).resolve().parents[1] / "node" if codegraph else None
+    return bundled if bundled and bundled.is_file() else Path(shutil.which("node") or "")
+
+
+real_node = node_runtime()
+assert real_node.is_file(), "Node is required for the offline cleanup protocol test"
+node_only = TMP / "node-only"
+node_only.mkdir()
+(node_only / "node").symlink_to(real_node)
+with with_path(node_only):
+    check("the offline protocol finds Node when CodeGraph is not installed",
+          shutil.which("codegraph") is None and node_runtime().resolve() == real_node.resolve())
+    real_node = node_runtime()
 protocol = TMP / "native-protocol"
 protocol.mkdir()
 protocol_root = protocol / "checkout"

@@ -2,7 +2,7 @@
 
 Status: proposed
 Date: 2026-10-22
-Components: scripts/codegraph_freshness.py, .githooks/post-checkout, .githooks/post-merge, .claude/hooks/blast_radius_advisory.py
+Components: scripts/codegraph_freshness.py, .githooks/post-checkout, .githooks/post-merge, .claude/hooks/blast_radius_advisory.py, .github/workflows/tests.yml
 
 ## Context
 
@@ -15,6 +15,8 @@ Port the checkout-local lifecycle from LA28 commit `6709caeea76958fea41a388e137f
 Prepare and verify an index only when the current or primary checkout already opted in.
 Require the index project path to match the checkout, scrub inherited Git overrides, and prepare lander checkouts before verification.
 Clean up only a verified linked checkout's index after stopping its own writer, retaining shared Git hooks.
+Test the cleanup protocol with fake native modules using CodeGraph's bundled Node when available, otherwise Node on PATH.
+CI supplies Node for this offline test; the CodeGraph package remains optional.
 
 ## Consequences
 
