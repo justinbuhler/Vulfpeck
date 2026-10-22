@@ -179,6 +179,20 @@ check("a worktrees directory would be refused too, by name",
       not H.clonable(".claude/worktrees") and not H.clonable(".claude/worktrees/other"))
 check("rebuildable caches are skipped", not H.clonable("a/__pycache__/b.pyc"))
 check("but real ignored data is cloned", H.clonable("output/x.json"))
+# Each platform is pinned here because each CI runner only exercises its own.
+_platform = H.sys.platform
+try:
+    H.sys.platform = "darwin"
+    check("macOS clones with the full-path /bin/cp -c, never a GNU cp on PATH",
+          H.clone_argv("-R", "-n") == ["/bin/cp", "-cRn"] and H.clone_argv() == ["/bin/cp", "-c"],
+          f"{H.clone_argv('-R', '-n')} {H.clone_argv()}")
+    H.sys.platform = "linux"
+    check("Linux never passes -c, which GNU cp rejects, and reflinks where it can",
+          H.clone_argv("-R", "-n") == ["cp", "-R", "-n", "--reflink=auto"]
+          and H.clone_argv() == ["cp", "--reflink=auto"],
+          f"{H.clone_argv('-R', '-n')} {H.clone_argv()}")
+finally:
+    H.sys.platform = _platform
 check("the clone gave the worktree its own inode, not a shared one",
       (inputs / "supplied.bin").stat().st_ino
       != (repo / "func" / "sources" / "supplied.bin").stat().st_ino)

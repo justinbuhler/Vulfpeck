@@ -301,6 +301,18 @@ def missing_after_clone(src, dst):
     return missing
 
 
+def clone_argv(*flags):
+    """Return the `cp` argv prefix that clones rather than copies, for this platform.
+
+    macOS clones with `-c` (APFS copy-on-write). GNU cp has no `-c` and rejects it,
+    so a Linux runner copied nothing and every provision died on the comparison
+    below; `--reflink=auto` clones on Btrfs or XFS and falls back to a plain copy.
+    """
+    if sys.platform == "darwin":
+        return ["/bin/cp", "-c" + "".join(f.lstrip("-") for f in flags)]
+    return ["cp", *flags, "--reflink=auto"]
+
+
 def clone_ignored_inputs(worktree):
     """Clone the gitignored inputs into a fresh worktree, and verify they arrived.
 
@@ -310,8 +322,9 @@ def clone_ignored_inputs(worktree):
     change. A gate that fails for a reason the agent did not cause teaches
     agents to bypass it.
 
-    The macOS `/bin/cp` is named in full: GNU cp earlier on PATH (coreutils) rejects `-c`, and
+    On macOS `/bin/cp` is named in full: GNU cp earlier on PATH (coreutils) rejects `-c`, and
     a failed clone looked like a clean one until the file-by-file comparison below.
+    `clone_argv` picks the flags for the platform.
 
     On APFS `cp -c` is a copy-on-write clone: gigabytes cost seconds and no
     disk, and each worktree still gets its own inodes, so a writer in one
@@ -338,7 +351,7 @@ def clone_ignored_inputs(worktree):
         dst = worktree / rel
         if src.is_dir():
             dst.mkdir(parents=True, exist_ok=True)
-            subprocess.run(["/bin/cp", "-Rcn", f"{src}/.", f"{dst}/"],
+            subprocess.run([*clone_argv("-R", "-n"), f"{src}/.", f"{dst}/"],
                            capture_output=True, text=True, timeout=900,
                            env=clean_env())
             missing = missing_after_clone(src, dst)
@@ -348,7 +361,7 @@ def clone_ignored_inputs(worktree):
         elif src.is_file():
             dst.parent.mkdir(parents=True, exist_ok=True)
             if not os.path.lexists(dst):
-                subprocess.run(["/bin/cp", "-c", str(src), str(dst)],
+                subprocess.run([*clone_argv(), str(src), str(dst)],
                                capture_output=True, text=True, timeout=900)
             if not os.path.lexists(dst):
                 die(f"cloning {rel} into the worktree produced no file")
