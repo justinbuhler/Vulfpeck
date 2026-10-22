@@ -30,4 +30,7 @@ To change a decision, write a new ADR with `Supersedes: NNNN` and mark the old o
 - 2026-10-22 — [0010. Mutation testing through one runner](0010-mutation-testing-through-one-runner.md) — proposed
 - 2026-10-22 — [0011. Code intelligence and blast radius are advisory](0011-code-intelligence-hooks-are-advisory.md) — proposed
 - 2026-10-22 — [0012. GitHub setup is a dry-run-by-default script](0012-github-setup-is-a-dry-run-by-default-script.md) — proposed
+- 2026-10-22 — [0013. CodeGraph indexes belong to checkouts](0013-codegraph-indexes-belong-to-checkouts.md) — proposed
+- 2026-10-22 — [0014. Codex Smartsheet tools are read-only](0014-codex-smartsheet-tools-are-read-only.md) — proposed
+- 2026-10-22 — [0015. GPT routing uses native Codex agents](0015-gpt-routing-uses-native-codex-agents.md) — proposed
 <!-- adr-index:end -->
