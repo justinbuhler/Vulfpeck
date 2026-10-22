@@ -1,0 +1,32 @@
+# Read-only Smartsheet policy. Credentials stay in user config.
+[mcp_servers.smartsheet]
+url = "https://mcp.smartsheet.com"
+enabled_tools = [
+    "get_resource_guide",
+    "get_cell_history",
+    "find_in_sheet",
+    "get_columns",
+    "plan_change",
+    "get_sheet_aggregates",
+    "get_sheet_path",
+    "get_sheet_summary",
+    "get_sheet_version",
+    "browse_folder",
+    "browse_workspace",
+    "list_workspaces",
+    "search",
+    "search_tools",
+    "execute_portfolio_read",
+    "execute_scenario_planning_read",
+    "execute_automations_read",
+    "execute_sharing_read",
+    "execute_users_read",
+    "execute_discussions_read",
+    "execute_reports_read",
+    "execute_attachments_read",
+    "execute_dashboards_read",
+]
+
+# The app duplicates Smartsheet outside the native MCP tool allowlist.
+[apps.asdk_app_6a1ed9b99f888191aac2020e4cb301ff]
+enabled = false

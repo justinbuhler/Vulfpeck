@@ -1,18 +1,7 @@
-"""Rule 3's write half: `codegraph sync` is automated in the main checkout and nowhere else.
+"""Verify checkout-local preparation, main sync, Git lifecycle hooks and bounded cleanup.
 
-Two mechanisms, one contract. `.githooks/post-merge` syncs in the background when main
-moves; the SessionStart hook runs `codegraph_freshness.py --sync-if-stale`. Both must act
-only in the main checkout, only when there is something to sync, and never fail or block
-the git operation or the session.
-
-Nothing here touches the real index. A fake `codegraph` on PATH records its argv, and the
-fixture repositories live under a temporary directory. Expectations are literal (CLAUDE.md
-Rule 11): the settings.json timeouts, the one-sync-per-stale-session count and the
-main-checkout guard are not read back from the files they validate.
-
-A guard test is only worth having if the guard is the reason for the outcome, so every skip
-case is built so that removing its guard would make the sync happen (the linked worktree
-HAS a `.codegraph/`, the repository HAS the hook, and so on).
+The CLI is replaced by a recording fake. Real Git drives checkout and merge
+hooks; no authoritative index or repository is changed by these fixtures.
 """
 import json
 import os
@@ -34,6 +23,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import codegraph_freshness as cg
 
+cg.LOCK_WAIT_S = 0
+
 HOOK = ROOT / ".githooks" / "post-merge"
 PASS, FAIL = [], []
 
@@ -54,9 +45,15 @@ FAKE = """#!/bin/bash
 # fake codegraph: records argv; `status` prints $FAKE_STATUS; `sync` can fix or fail.
 echo "$@" >> "$FAKE_LOG"
 case "$1" in
-  status) [ -f "$FAKE_STATUS" ] && cat "$FAKE_STATUS"; exit "${FAKE_STATUS_RC:-0}" ;;
+  status) [ -n "$FAKE_FAIL_AFTER_WRITE" ] && [ -f "$FAKE_FAIL_AFTER_WRITE" ] && exit 1
+          [ -f "$FAKE_STATUS" ] && cat "$FAKE_STATUS"; exit "${FAKE_STATUS_RC:-0}" ;;
+  init)   [ -n "$FAKE_ENV_LOG" ] && printf '%s|%s\\n' "$CODEGRAPH_NO_WATCH" "$CODEGRAPH_FORCE_WATCH" >> "$FAKE_ENV_LOG"
+          mkdir -p "${@: -1}/.codegraph"
+          [ -n "$FAKE_FIXED_STATUS" ] && cp "$FAKE_FIXED_STATUS" "$FAKE_STATUS"
+          exit "${FAKE_RC:-0}" ;;
   sync)   [ -n "$FAKE_SLEEP" ] && sleep "$FAKE_SLEEP"
           [ -n "$FAKE_FIXED_STATUS" ] && cp "$FAKE_FIXED_STATUS" "$FAKE_STATUS"
+          [ -n "$FAKE_FAIL_AFTER_WRITE" ] && touch "$FAKE_FAIL_AFTER_WRITE"
           exit "${FAKE_RC:-0}" ;;
 esac
 exit 0
@@ -111,15 +108,10 @@ def run_hook(cwd, env):
     return done.returncode, time.monotonic() - t0, done
 
 
-def wait_for(path, seconds=5.0, contains=""):
-    """Wait until path is non-empty and, if given, contains the text.
-
-    The background sync appends to its log in several writes, so non-empty is
-    not the same as finished: a check of the last line must wait for that line.
-    """
+def wait_for(path, seconds=5.0):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
-        if path.exists() and path.read_text().strip() and contains in path.read_text():
+        if path.exists() and path.read_text().strip():
             return True
         time.sleep(0.05)
     return False
@@ -229,7 +221,7 @@ check("codegraph sync exiting 7: hook still exits 0", rc == 0)
 _olog = main4 / ".omc" / "codegraph-sync.log"
 check("codegraph sync exiting 7: the failure is recorded in the log, not lost",
       wait_for(LOG_F) and any("exit 7" in line for line in
-                              (_olog.read_text().splitlines() if wait_for(_olog, contains="exit 7") else [])),
+                              (_olog.read_text().splitlines() if wait_for(_olog) else [])),
       _olog.read_text() if _olog.exists() else "no log")
 time.sleep(0.3)
 check("codegraph sync exiting 7: the exit code in the log is the real one",
@@ -315,184 +307,263 @@ def scenario(name, repo, status, fixes=False, sync_timeout=60, **fake_env):
     os.environ.update({k: str(v) for k, v in env.items()})
     try:
         with with_path(bin_dir):
-            line = cg.sync_if_stale(repo, sync_timeout=sync_timeout)
+            ready, line = cg.ensure_index(repo, sync_timeout=sync_timeout)
     finally:
         for k, v in saved.items():
             if v is None:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-    return line, [c for c in calls(log) if c.startswith("sync")], calls(log)
+    return ready, line, [c for c in calls(log) if c.startswith(("sync", "init"))], calls(log)
 
 
-print("\nsync-if-stale: syncs only on CG-02, in the main checkout")
-line, syncs, _all = scenario("s-stale", main1, STALE, fixes=True)
-check("CG-02 in the main checkout: exactly one sync, quiet, on the main path",
-      syncs == [f"sync --quiet {main1}"], str(_all))
-check("CG-02 in the main checkout: one-line result says synced", line == "codegraph synced: CG-02 cleared", line)
+print("\ncheckout-local index preparation")
+ready, line, writes, all_calls = scenario("s-stale", main1, STALE, fixes=True)
+check("a stale main index syncs once and is verified", ready and writes == [f"sync --quiet {main1}"], str(all_calls))
+ready, line, writes, all_calls = scenario("s-fresh", main1, FRESH)
+check("a fresh index is reused without init or sync", ready and writes == [], str(all_calls))
+ready, line, writes, all_calls = scenario("s-linked", linked1, STALE, fixes=True)
+check("a stale linked index syncs only its own checkout", ready and writes == [f"sync --quiet {linked1}"], str(all_calls))
 
-line, syncs, _all = scenario("s-fresh", main1, FRESH)
-check("fresh index: no sync", syncs == [] and "no sync" in line, f"{line} {_all}")
-
-for _name, _status in (
-    ("s-cg01", {"initialized": False}),
-    ("s-cg03", dict(FRESH, worktreeMismatch="/elsewhere")),
-    ("s-cg04", dict(FRESH, lastIndexed=None)),
+for name, status in (
+    ("missing", {"initialized": False}),
+    ("mismatch", dict(STALE, projectPath=str(main1), worktreeMismatch=str(main1))),
+    ("timestamp", dict(FRESH, lastIndexed=None)),
 ):
-    line, syncs, _all = scenario(_name, main1, _status)
-    check(f"{_name[2:].upper()} alone (sync cannot clear it): no sync", syncs == [], f"{line} {_all}")
+    ready, line, writes, all_calls = scenario("repair-" + name, linked1, status, fixes=True)
+    check(f"{name}: initialize locally instead of syncing a foreign or incomplete index",
+          ready and writes == [f"init --yes {linked1}"], str(all_calls))
 
-line, syncs, _all = scenario("s-cg03path", main1, dict(STALE, projectPath="/some/other/project"))
-check("stale AND indexing a different project: still one sync (CG-02 is present; CG-03 is reported separately)",
-      len(syncs) == 1, f"{line} {_all}")
+init_env = TMP / "init-env.log"
+ready, line, writes, all_calls = scenario("s-no-watch", linked1, {"initialized": False},
+                                         fixes=True, CODEGRAPH_NO_WATCH="1", FAKE_ENV_LOG=init_env)
+check("init cannot install shared fallback hooks through inherited watch settings",
+      ready and init_env.read_text().strip() == "|1", init_env.read_text())
 
-line, syncs, _all = scenario("s-linked", linked1, STALE)
-check("CG-02 in a linked worktree: no sync and no status probe at all",
-      syncs == [] and _all == [] and "not the main checkout" in line, f"{line} {_all}")
+missing = TMP / "r1-nested" / "new checkout"
+git("worktree", "add", "-q", "--detach", str(missing), cwd=main1)
+ready, line, writes, all_calls = scenario("s-new", missing, dict(FRESH, projectPath=str(main1)), fixes=True)
+check("new checkout initializes its own index before any parent status lookup",
+      ready and all_calls[0] == f"init --yes {missing}" and (missing / ".codegraph").is_dir(), str(all_calls))
+ready, line, writes, all_calls = scenario("s-unindexed", main2, STALE)
+check("an unindexed repository is not opted in by a hook", ready and all_calls == [], str(all_calls))
 
-line, syncs, _all = scenario("s-failrc", main1, STALE, FAKE_RC=5)
-check("sync exits nonzero: reported in one line, no exception", len(syncs) == 1 and "failed (exit 5)" in line, line)
+for name, status, env in (
+    ("persistent", STALE, {}),
+    ("foreign-after-init", dict(STALE, projectPath="/elsewhere"), {}),
+    ("status-unavailable", STALE, {"FAKE_STATUS_RC": 1}),
+    ("write-fails", STALE, {"FAKE_RC": 5}),
+):
+    ready, line, writes, all_calls = scenario("s-" + name, linked1, status, **env)
+    check(f"{name}: never claims the index is verified", not ready and "verified" in line, line)
 
-t0 = time.monotonic()
-line, syncs, _all = scenario("s-timeout", main1, STALE, sync_timeout=1, FAKE_SLEEP=5)
-_took = time.monotonic() - t0
-check("sync that hangs is cut off at the timeout and reported",
-      len(syncs) == 1 and "timed out after 1s" in line and _took < 4, f"{line} {_took:.1f}s")
+ready, line, writes, all_calls = scenario("s-statusfails-after-sync", linked1, STALE,
+                                         FAKE_FAIL_AFTER_WRITE=TMP / "after-sync-failure")
+check("a successful sync with an unavailable post-sync status is not success",
+      not ready and writes == [f"sync --quiet {linked1}"] and "after sync" in line, line)
 
-line, syncs, _all = scenario("s-persist", main1, STALE)
-check("sync that ran but left CG-02 standing is not reported as success",
-      len(syncs) == 1 and "CG-02 remains" in line, line)
+foreign = TMP / "foreign-index"
+foreign.mkdir()
+foreign_index = foreign / ".codegraph"
+foreign_index.symlink_to(main1 / ".codegraph", target_is_directory=True)
+ready, line = cg.ensure_index(foreign)
+check("a symlink to another index is rejected before any index mutation", not ready and "CG-03" in line, line)
 
-with with_path(None):
-    line = cg.sync_if_stale(main1)
-check("codegraph missing: one line, no exception", "unavailable" in line and "\n" not in line, line)
+(main1 / ".omc" / "codegraph-sync.lock").mkdir(exist_ok=True)
+ready, line, writes, all_calls = scenario("s-locked", main1, STALE)
+check("a live lock prevents overlapping index writes", not ready and writes == [] and "holds the lock" in line, line)
+(main1 / ".omc" / "codegraph-sync.lock").rmdir()
+old = time.time() - 600
+(main1 / ".omc" / "codegraph-sync.lock").mkdir()
+os.utime(main1 / ".omc" / "codegraph-sync.lock", (old, old))
+ready, line, writes, all_calls = scenario("s-deadlock", main1, STALE, fixes=True)
+check("a dead lock is replaced and the completed operation releases it", ready and not (main1 / ".omc" / "codegraph-sync.lock").exists(), line)
+ready, line, writes, all_calls = scenario("s-timeout", main1, STALE, sync_timeout=1, FAKE_SLEEP=5)
+check("a bounded operation timeout retains an unverified result and releases its lock",
+      not ready and "timed out" in line and not (main1 / ".omc" / "codegraph-sync.lock").exists(), line)
 
-line, syncs, _all = scenario("s-statusfail", main1, STALE, FAKE_STATUS_RC=1)
-check("status probe fails: no sync", syncs == [] and "unavailable" in line, f"{line} {_all}")
+print("\npost-checkout runs through real Git")
+checkout = ROOT / ".githooks" / "post-checkout"
+check("post-checkout is executable", os.access(checkout, os.X_OK))
+check("post-checkout is valid shell", subprocess.run(["bash", "-n", str(checkout)], capture_output=True).returncode == 0)
+main_c, linked_c = make_repo("checkout", with_hook=False)
+(main_c / ".githooks").mkdir()
+shutil.copy2(checkout, main_c / ".githooks/post-checkout")
+(main_c / "scripts").mkdir()
+for name in ("codegraph_freshness.py", "paths.py"):
+    shutil.copy2(ROOT / "scripts" / name, main_c / "scripts" / name)
+git("add", ".githooks", "scripts", cwd=main_c)
+git("commit", "-qm", "hook", cwd=main_c)
+git("config", "core.hooksPath", ".githooks", cwd=main_c)
+BIN_C, LOG_C = make_bin("bin-checkout")
+uv = BIN_C / "uv"
+uv.write_text(f'#!/bin/bash\nshift; shift; shift; exec "{sys.executable}" "$@"\n')
+uv.chmod(0o755)
+status_c, fixed_c = TMP / "checkout-status.json", TMP / "checkout-fixed.json"
+new_c = main_c / "tmp" / "worktrees" / "created"
+status_c.write_text(json.dumps(dict(FRESH, projectPath=str(main_c))))
+fixed_c.write_text(json.dumps(dict(FRESH, projectPath=str(new_c))))
+env_c = env_with(BIN_C, FAKE_LOG=LOG_C, FAKE_STATUS=status_c, FAKE_FIXED_STATUS=fixed_c)
+created = subprocess.run(["git", "worktree", "add", "-q", "-b", "new-feature", str(new_c)],
+                         cwd=main_c, env=env_c, capture_output=True, text=True)
+check("Git worktree creation initializes before returning and verifies the new root",
+      created.returncode == 0 and calls(LOG_C) == [f"init --yes {new_c}", f"status --json {new_c}"], created.stdout + created.stderr + str(calls(LOG_C)))
+LOG_C.write_text("")
+file_checkout = subprocess.run(["git", "checkout", "--", "f.txt"], cwd=new_c, env=env_c, capture_output=True, text=True)
+check("checking out a file does not prepare an index", file_checkout.returncode == 0 and calls(LOG_C) == [], str(calls(LOG_C)))
+status_c.write_text(json.dumps(dict(STALE, projectPath=str(new_c))))
+LOG_C.write_text("")
+branch_checkout = subprocess.run(["git", "checkout", "-q", "-b", "another-feature"], cwd=new_c, env=env_c, capture_output=True, text=True)
+check("a branch switch syncs the existing local index without initializing it again",
+      branch_checkout.returncode == 0 and calls(LOG_C) == [f"status --json {new_c}", f"sync --quiet {new_c}", f"status --json {new_c}"], branch_checkout.stdout + branch_checkout.stderr + str(calls(LOG_C)))
 
-print("\nsync-if-stale: one sync at a time")
-main_l, _ll = make_repo("rlock")
-(main_l / ".omc" / "codegraph-sync.lock").mkdir(parents=True)
-line, syncs, _all = scenario("s-locked", main_l, STALE)
-check("lock held: no sync, and the line says why",
-      syncs == [] and line == "codegraph sync skipped: another sync holds the lock", f"{line} {_all}")
-check("lock held: the holder's lock is not removed", (main_l / ".omc" / "codegraph-sync.lock").is_dir())
-_old = time.time() - 600
-os.utime(main_l / ".omc" / "codegraph-sync.lock", (_old, _old))
-line, syncs, _all = scenario("s-stalelock", main_l, STALE, fixes=True)
-check("lock older than 5 minutes (dead holder): broken, one sync runs", len(syncs) == 1 and "synced" in line, f"{line} {_all}")
-check("the lock is released after a sync", not (main_l / ".omc" / "codegraph-sync.lock").exists())
-line, syncs, _all = scenario("s-lockfail", main_l, STALE, FAKE_RC=5)
-check("the lock is released after a failed sync too", not (main_l / ".omc" / "codegraph-sync.lock").exists(), line)
-line, syncs, _all = scenario("s-lockfresh", main_l, FRESH)
-check("a fresh index takes no lock", not (main_l / ".omc" / "codegraph-sync.lock").exists() and syncs == [])
+print("\nindex cleanup retains main and shared Git hooks")
+ready, line = cg.remove_local_index(main_c)
+check("main's index cannot be removed", not ready and (main_c / ".codegraph").is_dir(), line)
+ready, line = cg.remove_local_index(foreign)
+check("a foreign symlink cannot be removed", not ready and foreign_index.is_symlink(), line)
+node = TMP / "node"
+node.write_text('#!/bin/bash\nif [ "${FAKE_STOP_RC:-0}" = 0 ]; then rm -rf "$4/.codegraph"; fi\nexit "${FAKE_STOP_RC:-0}"\n')
+node.chmod(0o755)
+saved = {key: os.environ.get(key) for key in ("PATH", "FAKE_LOG", "FAKE_STATUS", "FAKE_STOP_RC")}
+os.environ.update(PATH=f"{BIN_C}:{SYSTEM_PATH}", FAKE_LOG=str(LOG_C), FAKE_STATUS=str(status_c))
+try:
+    os.environ["FAKE_STOP_RC"] = "1"
+    ready, line = cg.remove_local_index(new_c)
+    check("unverified daemon shutdown retains the local index", not ready and (new_c / ".codegraph").is_dir(), line)
+    os.environ["FAKE_STOP_RC"] = "2"
+    ready, line = cg.remove_local_index(new_c)
+    check("a live shared MCP writer defers cleanup without deleting its index",
+          ready and "deferred" in line and (new_c / ".codegraph").is_dir(), line)
+    os.environ["FAKE_STOP_RC"] = "0"
+    ready, line = cg.remove_local_index(new_c)
+    check("successful cleanup removes only the local index",
+          ready and not (new_c / ".codegraph").exists() and (main_c / ".codegraph").is_dir(), line)
+    check("cleanup retains every shared Git hook", (main_c / ".githooks/post-checkout").read_bytes() == checkout.read_bytes())
+finally:
+    for key, value in saved.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
 
-print("\nsync-if-stale: the command contract")
-BIN_C, LOG_C = make_bin("bin-cli")
-# The script anchors REPO to its own location (paths.py), so run a copy that lives in a scratch
-# repository: the real checkout is never probed or synced, whatever tree this test runs in.
-main_cli, _lcli = make_repo("rcli")
-(main_cli / "scripts").mkdir()
-for _f in ("codegraph_freshness.py", "paths.py"):
-    shutil.copy2(ROOT / "scripts" / _f, main_cli / "scripts" / _f)
-_cli = [sys.executable, str(main_cli / "scripts" / "codegraph_freshness.py"), "--sync-if-stale"]
-_stale_cli = TMP / "cli-status.json"
-_stale_cli.write_text(json.dumps(dict(STALE, projectPath=str(main_cli))))
-done = subprocess.run(_cli, cwd=TMP, capture_output=True, text=True,
-                      env=env_with(BIN_C, FAKE_LOG=LOG_C, FAKE_RC=9, FAKE_STATUS=_stale_cli))
-check("--sync-if-stale exits 0 even when codegraph misbehaves", done.returncode == 0, done.stderr)
-check("--sync-if-stale prints exactly one line", len(done.stdout.splitlines()) == 1, repr(done.stdout))
-check("--sync-if-stale ran against the scratch repository, not the real checkout",
-      calls(LOG_C) == [f"status --json {main_cli}", f"sync --quiet {main_cli}"] and str(ROOT) not in " ".join(calls(LOG_C)),
-      str(calls(LOG_C)))
-done = subprocess.run(_cli, cwd=TMP, capture_output=True, text=True, env=env_with(None))
-check("--sync-if-stale exits 0 with codegraph absent", done.returncode == 0 and len(done.stdout.splitlines()) == 1,
-      f"{done.returncode} {done.stdout!r}")
-check("the default mode is unchanged: UserPromptSubmit still gets the report-only path",
-      "--sync-if-stale" not in (ROOT / ".claude" / "settings.json").read_text().split('"SessionStart"')[0])
+print("\nnative writer protocol prevents a cleanup race")
+# The installed interpreter runs fake native modules; no real daemon or index is touched.
+real_node = Path(shutil.which("codegraph")).resolve().parents[1] / "node"
+assert real_node.is_file(), "CodeGraph's installed Node runtime is required for its cleanup adapter test"
+protocol = TMP / "native-protocol"
+protocol.mkdir()
+protocol_root = protocol / "checkout"
+protocol_root.mkdir()
+trace = protocol / "calls.jsonl"
+registry = protocol / "daemon-registry.js"
+registry.write_text("exports.stopDaemonAt=async()=>{require('fs').appendFileSync(process.env.PROTOCOL_TRACE,'stop\\n');return {outcome:'no-daemon'}};")
+(protocol / "daemon.js").write_text("exports.isProcessAlive=()=>false;")
+(protocol / "writer-lock.js").write_text("""
+const fs=require('fs'),path=require('path');
+exports.getWriterPidPath=(root,name='writer.pid')=>path.join(root,'.codegraph',name);
+exports.readWriterLock=()=>null;
+exports.tryAcquireWriterLock=(root,mode,name='writer.pid')=>{
+  fs.appendFileSync(process.env.PROTOCOL_TRACE,'claim '+name+'\\n');
+  return {kind:process.env.PROTOCOL_INTERPOSE==='1'&&name==='writer.pid'?'taken':'acquired'};
+};
+exports.releaseWriterLock=(root,name='writer.pid')=>fs.appendFileSync(process.env.PROTOCOL_TRACE,'release '+name+'\\n');
+""")
+# Capture exactly the adapter production sends to its installed Node runtime.
+run_saved = cg.subprocess.run
+captured = []
+status_c.write_text(json.dumps(dict(FRESH, projectPath=str(linked1))))
+metadata = {**FRESH, "projectPath": str(linked1)}
+status_saved = cg.status_or_reason
+which_saved = cg.shutil.which
+try:
+    cg.status_or_reason = lambda root: (metadata, None)
+    cg.shutil.which = lambda name: str(BIN_C / "codegraph")
+    def capture_adapter(args, **kwargs):
+        if args[0].endswith('/node'):
+            captured.append(args[2])
+            return subprocess.CompletedProcess(args, 2, '', '')
+        return run_saved(args, **kwargs)
+    cg.subprocess.run = capture_adapter
+    cg.remove_local_index(linked1)
+finally:
+    cg.subprocess.run, cg.status_or_reason, cg.shutil.which = run_saved, status_saved, which_saved
+assert captured, "production cleanup must call the native adapter"
+for interpose in ("1", "0"):
+    idx = protocol_root / ".codegraph"
+    idx.mkdir(exist_ok=True)
+    (idx / "sentinel").write_text("index")
+    trace.write_text("")
+    result = subprocess.run([str(real_node), "-e", captured[0], str(registry), str(protocol_root)],
+                            env={**GIT_ENV, "PROTOCOL_TRACE": str(trace), "PROTOCOL_INTERPOSE": interpose},
+                            capture_output=True, text=True)
+    events = trace.read_text().splitlines()
+    if interpose == "1":
+        check("a new writer between the stopped check and writer claim retains the index",
+              result.returncode == 2 and (idx / "sentinel").is_file()
+              and events == ["claim rebuild.pid", "stop", "claim writer.pid", "release rebuild.pid"], result.stderr + str(events))
+    else:
+        check("deletion holds both native slots and releases them only afterward",
+              result.returncode == 0 and not idx.exists()
+              and events == ["claim rebuild.pid", "stop", "claim writer.pid", "release writer.pid", "release rebuild.pid"], result.stderr + str(events))
 
-print("\nworktree report: no remedy that a worktree must not run (rule 3)")
+print("\nagent context is bound to the actual checkout")
 import contextlib
+import importlib.util
 import io
+spec = importlib.util.spec_from_file_location("blast_radius_advisory", ROOT / ".claude/hooks/blast_radius_advisory.py")
+advisory = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(advisory)
+read_saved, run_saved = cg.read_status, advisory.subprocess.run
+explorations = []
+def explore(*args, **kwargs):
+    explorations.append((args[0], kwargs))
+    return subprocess.CompletedProcess(args[0], 0, "- `signal` 1 caller; tests: test_signal.py", "")
+try:
+    advisory.subprocess.run = explore
+    cg.read_status = lambda root: dict(FRESH, projectPath=str(main_c))
+    check("the advisory refuses another checkout's index", advisory.blast_radius(["signal"], main1) == [] and explorations == [])
+    cg.read_status = lambda root: dict(STALE, projectPath=str(main1))
+    check("the advisory refuses stale context", advisory.blast_radius(["signal"], main1) == [] and explorations == [])
+    cg.read_status = lambda root: dict(FRESH, projectPath=str(main1))
+    check("the advisory reads source and call paths only for its verified checkout",
+          advisory.blast_radius(["signal"], main1) and explorations[0][0][0:4] == ["codegraph", "explore", "--path", str(main1)])
+finally:
+    cg.read_status, advisory.subprocess.run = read_saved, run_saved
 
-_CG02 = {"initialized": True, "lastIndexed": "2026-10-21T00:00:00Z", "projectPath": str(ROOT),
-         "pendingChanges": {"added": 0, "modified": 1, "removed": 0}}
-_CG03 = dict(_CG02, pendingChanges={}, projectPath="/elsewhere/main")
-_RO = "the index describes main and is read-only in a worktree - read the files your branch changed directly"
-check("CG-02 in a worktree says read-only, literally",
-      cg.evaluate(_CG02, ROOT, main_checkout=False)
-      == [f"CG-02 codegraph reports 1 uningested change(s) (0 added, 1 modified, 0 removed) - {_RO}"],
-      str(cg.evaluate(_CG02, ROOT, main_checkout=False)))
-check("CG-03 in a worktree says read-only, literally",
-      cg.evaluate(_CG03, ROOT, main_checkout=False)
-      == [f"CG-03 the index describes '/elsewhere/main', not {str(ROOT)!r} - {_RO}"],
-      str(cg.evaluate(_CG03, ROOT, main_checkout=False)))
-check("in the main checkout the remedies are unchanged",
-      cg.evaluate(_CG02, ROOT)[0].endswith("- run `codegraph sync`")
-      and cg.evaluate(_CG03, ROOT)[0].endswith("- run `codegraph init .` in this worktree"))
+stdin_saved, argv_saved, ensure_saved = sys.stdin, sys.argv, cg.ensure_index
+git_dir_saved = os.environ.get("GIT_DIR")
+seen = []
+try:
+    os.environ["GIT_DIR"] = str(main_c / ".git")
+    sys.stdin = io.StringIO(json.dumps({"cwd": str(new_c / "scripts")}))
+    sys.argv = ["codegraph_freshness.py", "--ensure", "--hook"]
+    cg.ensure_index = lambda repo: (seen.append(repo) is None, "prepared")
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = cg.main()
+    check("hook event cwd wins over the launch project and inherited GIT_DIR",
+          rc == 0 and seen == [new_c.resolve()], str(seen))
+finally:
+    sys.stdin, sys.argv, cg.ensure_index = stdin_saved, argv_saved, ensure_saved
+    if git_dir_saved is None:
+        os.environ.pop("GIT_DIR", None)
+    else:
+        os.environ["GIT_DIR"] = git_dir_saved
 
+print("\nconfiguration and lander caller wiring")
+settings = json.loads((ROOT / ".claude/settings.json").read_text())
+for event in ("UserPromptSubmit", "SessionStart"):
+    commands = [hook["command"] for entry in settings["hooks"][event] for hook in entry["hooks"] if "codegraph_freshness.py" in hook["command"]]
+    check(f"{event} selects the actual event checkout", len(commands) == 1 and "--hook" in commands[0], str(commands))
+lander = (ROOT / "scripts/land.sh").read_text()
+check("the lander prepares main before creating its persistent worktree",
+      lander.index('prepare_codegraph "$MAIN"', lander.index('else\n  rm -rf "$LWT"')) < lander.index('git worktree add --detach "$LWT"'))
+check("the lander prepares the merged index before running its gate",
+      lander.index('prepare_codegraph "$LWT"', lander.index('while :; do')) < lander.index('( cd "$LWT" && env -u VERIFY_LINT_ONLY'))
+check("candidate cleanup follows verified reachability and precedes the receipt",
+      lander.index('git merge-base --is-ancestor "$CANDIDATE" main', lander.index('if [ "$swapped" = 0 ]')) < lander.index('cleanup_codegraph "$CALLER"') < lander.index('say "✓ LANDED'))
+check("only the caller and own lander are cleaned", lander.count('cleanup_codegraph "') == 2)
 
-def _report_as(main_checkout):
-    saved = (cg.is_main_checkout, cg.status_or_reason, sys.argv)
-    cg.is_main_checkout = lambda repo=ROOT: main_checkout
-    cg.status_or_reason = lambda root=None, timeout=8: (dict(_CG02, pendingChanges={"modified": 2}), None)
-    sys.argv = ["codegraph_freshness.py", "--report"]
-    out = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(out):
-            cg.main()
-    finally:
-        cg.is_main_checkout, cg.status_or_reason, sys.argv = saved
-    return out.getvalue()
-
-
-_wt = _report_as(False)
-check("the --report output in a worktree never tells an agent to run codegraph sync or init",
-      "run `codegraph sync`" not in _wt and "codegraph init" not in _wt and "read-only in a worktree" in _wt, _wt)
-check("the --report output in the main checkout still says to sync", "run `codegraph sync`" in _report_as(True))
-
-print("\nsettings.json wiring (literal expectations)")
-_settings = json.loads((ROOT / ".claude" / "settings.json").read_text())
-_hooks = _settings["hooks"]
-
-
-def commands(event):
-    return [(h["command"], h["timeout"]) for entry in _hooks.get(event, []) for h in entry["hooks"]]
-
-
-_ups = [(c, t) for c, t in commands("UserPromptSubmit") if "codegraph_freshness.py" in c]
-check("one UserPromptSubmit freshness hook", len(_ups) == 1, str(_ups))
-check("UserPromptSubmit freshness hook timeout is 30", _ups and _ups[0][1] == 30, str(_ups))
-check("UserPromptSubmit freshness hook stays report-only: it never syncs",
-      _ups and "--sync-if-stale" not in _ups[0][0] and "codegraph sync" not in _ups[0][0], str(_ups))
-_ss = [(c, t) for c, t in commands("SessionStart") if "codegraph_freshness.py" in c]
-check("one SessionStart freshness hook", len(_ss) == 1, str(_ss))
-check("SessionStart runs --sync-if-stale", _ss and "codegraph_freshness.py --sync-if-stale" in _ss[0][0], str(_ss))
-check("SessionStart hook cannot fail the session: command ends `|| true`",
-      _ss and _ss[0][0].rstrip().endswith("|| true"), str(_ss))
-# Worst case, uv start-up aside, from literal timeouts (Rule 11: not read back from the scripts).
-# sync-if-stale: worktree probe 5 + status 8 + sync 60 + status 8 = 81. The lock is non-blocking.
-check("the timeouts the worst case is computed from are the ones in the script",
-      (cg.WORKTREE_TIMEOUT, cg.STATUS_TIMEOUT_S, cg.SYNC_TIMEOUT) == (5, 8, 60),
-      str((cg.WORKTREE_TIMEOUT, cg.STATUS_TIMEOUT_S, cg.SYNC_TIMEOUT)))
-check("SessionStart timeout is 120, above the 81s worst case",
-      _ss and _ss[0][1] == 120 and 5 + 8 + 60 + 8 == 81 < 120, str(_ss))
-check("SessionStart runs only the freshness sync: nothing else rides on the hook",
-      _ss and _ss[0][0] == 'cd "${CLAUDE_PROJECT_DIR}" && uv run python3 scripts/codegraph_freshness.py --sync-if-stale || true',
-      str(_ss))
-check("SessionStart matcher is `startup`, so resume, clear and compact do not sync",
-      [e.get("matcher") for e in _hooks.get("SessionStart", [])] == ["startup"])
-check("the catch-up step is not wired anywhere", "catch_up" not in (ROOT / ".claude" / "settings.json").read_text())
-
-print("\nroot AGENTS.md rule 3 states the automation and the worktree boundary")
-_rule6 = next(l for l in (ROOT / "AGENTS.md").read_text().splitlines() if l.startswith("3. "))
-for _needle in ("`.githooks/post-merge`", "SessionStart", "CG-02", "linked worktree",
-                "never run `codegraph sync` there", "read-only", "the files your branch changed directly"):
-    check(f"rule 3 mentions {_needle}", _needle in _rule6, _rule6)
-check("rule 3 does not mention the catch-up step", "catch_up" not in _rule6)
-check("rule 3 no longer tells every agent to sync before, during and after changes",
-      "before, during, and after changes" not in _rule6)
-
-shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
+shutil.rmtree(TMP)
 sys.exit(1 if FAIL else 0)

@@ -57,6 +57,20 @@ done
 git rev-parse --git-dir >/dev/null 2>&1 || die "not a git repository"
 COMMON=$(cd "$(git rev-parse --git-common-dir)" && pwd) || die "cannot resolve the shared git dir"
 MAIN=$(dirname "$COMMON")
+CALLER=$(git rev-parse --show-toplevel) || die "cannot resolve the candidate checkout"
+
+prepare_codegraph(){
+  [ -d "$MAIN/.codegraph" ] || [ -d "$1/.codegraph" ] || return 0
+  uv run --no-sync python3 "$CALLER/scripts/codegraph_freshness.py" --ensure --root "$1" \
+    || die "CodeGraph is not ready at $1; refusing to continue"
+}
+
+cleanup_codegraph(){
+  [ -d "$1/.codegraph" ] || return 0
+  if ! uv run --no-sync python3 "$CALLER/scripts/codegraph_freshness.py" --cleanup --root "$1"; then
+    say "integration succeeded; CodeGraph cleanup deferred, local index retained at $1"
+  fi
+}
 
 BRANCH=$(git symbolic-ref --quiet --short HEAD) \
   || die "detached HEAD is not a landable candidate; check out your branch first"
@@ -240,6 +254,7 @@ $(printf '%s\n' "$merr" | sed 's/^/       /')"
     merged_main=$(git rev-parse main)
   else
     mtmp=$(mktemp -d)/wt
+    prepare_codegraph "$MAIN"
     git worktree add -q --detach "$mtmp" main \
       || die "could not create a worktree to merge origin/main in"
     if ! merr=$(git -C "$mtmp" -c user.name=land -c user.email=land@local \
@@ -308,6 +323,7 @@ else
   rm -rf "$LWT"
   git worktree prune
   mkdir -p "$(dirname "$LWT")"
+  prepare_codegraph "$MAIN"
   git worktree add --detach "$LWT" "$CANDIDATE" >/dev/null 2>&1 \
     || die "could not create the lander worktree at $LWT"
   say "▶ created lander worktree $LWT"
@@ -350,6 +366,7 @@ $conflicts
   # Every prior gate result is stale: the pre-commit hook tested each of your
   # commits against the OLD main, and git runs pre-merge-commit rather than
   # pre-commit for the merge above. Nobody has tested this tree. No lock held.
+  prepare_codegraph "$LWT"
   say "▶ gate on the merged tree: $GATE"
   ( cd "$LWT" && env -u VERIFY_LINT_ONLY -u VERIFY_FAST bash -c "$GATE" ) \
     || die "the gate failed on the merged tree; main is unchanged"
@@ -384,6 +401,9 @@ $conflicts
       || die "the reviewed candidate $CANDIDATE is NOT reachable from main"
     unlock
     event landed "attempts=$attempt" "$MERGED"
+    cleanup_codegraph "$CALLER"
+    cleanup_codegraph "$LWT"
+    prepare_codegraph "$MAIN"
     say "✓ LANDED candidate=$CANDIDATE base=$BASE main=$MERGED attempts=$attempt"
     # The decisions this land touched, found through each ADR's Components.
     # Informational: coverage was already enforced by the gate (tests/test_adr.py).

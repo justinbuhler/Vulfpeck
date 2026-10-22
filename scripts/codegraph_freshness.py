@@ -1,48 +1,22 @@
 #!/usr/bin/env python3
-"""Rule 3's missing half: prove the codegraph index still describes this tree.
+"""Keep CodeGraph indexes local to the Git checkout whose files they describe.
 
-Rule 3 keeps the index in step with the main checkout. The read path is
-automated - a UserPromptSubmit hook runs this module's report on every turn - and
-since 2026-10-21 so is the write path, in the main checkout only: `.githooks/
-post-merge` syncs in the background when main moves, and a SessionStart hook runs
-`--sync-if-stale` below. A stale index answers confidently about code that no
-longer exists, and before the write path was automated nothing noticed.
+CG-01 detects an absent index, CG-02 uningested content, CG-03 a different
+checkout, and CG-04 a missing index timestamp. Identity is checked independently
+of CodeGraph's own worktree-mismatch flag because a nested worktree without an
+index can otherwise resolve upward to main.
 
-    CG-01  the index does not exist at all
-    CG-02  codegraph reports uningested changes against the working tree
-    CG-03  the index was built against a different worktree
-    CG-04  the index does not say when it was built
-
-CG-02 is the whole check. It was measured before this module was written, not
-assumed: editing a tracked file makes `codegraph status --json` report
-`modified: 1` immediately, before the background daemon has synced anything, so
-`pendingChanges` is a live content comparison between tree and index rather
-than a counter the daemon maintains. A stopped daemon therefore cannot mask
-staleness, and this needs no daemon-liveness probe of its own.
-
-The first draft compared each tracked file's mtime against `lastIndexed`,
-on the assumption that `pendingChanges` was daemon-maintained. That assumption
-was false, and the check was worse than redundant: `codegraph sync` does not
-advance `lastIndexed` when content is unchanged, so a bare `touch` raised a
-violation no sync could clear. Content is the only honest basis, and codegraph
-already computes it.
-
-`evaluate` is pure - it takes a parsed status document and returns violation
-strings - so every case below is an ordinary fixture rather than a daemon
-someone has to stop.
-
-    uv run python3 scripts/codegraph_freshness.py                  # assert, exit 1 on any violation
-    uv run python3 scripts/codegraph_freshness.py --report         # print status, always exit 0
-    uv run python3 scripts/codegraph_freshness.py --sync-if-stale  # SessionStart: one line, always exit 0
-
-`--sync-if-stale` syncs only on CG-02 (the one marker `codegraph sync` can clear;
-CG-01/03/04 need `codegraph init` or a different tree), only in the main checkout
-(the index describes main, so a linked worktree never syncs it), and with a bounded
-timeout. It prints one line and never fails the session.
+`--ensure` initializes a missing local index when this repository already opted
+in, syncs changed content, and verifies every marker before work begins.
+`--ensure-main` prepares the primary checkout before creating a worktree.
+`--cleanup` removes only a verified linked checkout's index after integration.
+`--sync-if-stale` reports preparation failures without failing SessionStart.
 """
 
 import contextlib
 import json
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -56,8 +30,7 @@ MARKERS = ("CG-01", "CG-02", "CG-03", "CG-04")
 PENDING_KINDS = ("added", "modified", "removed")
 
 # The SessionStart hook in .claude/settings.json (120s) must outlast this script's worst
-# case, uv start-up aside: worktree probe 5 + status 8 + sync 60 + status 8 = 81.
-# The sync lock is non-blocking, so it adds nothing to that.
+# case, uv start-up aside: Git probe 5 + lock wait 20 + two status calls 16 + sync 60 = 101.
 SYNC_TIMEOUT = 60
 # One sync of the index at a time: `.githooks/post-merge` (background, no timeout) and the
 # SessionStart hook both take this directory under `<repo>/.omc/`. mkdir is atomic in bash
@@ -65,21 +38,12 @@ SYNC_TIMEOUT = 60
 # LOCK_STALE_S (> SYNC_TIMEOUT, and the hook mirrors it with -mmin +5) is broken.
 LOCK_NAME = "codegraph-sync.lock"
 LOCK_STALE_S = 300
+LOCK_WAIT_S = 20
 WORKTREE_TIMEOUT = 5
 
 
-# In a linked worktree the index describes main, so neither `codegraph sync` nor
-# `codegraph init .` is a remedy there (rule 3); the report must not tell an agent to run them.
-READ_ONLY_REMEDY = ("the index describes main and is read-only in a worktree - "
-                    "read the files your branch changed directly")
-
-
-def evaluate(status, repo=REPO, main_checkout=True):
-    """Return every freshness violation for one `codegraph status --json` document.
-
-    `main_checkout=False` swaps the remediation text for the worktree one: the facts
-    reported are identical, only the instruction differs.
-    """
+def evaluate(status, repo=REPO):
+    """Return every freshness violation for one `codegraph status --json` document."""
     if not status or not status.get("initialized"):
         return ["CG-01 codegraph is not initialised for this repository"]
 
@@ -90,7 +54,7 @@ def evaluate(status, repo=REPO, main_checkout=True):
         detail = ", ".join(f"{pending.get(k) or 0} {k}" for k in PENDING_KINDS)
         violations.append(
             f"CG-02 codegraph reports {total} uningested change(s) ({detail}) - "
-            + ("run `codegraph sync`" if main_checkout else READ_ONLY_REMEDY))
+            + "run `codegraph sync` in this checkout")
 
     if status.get("worktreeMismatch"):
         violations.append(
@@ -111,7 +75,7 @@ def evaluate(status, repo=REPO, main_checkout=True):
     elif Path(indexed).resolve() != Path(repo).resolve():
         violations.append(
             f"CG-03 the index describes {str(indexed)!r}, not {str(repo)!r} - "
-            + ("run `codegraph init .` in this worktree" if main_checkout else READ_ONLY_REMEDY))
+            + "run `codegraph init .` in this worktree")
 
     if not status.get("lastIndexed"):
         violations.append("CG-04 the index does not record when it was built")
@@ -131,7 +95,7 @@ def status_or_reason(root=None, timeout=STATUS_TIMEOUT_S):
     root = root or REPO
     try:
         out = subprocess.run(["codegraph", "status", "--json", str(root)],
-                             capture_output=True, text=True, timeout=timeout)
+                             cwd=root, env=git_env(), capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return None, f"codegraph status timed out after {timeout}s"
     except OSError:
@@ -149,21 +113,26 @@ def read_status(root=None, timeout=STATUS_TIMEOUT_S):
     return status_or_reason(root, timeout)[0]
 
 
-def is_main_checkout(repo=REPO):
-    """True only when `repo` is the main working tree (first `git worktree list` entry).
+def git_env():
+    """Return the current environment without inherited Git repository overrides."""
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 
-    Conservative: any doubt (git missing, not a repository, unparsable output) is
-    False, because a wrong True syncs an index from a tree it does not describe.
-    """
+
+def main_checkout(repo=REPO):
+    """Return the canonical primary checkout, or None if Git cannot identify it."""
     try:
         out = subprocess.run(["git", "-C", str(repo), "worktree", "list", "--porcelain"],
-                             capture_output=True, text=True, timeout=WORKTREE_TIMEOUT)
+                             env=git_env(), capture_output=True, text=True, timeout=WORKTREE_TIMEOUT)
     except (OSError, subprocess.TimeoutExpired):
-        return False
-    first = out.stdout.splitlines()[0] if out.returncode == 0 and out.stdout else ""
-    if not first.startswith("worktree "):
-        return False
-    return Path(first[len("worktree "):]).resolve() == Path(repo).resolve()
+        return None
+    roots = [Path(line[len("worktree "):]).resolve() for line in out.stdout.splitlines()
+             if line.startswith("worktree ")] if out.returncode == 0 else []
+    return roots[0] if Path(repo).resolve() in roots else None
+
+
+def is_main_checkout(repo=REPO):
+    """Return whether repo is the primary working tree."""
+    return main_checkout(repo) == Path(repo).resolve()
 
 
 def acquire_sync_lock(repo=REPO):
@@ -187,34 +156,134 @@ def acquire_sync_lock(repo=REPO):
     return None
 
 
-def sync_if_stale(repo=REPO, sync_timeout=SYNC_TIMEOUT):
-    """Run one `codegraph sync` iff CG-02 is raised in the main checkout; return one line."""
-    if not is_main_checkout(repo):
-        return "codegraph sync skipped: not the main checkout (the index describes main)"
-    status = read_status(repo, timeout=STATUS_TIMEOUT_S)
-    if status is None:
-        return "codegraph unavailable or not initialised - no sync"
-    if "CG-02" not in markers_of(evaluate(status, repo)):
-        return "codegraph not stale (CG-02 clear) - no sync"
+def ensure_index(repo=REPO, sync_timeout=SYNC_TIMEOUT):
+    """Prepare and verify this checkout's own index without using a parent's index.
+
+    Args:
+        repo (Path): Git checkout root.
+        sync_timeout (int): Maximum duration of one index operation.
+
+    Returns:
+        (bool): Whether the checkout is ready or indexing is not enabled.
+        (str): Operation result or the failure that prevented verification.
+    """
+    repo = Path(repo).resolve()
+    index = repo / ".codegraph"
+    main = main_checkout(repo)
+    if index.is_symlink():
+        return False, f"CG-03 refusing a linked index at {index}"
+    if index.exists() and (main is None or not index.is_dir()):
+        return False, f"CG-03 index is not at a Git checkout root: {repo}"
+    if not index.is_dir() and not (main and (main / ".codegraph").is_dir()):
+        return True, "codegraph not enabled - no index"
+    until = time.monotonic() + LOCK_WAIT_S
     lock = acquire_sync_lock(repo)
+    while lock is None and time.monotonic() < until:
+        time.sleep(0.1)
+        lock = acquire_sync_lock(repo)
     if lock is None:
-        return "codegraph sync skipped: another sync holds the lock"
+        return False, "codegraph preparation skipped: another index operation holds the lock"
     try:
-        done = subprocess.run(["codegraph", "sync", "--quiet", str(repo)],
-                              capture_output=True, text=True, timeout=sync_timeout)
+        action = "init"
+        if index.is_dir():
+            status, reason = status_or_reason(repo)
+            if status is None:
+                return False, f"{reason} - index not verified"
+            violations = evaluate(status, repo)
+            if not violations:
+                return True, "codegraph fresh: local index verified"
+            action = "init" if any(m in markers_of(violations) for m in ("CG-01", "CG-03", "CG-04")) else "sync"
+        args = ["codegraph", action, "--yes" if action == "init" else "--quiet", str(repo)]
+        env = git_env()
+        if action == "init":
+            env.pop("CODEGRAPH_NO_WATCH", None)
+            env["CODEGRAPH_FORCE_WATCH"] = "1"  # init must not install fallback shared Git hooks
+        done = subprocess.run(args, cwd=repo, env=env, capture_output=True,
+                              text=True, timeout=sync_timeout)
+        if done.returncode:
+            return False, f"codegraph {action} failed (exit {done.returncode}) - index not verified"
+        after, reason = status_or_reason(repo)
+        if after is None:
+            return False, f"{reason} after {action} - index not verified"
+        violations = evaluate(after, repo)
+        if violations:
+            return False, "codegraph index not verified: " + "; ".join(violations)
+        return True, f"codegraph {action} completed: local index verified"
     except subprocess.TimeoutExpired:
-        return f"codegraph sync timed out after {sync_timeout}s - index still stale"
+        return False, f"codegraph preparation timed out after {sync_timeout}s - index not verified"
     except OSError as exc:
-        return f"codegraph sync could not start ({exc}) - index still stale"
+        return False, f"codegraph preparation failed ({exc}) - index not verified"
     finally:
         with contextlib.suppress(OSError):
             lock.rmdir()
-    if done.returncode != 0:
-        return f"codegraph sync failed (exit {done.returncode}) - index still stale"
-    after = read_status(repo, timeout=STATUS_TIMEOUT_S)
-    if after is not None and "CG-02" in markers_of(evaluate(after, repo)):
-        return "codegraph sync ran but CG-02 remains - index still stale"
-    return "codegraph synced: CG-02 cleared"
+
+
+def sync_if_stale(repo=REPO, sync_timeout=SYNC_TIMEOUT):
+    """Return the SessionStart result of preparing this checkout's own index."""
+    return ensure_index(repo, sync_timeout)[1]
+
+
+def remove_local_index(repo=REPO):
+    """Remove a verified linked checkout's index while retaining shared Git hooks."""
+    repo = Path(repo).resolve()
+    main = main_checkout(repo)
+    index = repo / ".codegraph"
+    if main is None or repo == main or index.is_symlink():
+        return False, f"CG-03 refusing index cleanup at {repo}"
+    if not index.exists():
+        return True, "codegraph local index already absent"
+    lock = acquire_sync_lock(repo)
+    if lock is None:
+        return False, "codegraph cleanup skipped: another index operation holds the lock"
+    try:
+        status, reason = status_or_reason(repo)
+        if status is None:
+            return False, f"{reason} - local index retained"
+        if "CG-03" in markers_of(evaluate(status, repo)) or not status.get("initialized"):
+            return False, "CG-03 local index ownership not verified - index retained"
+        executable = shutil.which("codegraph")
+        if not executable:
+            return False, "codegraph unavailable - local index retained"
+        bundle = Path(executable).resolve().parents[1]
+        # shortcut: installed internal layout; replace when CodeGraph has a public stop CLI.
+        stop = """
+const base=require('path').dirname(process.argv[1]), root=process.argv[2], fs=require('fs');
+const {stopDaemonAt}=require(process.argv[1]);
+const {readWriterLock,getWriterPidPath,tryAcquireWriterLock,releaseWriterLock}=require(base+'/writer-lock.js');
+const {isProcessAlive}=require(base+'/daemon.js');
+const unknown=name=>fs.existsSync(getWriterPidPath(root,name))&&!readWriterLock(root,name);
+(async()=>{
+  if(unknown('rebuild.pid')){process.exitCode=1;return;}
+  const rebuild=tryAcquireWriterLock(root,'rebuild','rebuild.pid');
+  if(rebuild.kind==='taken'){process.exitCode=2;return;}
+  try {
+    const stopped=await stopDaemonAt(root,{preserveUnverified:true});
+    if(!['no-daemon','not-running','term','kill'].includes(stopped.outcome)){process.exitCode=1;return;}
+    const active=readWriterLock(root);
+    if(active&&active.pid>0&&isProcessAlive(active.pid)){process.exitCode=2;return;}
+    if(unknown('writer.pid')){process.exitCode=1;return;}
+    const writer=tryAcquireWriterLock(root,'rebuild');
+    if(writer.kind==='taken'){process.exitCode=2;return;}
+    try { fs.rmSync(require('path').join(root,'.codegraph'),{recursive:true}); }
+    finally { releaseWriterLock(root); }
+  } finally { releaseWriterLock(root,'rebuild.pid'); }
+})().catch(e=>{console.error(e);process.exitCode=1;});
+"""
+
+        done = subprocess.run([str(bundle / "node"), "-e", stop,
+                               str(bundle / "lib/dist/mcp/daemon-registry.js"), str(repo)],
+                              cwd=repo, env=git_env(), capture_output=True, text=True,
+                              timeout=SYNC_TIMEOUT)
+        if done.returncode == 2:
+            return True, f"codegraph cleanup deferred: active MCP writer or rebuild; local index retained at {repo}"
+        if done.returncode:
+            return False, f"codegraph writer shutdown not verified at {repo} - local index retained"
+        return True, "codegraph local index removed; shared Git hooks retained"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"codegraph cleanup failed ({exc}) - local index retained"
+    finally:
+        with contextlib.suppress(OSError):
+            lock.rmdir()
 
 
 def markers_of(violations):
@@ -223,25 +292,45 @@ def markers_of(violations):
 
 
 def main():
+    repo = Path(sys.argv[sys.argv.index("--root") + 1]).resolve() if "--root" in sys.argv else REPO
+    if "--hook" in sys.argv:
+        event = json.load(sys.stdin)
+        checkout = subprocess.run(["git", "-C", str(event.get("cwd") or repo),
+                                   "rev-parse", "--show-toplevel"], env=git_env(),
+                                  capture_output=True, text=True, timeout=WORKTREE_TIMEOUT)
+        if checkout.returncode:
+            print("codegraph hook checkout unavailable")
+            return 1
+        repo = Path(checkout.stdout.strip()).resolve()
+    if "--ensure-main" in sys.argv:
+        repo = main_checkout(repo)
+        if repo is None:
+            print("codegraph primary checkout unavailable")
+            return 1
+    if "--ensure" in sys.argv or "--ensure-main" in sys.argv or "--cleanup" in sys.argv:
+        ready, message = remove_local_index(repo) if "--cleanup" in sys.argv else ensure_index(repo)
+        print(message)
+        return 0 if ready else 1
     if "--sync-if-stale" in sys.argv[1:]:
-        # SessionStart: the contract is one line and exit 0, whatever happens.
-        try:
-            print(sync_if_stale())
-        except Exception as exc:  # noqa: BLE001 - a session must never be blocked here
-            print(f"codegraph sync-if-stale error ({type(exc).__name__}) - no sync")
+        print(sync_if_stale(repo))
+        return 0
+    index = repo / ".codegraph"
+    if index.is_symlink() or (index.exists() and not index.is_dir()):
+        print(f"CG-03 index is not a checkout-local directory: {index}")
+        return 1
+    if not index.is_dir():
+        print("codegraph not enabled - no local index")
         return 0
     report_only = "--report" in sys.argv[1:]
-    status, reason = status_or_reason()
+    status, reason = status_or_reason(repo)
     if status is None:
-        # codegraph absent is not a freshness failure - it is rule 3 not applying,
+        # codegraph absent is not a freshness failure - it is rule 6 not applying,
         # the same way the global rule says to skip a repository with no index.
         # A timeout is reported by name so it is not mistaken for absence.
         print(f"{reason} - freshness not asserted")
         return 0
 
-    violations = evaluate(status)
-    if violations and not is_main_checkout():
-        violations = evaluate(status, main_checkout=False)
+    violations = evaluate(status, repo)
     if not violations:
         print(f"codegraph fresh: {status.get('fileCount')} files indexed at "
               f"{status.get('lastIndexed')}")

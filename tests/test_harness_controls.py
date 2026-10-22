@@ -99,6 +99,9 @@ def denied(stdout):
 
 
 REG = registered()
+for event, matcher in (("UserPromptSubmit", ""), ("SessionStart", "startup")):
+    command_text = REG.get((event, matcher, "codegraph_freshness.py"), ("", None))[0]
+    check(f"{event} CodeGraph registration resolves the event checkout", "--hook" in command_text)
 check("settings.json registers exactly the expected hooks",
       set(REG) == {(e, m, s) for e, m, s, _ in EXPECTED},
       f"unexpected: {sorted(set(REG) - {(e, m, s) for e, m, s, _ in EXPECTED})}; "

@@ -11,6 +11,7 @@ It is project-agnostic. A repository describes how it builds in `harness.toml`; 
 | Project config | `harness.toml`, `scripts/harness_config.py`, `scripts/harness_env.sh` | One definition of setup, lint, test, untracked inputs, watched controls and mapped tests; unknown keys are errors |
 | Gate and landing | `scripts/gate.sh`, `scripts/run.sh`, `scripts/land.sh`, `.githooks/*`, `.github/workflows/tests.yml` | No commits or merge commits on `main`; lint at commit; the same gate at land and in CI; compare-and-swap of local `main` |
 | Claude Code hooks | `.claude/settings.json`, `.claude/hooks/*.py` | Model routing on `Agent` calls, commit-landed verification, mapped test on edit, blast-radius advisory, CodeGraph freshness |
+| Codex Smartsheet policy | `.codex/config.toml`, `tests/test_codex_permissions.py` | Positive native read-tool allowlist and duplicate app disabled; credentials remain in user configuration |
 | Agent and review tooling | `.claude/agents/*`, `.claude/skills/land`, `.claude/workflows/*`, `.claude/harness/agent_harness.py`, `mutants/` | Independent re-derivation, live-API proof, per-task worktrees with a serialized commit queue, mutation testing |
 
 ### One gate, three callers
@@ -30,7 +31,7 @@ None of the three spells a command, so they cannot drift apart.
 | `blast_radius_advisory.py` | PreToolUse `Edit\|Write` | Advisory only. When the edit touches a file in `hooks.watched_files` or `hooks.watched_dirs`, it prints which tracked files also spell the literals being changed |
 | `verify_commit_landed.py` | PostToolUse `Bash` | Blocks when a `git commit` printed no `[branch sha]` or HEAD is not that sha (catches index.lock races and exit codes masked by a later command) |
 | `test_for_edited_module.py` | PostToolUse `Edit\|Write` | Runs the test `[[mapped_tests]]` maps to the edited file and exits 2 on failure or on an unreadable `harness.toml` |
-| `codegraph_freshness.py` | UserPromptSubmit / SessionStart | Reports CG-01..04 and syncs the index on CG-02, in the main checkout only |
+| `codegraph_freshness.py` | UserPromptSubmit / SessionStart / Git checkout and merge | Reports CG-01..04 against the event checkout; prepares and verifies checkout-local indexes only in repositories already opted in |
 | `readonly_guard.py` | SubagentStart / SubagentStop | When an agent matching `[roles] read_only` starts, snapshots the main checkout (HEAD, checked-out branch, local `main`, every ref, the local git config, `info/exclude`, `.git/hooks`, the worktree list, full status) and records the snapshot's hash in the decision log. At its stop, any difference blocks the stop once with the changes, then lets it stop and tells the parent. A branch checked out in another worktree may only advance, and its advance is reported; land a reviewed candidate with `land.sh --expect <reviewed sha>` so an advance is never landed unreviewed. A snapshot that no longer matches its logged hash, or a missing, broken or doubled log, blocks. A stop with no snapshot is reported as unverified |
 | `queue_guard.py` | PreToolUse `Bash` | Denies `git commit`, `commit-tree` and `update-ref` inside an `agent_harness.py` task worktree and points at `enqueue`. Early feedback only: the lander refuses any request whose worktree HEAD moved outside the queue |
 | `session_guard.py` | Stop / SessionEnd | At Stop, when HEAD or the working tree changed since the last check (or lint failed last time), runs `commands.lint`; a failure blocks the stop once with the output tail, then lets the session stop with a warning. Uncommitted paths and commits not on local `main` get a one-line notice when that state changes, and never block. At SessionEnd, records branch, HEAD, dirty and unlanded counts in the decision log |
@@ -104,7 +105,9 @@ Requirements: git, bash, Python 3.11+ and uv for the harness's own scripts, `rsy
 1. Decide visibility and a licence. Branch protection on a private repository needs a paid GitHub plan, and `github_bootstrap.sh --apply` exits non-zero when it is refused.
 2. Create the repository, push `main`, set it in `docs/agents/issue-tracker.md`, run `./scripts/github_bootstrap.sh --apply`. The first CI run is the first test of `run.sh`'s `flock` path on Linux.
 3. Fill in the Project context in `CLAUDE.md` and add domain invariants to `AGENTS.md`.
-4. Run `codegraph init`, or remove the freshness hooks. Until then every prompt reports CG-01.
+4. Decide whether the repository needs CodeGraph.
+   Until the owner opts in with `codegraph init`, lifecycle hooks leave it unindexed and reports skip index lookup.
+   Once opted in, each checkout owns an index; the lander prepares its merged checkout before the gate and removes only verified linked indexes after integration.
 
 ### For autonomous operation
 

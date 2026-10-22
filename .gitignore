@@ -15,3 +15,7 @@ output/
 .ruff_cache/
 .pytest_cache/
 tmp/
+
+# Track project policy while keeping local Codex state private.
+.codex/*
+!.codex/config.toml

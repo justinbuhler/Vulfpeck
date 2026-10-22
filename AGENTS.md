@@ -7,7 +7,10 @@ Root policy holds cross-agent invariants; folder files own domain rules.
 
 1. Sample 3 to 5 representative cases and inspect output by hand before a full pass. A sample finds defects; it does not support a population claim.
 2. Import repository paths from `scripts/paths.py`; never anchor them to `Path(__file__).parent`.
-3. When `.codegraph/` exists, use `codegraph explore` before text search. In the main checkout `codegraph sync` is automated: `.githooks/post-merge` runs it in the background when main moves, and the SessionStart hook runs it once when `scripts/codegraph_freshness.py` reports CG-02. In a linked worktree the index describes main, not your branch: use it read-only to locate code, read the files your branch changed directly, and never run `codegraph sync` there.
+3. When `.codegraph/` exists, use `codegraph explore` before text search.
+   Each checkout owns its own index, and its recorded project path must match that checkout.
+   In repositories already indexed, post-checkout and SessionStart prepare linked checkout indexes; post-merge refreshes the primary checkout, and the lander prepares its merged tree before verification.
+   Unindexed repositories stay unindexed; never index one without the owner's decision.
 4. `uv` owns Python. Never use `pip install`. Prefer the standard library; a runtime dependency needs a stated reason in `pyproject.toml`.
 5. Policy states mechanisms, not snapshots. Derive current quantities with a command (for example `./scripts/run.sh --tests`) rather than writing them here.
 6. A reported count, rate or coverage figure is derived twice by independent means before it enters a commit message, PR body or report (`.claude/agents/dual-derive.md`).

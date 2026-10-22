@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rule 3, write half: re-sync the CodeGraph index when main moves in the main checkout.
+# Rule 6, write half: re-sync the CodeGraph index when main moves in the main checkout.
 #
 # git runs this after `git pull`, `git pull --rebase` that only fast-forwards, and
 # `git merge --ff-only` (measured: all three fire post-merge). scripts/land.sh's
@@ -9,20 +9,10 @@
 # which never touches the checkout; the SessionStart hook
 # (scripts/codegraph_freshness.py --sync-if-stale) covers what slips by.
 #
-# Four properties, each pinned by tests/test_codegraph_sync.py:
-#   1. Main checkout only. core.hooksPath=.githooks is shared by every linked worktree,
-#      but the index describes the main checkout (CG-03 flags any other tree), so a
-#      worktree skips silently. Linked worktrees read the index; they never sync it.
-#   2. Never fails the git operation. No `set -e`; every path ends in `exit 0`.
-#   3. One sync at a time. A non-blocking lock directory, .omc/codegraph-sync.lock, is
-#      shared with the SessionStart hook; if it is held the sync is skipped, not queued.
-#   4. Never blocks it. The sync runs detached in the background, output to a gitignored
-#      log, because a sync can take longer than anyone wants a pull to wait.
-#
-# Not post-checkout or post-rewrite, deliberately. post-rewrite fires only
-# when local commits are rewritten, which main forbids; post-checkout fires on every
-# worktree add (land.sh makes one per gate) and on branch switches the main checkout does
-# not make.
+# This hook prepares the primary checkout in the background. Linked checkouts
+# own separate indexes, prepared by post-checkout and before the lander's gate.
+# Failures are logged; they never change the result of a successful Git merge.
+# A strict caller uses codegraph_freshness.py --ensure and waits for this lock.
 
 # git exports these into hooks and they override cwd for every git command below.
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY \

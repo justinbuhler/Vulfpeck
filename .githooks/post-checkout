@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Worktree creation and branch switches need their own current CodeGraph index.
+[ "${3:-0}" = 1 ] || exit 0
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE \
+      GIT_CEILING_DIRECTORIES
+top=$(git rev-parse --show-toplevel) || exit 1
+[ -f "$top/scripts/codegraph_freshness.py" ] || exit 0
+uv run --no-sync python3 "$top/scripts/codegraph_freshness.py" --ensure --root "$top"

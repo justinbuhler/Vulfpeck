@@ -74,7 +74,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "out=$(cd \"${CLAUDE_PROJECT_DIR}\" && uv run python3 scripts/codegraph_freshness.py) || printf \"%s\\n\" \"$out\"",
+            "command": "out=$(cd \"${CLAUDE_PROJECT_DIR}\" && uv run python3 scripts/codegraph_freshness.py --hook) || printf \"%s\\n\" \"$out\"",
             "timeout": 30
           }
         ]
@@ -86,7 +86,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"${CLAUDE_PROJECT_DIR}\" && uv run python3 scripts/codegraph_freshness.py --sync-if-stale || true",
+            "command": "cd \"${CLAUDE_PROJECT_DIR}\" && uv run python3 scripts/codegraph_freshness.py --sync-if-stale --hook || true",
             "timeout": 120
           },
           {

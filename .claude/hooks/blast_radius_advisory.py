@@ -122,11 +122,16 @@ def blast_radius(names, root):
     Returns:
         (list): the summary lines CodeGraph produced, empty when unavailable.
     """
-    if not names:
+    if not names or not (root / ".codegraph").is_dir() or (root / ".codegraph").is_symlink():
+        return []
+    sys.path.insert(0, str(root / "scripts"))
+    from codegraph_freshness import evaluate, git_env, read_status
+    status = read_status(root)
+    if status is None or evaluate(status, root):
         return []
     try:
-        out = subprocess.run(["codegraph", "explore", " ".join(names)],
-                             cwd=root, capture_output=True, text=True,
+        out = subprocess.run(["codegraph", "explore", "--path", str(root), " ".join(names)],
+                             cwd=root, env=git_env(), capture_output=True, text=True,
                              timeout=CODEGRAPH_TIMEOUT).stdout
     except (subprocess.TimeoutExpired, OSError, FileNotFoundError):
         return []

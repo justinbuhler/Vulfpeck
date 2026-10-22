@@ -46,9 +46,14 @@ Its model-shaped case is delegation: bounded implementation goes to Sonnet, mech
 Authoring and approval occur in fresh contexts, with review depth set by consequence in root `AGENTS.md`.
 
 Every gate hook fails closed (a crash blocks) and every advisory fails open; `tests/test_harness_controls.py` pins the registrations and proves both. Gate decisions (allow and deny) are recorded, hash-chained, in `.git/harness/events.jsonl` by `scripts/harness_events.py`; `python3 scripts/harness_events.py verify` checks the chain. `scripts/harness_doctor.py` reports missing prerequisites and interfering user-level hooks at SessionStart.
-Claude hooks also report CodeGraph freshness, run the test mapped to an edited module, verify that a `git commit` really landed, and print the blast radius of an edit to a shared control.
+Claude hooks also report checkout-local CodeGraph freshness, run the test mapped to an edited module, verify that a `git commit` really landed, and print the blast radius of an edit to a shared control.
+CodeGraph preparation applies only when the current or primary checkout already has an index; Vulfpeck remains unindexed by default.
 Treat hook success as permission to continue, not proof that the candidate is correct.
 Never edit marker-delimited or generated content by hand; change its owner and regenerate.
+
+The project `.codex/config.toml` permits only the audited native Smartsheet read tools and disables the duplicate Smartsheet app route.
+It carries the public endpoint and policy only; credentials and helpers remain in user configuration.
+This is a Codex tool policy, not a registration of the Claude hooks in Codex.
 
 ## Agent skills
 

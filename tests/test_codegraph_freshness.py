@@ -110,7 +110,12 @@ check(f"all {len(cg.MARKERS)} declared markers fire in these fixtures",
 print("\na slow codegraph is reported, not silently killed by the hook")
 # The UserPromptSubmit hook gives this script 30s and throws its output away on
 # overrun. These expectations are written out here, not read from the script.
-import contextlib, io, json as _json, subprocess as _sp
+import contextlib, io, json as _json, subprocess as _sp, tempfile
+_fixture = tempfile.TemporaryDirectory(prefix="cg-report-")
+_indexed = Path(_fixture.name) / "indexed"
+(_indexed / ".codegraph").mkdir(parents=True)
+_argv = sys.argv
+sys.argv = ["codegraph_freshness.py", "--root", str(_indexed)]
 _hook = [h for e in _json.loads((ROOT / ".claude" / "settings.json").read_text())
          ["hooks"]["UserPromptSubmit"] for h in e["hooks"]
          if "codegraph_freshness.py" in h["command"]]
@@ -148,6 +153,24 @@ check("an absent codegraph keeps its old message",
 check("read_status still returns None on timeout",
       (lambda: (setattr(cg.subprocess, "run", _slow), cg.read_status(ROOT))[1])() is None)
 cg.subprocess.run = _real_run
+sys.argv = _argv
+
+print("\nan unindexed checkout never borrows a parent index")
+_unindexed = Path(_fixture.name) / "unindexed"
+_unindexed.mkdir()
+_status = cg.status_or_reason
+_lookups = []
+try:
+    cg.status_or_reason = lambda root: (_lookups.append(root), "unexpected parent lookup")
+    sys.argv = ["codegraph_freshness.py", "--root", str(_unindexed)]
+    with contextlib.redirect_stdout(io.StringIO()):
+        _rc = cg.main()
+finally:
+    cg.status_or_reason = _status
+    sys.argv = _argv
+check("an unindexed report exits cleanly without asking CodeGraph for another index",
+      _rc == 0 and _lookups == [], str(_lookups))
+_fixture.cleanup()
 
 print("\nthe live index is actually fresh")
 # This is the check that makes rule 3 real, and the first draft of it was a
@@ -155,7 +178,7 @@ print("\nthe live index is actually fresh")
 # same status document, so a stale index passed 23/23 while the gate script
 # exited 1. A control that compares a producer with itself agrees with itself -
 # the same failure 66a48ec spent twelve mutations on. It now asserts freshness.
-_live = cg.read_status(ROOT)
+_live = cg.read_status(ROOT) if (ROOT / ".codegraph").is_dir() else None
 # `initialized: false` alone cannot separate two different states: a worktree
 # that was never indexed, where rule 3 does not apply, and a `.codegraph/` that
 # exists but is half-written, in a repository that is supposed to have a good
