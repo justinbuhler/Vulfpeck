@@ -24,7 +24,7 @@ from harness_receipts import complete_review_launch, identity, register_review_l
 
 FEATURES_OFF = ("apps", "plugins", "hooks", "memories", "multi_agent", "browser_use",
                 "browser_use_external", "browser_use_full_cdp_access", "computer_use",
-                "in_app_browser", "in_app_local_automation", "image_generation")
+                "in_app_browser", "in_app_local_automation", "image_generation", "shell_snapshot", "shell_snapshot_v2")
 READ_TOOLS = {"Read", "Glob", "Grep", "EndConversation"}
 DISCOVERY_VERSION = "codex-cli 0.163.0"
 DISCOVERY_TOOLS = ("list_mcp_resources", "list_mcp_resource_templates")
@@ -216,8 +216,10 @@ class Process:
 def codex_command(executable, clone, servers=None):
     """Disable implicit and configured external surfaces for this invocation only."""
     values = [f"features.{name}=false" for name in FEATURES_OFF]
-    values += ["web_search=\"disabled\"", "shell_environment_policy.inherit=\"none\"",
-               "shell_environment_policy.set.PATH=" + json.dumps(shell_path()),
+    values += ["web_search=\"disabled\"",
+               "allow_login_shell=false",
+               "shell_environment_policy=" + inline({"inherit": "none", "set": {"PATH": shell_path()},
+                                                       "include_only": ["PATH"]}),
                "projects=" + inline({str(clone): {"trust_level": "trusted"}}),
                "plugins=" + inline({"_default": {"enabled": False}}),
                "apps=" + inline({"_default": {"enabled": False}})]
@@ -241,8 +243,13 @@ def safe_config(result):
     shell_set = policy.get("set") or {}
     return {"features": {name: config.get("features", {}).get(name) for name in FEATURES_OFF},
             "web_search": config.get("web_search"),
+            "allow_login_shell": config.get("allow_login_shell"),
             "shell_environment_policy": {"inherit": policy.get("inherit"), "set_keys": sorted(shell_set),
-                                         "set": {"PATH": shell_set.get("PATH")}},
+                "include_only": policy.get("include_only"),
+                "effective_set_keys": sorted(name for name in shell_set if name.casefold() == "path")
+                                      if policy.get("include_only") == ["PATH"] else None,
+                "set": {"PATH": shell_set.get("PATH")},
+                "filter_source": DISCOVERY_SOURCE + "protocol/src/shell_environment.rs#L153"},
             "mcp_servers": {name: {"enabled": item.get("enabled", True)} for name, item in config.get("mcp_servers", {}).items()},
             "layers": [{"name": item.get("name"), "disabledReason": item.get("disabledReason")}
                        for item in result.get("layers", [])]}
@@ -250,6 +257,8 @@ def safe_config(result):
 
 def codex_prepare(executable, clone, directory, timeout, *, version=None):
     """Measure final thread capabilities before registering or sending a review turn."""
+    if version != DISCOVERY_VERSION:
+        raise ValueError("CODEX_ISOLATION_UNVERIFIED: shell filter semantics require " + DISCOVERY_VERSION)
     discovery = directory / "discovery"
     discovery.mkdir()
     probe = Process(codex_command(executable, clone), clone, discovery, timeout)
@@ -269,8 +278,10 @@ def codex_prepare(executable, clone, directory, timeout, *, version=None):
         process.retain({"effective_config": config, "redacted": True})
         if (any(value is not False for value in config["features"].values())
                 or config["web_search"] != "disabled"
+                or config["allow_login_shell"] is not False
                 or config["shell_environment_policy"]["inherit"] != "none"
-                or config["shell_environment_policy"]["set_keys"] != ["PATH"]
+                or config["shell_environment_policy"]["include_only"] != ["PATH"]
+                or config["shell_environment_policy"]["effective_set_keys"] != ["PATH"]
                 or config["shell_environment_policy"]["set"] != {"PATH": shell_path()}
                 or any(item["enabled"] is not False for item in config["mcp_servers"].values())):
             raise ValueError("CODEX_ISOLATION_UNVERIFIED: effective external capability or hooks remain enabled")

@@ -21,13 +21,28 @@ from harness_lock import git_environment
 from harness_receipts import validate
 
 FIXTURE = r'''
-import hashlib, json, os, sys, time
+import fnmatch, hashlib, json, os, subprocess, sys, time, tomllib
 from pathlib import Path
 ROOT, CASE, FEATURES = SETTINGS
 SUPPLIED = []
 if "--version" in sys.argv:
     print("codex-cli 0.163.1" if CASE == "future-version" else "codex-cli 0.163.0")
     raise SystemExit(0)
+def merge(base, overlay):
+    result = dict(base)
+    for key,value in overlay.items():
+        result[key] = merge(result[key],value) if isinstance(result.get(key),dict) and isinstance(value,dict) else value
+    return result
+cli = {}
+for index,arg in enumerate(sys.argv):
+    if arg == "-c":
+        path,raw = sys.argv[index+1].split("=",1)
+        current = cli
+        parts = path.split(".")
+        for part in parts[:-1]: current = current.setdefault(part,{})
+        current[parts[-1]] = tomllib.loads("value="+raw)["value"]
+shell_policy = merge({"inherit":"all","set":{"INHERITED_API_TOKEN":"DO_NOT_RETAIN"},"include_only":["*"]},
+                     cli.get("shell_environment_policy",{}))
 def emit(value):
     print(json.dumps(value), flush=True)
 def reply(request, result):
@@ -89,12 +104,19 @@ for line in sys.stdin:
         flags = {name:False for name in FEATURES}
         if CASE == "apps-feature":
             flags["apps"] = True
-        path_value = json.loads(next(arg.split("=",1)[1] for arg in sys.argv if arg.startswith("shell_environment_policy.set.PATH=")))
+        if CASE == "snapshot-v1": flags["shell_snapshot"] = True
+        if CASE == "snapshot-v2": flags["shell_snapshot_v2"] = True
+        path_value = shell_policy["set"]["PATH"]
         assert path_value == os.pathsep.join(p for p in ("/opt/homebrew/bin","/usr/local/bin","/usr/bin","/bin","/usr/sbin","/sbin") if Path(p).is_dir())
-        shell_set = {"PATH":"/wrong-path" if CASE == "shell-path" else path_value}
-        if CASE == "shell-secret": shell_set["API_TOKEN"] = "DO_NOT_RETAIN"
+        policy = merge({},shell_policy)
+        policy["set"] = dict(policy["set"])
+        if CASE == "shell-path": policy["set"]["PATH"] = "/wrong-path"
+        if CASE == "shell-secret": policy["include_only"] = ["PATH","INHERITED_API_TOKEN"]
+        if CASE == "shell-filter": policy["include_only"] = ["*"]
+        if CASE == "shell-alias": policy["set"]["Path"] = "DO_NOT_RETAIN"
         reply(request, {"config":{"features":flags, "web_search":"disabled",
-              "shell_environment_policy":{"inherit":"none", "set":shell_set},
+              "allow_login_shell":True if CASE == "login-shell" else cli.get("allow_login_shell",True),
+              "shell_environment_policy":policy,
               "mcp_servers":{"fixture.with.dots":{"enabled":not disabled, "env":{"DO_NOT_RETAIN":"secret"}}}},
               "layers":[]})
     elif method == "thread/start":
@@ -124,6 +146,17 @@ for line in sys.stdin:
                                  "auth":{"DO_NOT_RETAIN":"secret"}}]})
     elif method == "turn/start":
         registered()
+        assert cli["allow_login_shell"] is False
+        assert cli["features"]["shell_snapshot"] is False and cli["features"]["shell_snapshot_v2"] is False
+        assert shell_policy["inherit"] == "none"
+        effective = {key:value for key,value in shell_policy["set"].items()
+                     if any(fnmatch.fnmatchcase(key.lower(),pattern.lower()) for pattern in shell_policy["include_only"])}
+        assert set(effective) == {"PATH"} and "INHERITED_API_TOKEN" not in effective
+        child = subprocess.check_output([sys.executable,"-c","import json,os; print(json.dumps({'keys':list(os.environ),'PATH':os.environ.get('PATH')}))"],
+                                        env=effective,text=True)
+        child = json.loads(child)
+        assert "INHERITED_API_TOKEN" not in child["keys"] and child["PATH"] == effective["PATH"]
+        subprocess.run(["git","--version"],env=effective,check=True,capture_output=True)
         prompt = request["params"]["input"][0]["text"]
         SUPPLIED = json.loads(prompt.split("Supplied candidate-bound evidence:\n",1)[1].split("\nDiff:\n",1)[0])
         for proof in SUPPLIED:
@@ -271,10 +304,16 @@ def main():
                           and inventory["intrinsic_discovery"]["runtime_version"] == "codex-cli 0.163.0"
                           and inventory["intrinsic_discovery"]["active_connections"] == 0
                           and inventory["intrinsic_discovery"]["sources"])
+                if runtime == "codex" and case == "approve":
+                    policy = json.loads((artifacts/"effective_config.json").read_text())["shell_environment_policy"]
+                    check("inherited credential entry is excluded after merged set before child execution",
+                          "INHERITED_API_TOKEN" in policy["set_keys"] and policy["effective_set_keys"] == ["PATH"]
+                          and policy["include_only"] == ["PATH"])
             elif case in ("implicit", "callable", "history", "writable", "apps-feature", "no-inventory", "claude-write-tool",
                           "no-environment", "remote-environment", "wrong-workspace", "connection-starting",
                           "connection-ready", "connection-active", "connection-unknown", "resources", "templates",
-                          "shell-path", "shell-secret", "input-wrong-candidate", "input-wrong-tree", "input-unknown-kind"):
+                          "shell-path", "shell-secret", "shell-filter", "shell-alias", "snapshot-v1", "snapshot-v2", "login-shell",
+                          "input-wrong-candidate", "input-wrong-tree", "input-unknown-kind"):
                 check(f"{runtime} {case} refuses before registration", not list((root / ".git/harness/reviews").glob("*/launch.json")))
             if not succeeds:
                 check(f"{runtime} {case} leaves no accepted receipt", not any(
@@ -307,7 +346,8 @@ def main():
                      "malformed", "incomplete", "request-changes", "high", "nonzero", "timeout", "forced",
                      "connection-starting", "connection-ready", "connection-active", "connection-unknown", "resources", "templates",
                      "intrinsic-target", "intrinsic-cursor", "intrinsic-configured", "intrinsic-fetch", "intrinsic-unknown", "future-version",
-                     "shell-path", "shell-secret", "input-wrong-candidate", "input-wrong-tree", "input-unknown-kind",
+                     "shell-path", "shell-secret", "shell-filter", "shell-alias", "snapshot-v1", "snapshot-v2", "login-shell",
+                     "input-wrong-candidate", "input-wrong-tree", "input-unknown-kind",
                      "supplied-tamper-original", "supplied-tamper-snapshot"):
             run(case, timeout=1 if case == "timeout" else 3)
         reason = run("no-inventory", runtime="claude")
