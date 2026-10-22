@@ -52,7 +52,7 @@ def fixture(toml=None, scripts=("harness_config.py", "harness_env.sh", "gate.sh"
     for k, v in (("user.email", "t@t"), ("user.name", "t"), ("commit.gpgsign", "false")):
         sh(["git", "config", k, v], d)
     (d / "scripts").mkdir()
-    for name in (*scripts, "harness_lock.py"):
+    for name in (*scripts, "harness_lock.py", "paths.py"):
         shutil.copy2(SCRIPTS / name, d / "scripts" / name)
     if toml is not None:
         (d / "harness.toml").write_text(toml)

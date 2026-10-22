@@ -335,10 +335,15 @@ d9 = repo()
 wt9a, wt9b = agent(d9, "india"), agent(d9, "juliett")
 c9a, c9b = git(wt9a, "rev-parse", "HEAD"), git(wt9b, "rev-parse", "HEAD")
 out = {}
+race_errors = {}
 
 
 def race(key, wt):
-    out[key] = land(wt, gate="sleep 2")
+    try:
+        out[key] = land(wt, gate="sleep 2")
+    except Exception:
+        import traceback
+        race_errors[key] = traceback.format_exc()
 
 
 ts = [threading.Thread(target=race, args=(k, w)) for k, w in (("a", wt9a), ("b", wt9b))]
@@ -346,6 +351,9 @@ for t in ts:
     t.start()
 for t in ts:
     t.join()
+
+if race_errors:
+    raise AssertionError("concurrent lander helper failed:\n" + "\n".join(f"{key}: {error}" for key, error in race_errors.items()))
 
 check("both concurrent landers exit 0", out["a"].returncode == 0 and out["b"].returncode == 0,
       f"a={out['a'].returncode} {out['a'].stderr} / b={out['b'].returncode} {out['b'].stderr}")
@@ -873,7 +881,7 @@ import shutil  # noqa: E402
 d = repo()
 SRC = LAND.parents[1]
 (d / "scripts").mkdir()
-for name in ("adr.py", "harness_config.py"):
+for name in ("adr.py", "harness_config.py", "paths.py"):
     shutil.copy2(SRC / "scripts" / name, d / "scripts" / name)
 (d / "harness.toml").write_text('[adr]\nrequire_for = []\n')
 (d / "docs" / "adr").mkdir(parents=True)

@@ -4,12 +4,12 @@
 # behaviour: a green test run that reports no checks fails
 --- a/scripts/run.sh
 +++ b/scripts/run.sh
-@@ -45,7 +45,7 @@
+@@ -41,7 +41,7 @@
  bash -c "$HARNESS_TEST" 2>&1 | tee "$log"
  fail=${PIPESTATUS[0]}
  if [ "$fail" = 0 ] && [ -n "$HARNESS_COUNT_PATTERN" ]; then
--  "${HARNESS_PY[@]}" scripts/harness_config.py --root "$PWD" --count "$log" >/dev/null || fail=1
-+  "${HARNESS_PY[@]}" scripts/harness_config.py --root "$PWD" --count "$log" >/dev/null || true
+-  "${HARNESS_PY[@]}" "$CONTROL/harness_config.py" --root "$PWD" --count "$log" >/dev/null || fail=1
++  "${HARNESS_PY[@]}" "$CONTROL/harness_config.py" --root "$PWD" --count "$log" >/dev/null || true
  fi
  [ "$TESTS_ONLY" = 1 ] && exit "$fail"
  [ "$fail" = 0 ] || { echo "tests failed — stopping"; exit 1; }

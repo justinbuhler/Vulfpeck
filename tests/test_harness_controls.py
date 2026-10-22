@@ -169,6 +169,7 @@ with tempfile.TemporaryDirectory() as raw:
     project = Path(raw)
     (project / "scripts").mkdir()
     shutil.copy2(ROOT / "scripts" / "harness_config.py", project / "scripts")
+    shutil.copy2(ROOT / "scripts" / "paths.py", project / "scripts")
     (project / "harness.toml").write_text(
         '[[mapped_tests]]\nmatch = "*.txt"\ntests = ["{dir}/check_{stem}.sh"]\ncommand = "bash {test}"\n')
     (project / "a.txt").write_text("x\n")
@@ -204,7 +205,7 @@ with tempfile.TemporaryDirectory() as raw:
     (project / ".claude" / "hooks").mkdir(parents=True)
     shutil.copy2(ROOT / ".claude" / "hooks" / "adr_gate.py", project / ".claude" / "hooks")
     (project / "scripts").mkdir()
-    for name in ("adr.py", "harness_config.py", "harness_events.py"):
+    for name in ("adr.py", "harness_config.py", "harness_events.py", "paths.py"):
         shutil.copy2(ROOT / "scripts" / name, project / "scripts")
     pre, _ = command("PreToolUse", "Edit|Write", "adr_gate.py")
     post, _ = command("PostToolUse", "Edit|Write", "adr_gate.py")

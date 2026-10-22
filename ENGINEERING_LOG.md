@@ -3,6 +3,36 @@
 Dated failures, measurements, limitations, and implementation history (AGENTS.md ownership pointers).
 Newest first. Each entry: date, what happened, how it was measured, what changed.
 
+## 2026-10-22 - receipt fixture race and owned installation
+
+The full configured gate on immutable e641bd4 failed in the concurrent land fixture with a missing worker result.
+A focused land rerun passed under the actual outer verification mutex, so that result alone did not identify a lock defect.
+Independent concurrent calls to the real approval fixture reproduced `isolation evidence digest does not match`: reviewers truncated the same fixture evidence files while peers hashed them.
+The retained reproduction is `tmp/json/core-receipt-fixture-race.json`.
+Each fixture launch now writes a unique evidence directory, concurrent checks validate every receipt, and land worker exceptions retain their full traceback.
+Production evidence hash validation remains strict.
+
+The owned installer separates payload CODE from governed REPO, journals local changes and restores only owned entries, policy spans and files.
+The disposable adoption, upgrade and restore record is `tmp/json/installer-adoption-proof.json`.
+It exercises actual installed Claude/native registrations and the configured gate, retains stronger user policy and foreign additions, and refuses edited ownership or ambiguous linked policy.
+This local proof does not approve native hook trust or authorize a real target installation.
+
+The earlier invocation-only native trust probe used quoted dotted keys on the override's left side.
+Inspection and a live metadata probe confirmed that Codex splits those keys literally on dots; aggregate TOML values on the right side activate the intended project and hook keys.
+The corrected public no-tools sentinel also required `features.apps=false` to remove implicit `codex_apps`, separately from the default app policy.
+The literal proof is `tmp/json/native-readonly-sentinel-proof.json`; global configuration was unchanged.
+
+The later exact native reviewer launch failed closed after preflight and a registered turn, without an authorizing receipt.
+The diagnostic attempt identified `mcpToolCall` for server `codex`, tool `list_mcp_resources`; that native discovery classification remained under tagged-source review at this installer checkpoint.
+The retained failures are `tmp/json/native-review-live-codex-proof.json` and `tmp/txt/g/native-review-live/tmp/json/review-cbdc9a299aa44180/native-events.jsonl`.
+These failures do not supersede the earlier no-tools sentinel or prove completion of the actual reviewer launcher.
+No global configuration was changed by either failed launch.
+Tagged native source identifies the resource-list event as built-in discovery that can aggregate active MCP connections.
+The launcher's pending correction permits only empty built-in listings after measured native status proves every external server disabled and every external catalogue empty; external fetches and unknown tools remain refused.
+A separate reproduced launch bug supplied `thread/start environments=[]`, which disables environment access.
+The pending correction omits that override and verifies the returned sole local environment and its exact clone roots.
+The parent still owns the corrected live retry; this checkpoint records no successful actual reviewer turn.
+
 ## 2026-10-22 - native Codex trust and linked-worktree activation
 
 The native policy probe using the real `~/.codex` did not load the untrusted project layer.

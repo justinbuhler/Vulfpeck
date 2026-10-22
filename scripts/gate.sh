@@ -10,7 +10,8 @@
 # Each step's exit status is the gate's; a failing step stops the ones after it.
 set -uo pipefail
 
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+CONTROL=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(python3 "$CONTROL/paths.py") || exit 1
 # The configured gate and direct suite share the same inherited OS mutex.
 LOCK_TOOL="$(cd "$(dirname "$0")" && pwd)/harness_lock.py"
 if ! python3 "$LOCK_TOOL" --root "$ROOT" --name verification --check-held; then
@@ -27,4 +28,7 @@ fi
 
 if [ -n "$HARNESS_SETUP" ]; then bash -c "$HARNESS_SETUP" || exit; fi
 if [ -n "$HARNESS_LINT" ]; then bash -c "$HARNESS_LINT" || exit; fi
+if [ "$(basename "$(dirname "$CONTROL")")" = .vulfpeck ]; then
+  HARNESS_SETUP_DONE=1 exec "$CONTROL/run.sh" --tests
+fi
 HARNESS_SETUP_DONE=1 exec ./scripts/run.sh --tests

@@ -86,29 +86,34 @@ The offline cleanup-protocol test also needs Node, supplied by CI; it uses the b
 CodeGraph remains optional.
 macOS or Linux.
 
-1. Copy `AGENTS.md`, `CLAUDE.md`, `HARNESS.md`, `harness.toml`, `.claude/`, `.githooks/`, `.github/`, `scripts/`, `tests/` and `mutants/` into the repository.
-2. Edit `harness.toml`. For example, a Node project:
+Plan a committed release against an explicitly named primary checkout and supply the domain build commands:
 
-   ```toml
-   [commands]
-   setup = "npm ci"
-   lint = "npx eslint ."
-   test = "npx vitest run"
+```sh
+uv run --no-sync python3 scripts/harness_install.py plan --source "$RELEASE_REPO" --revision "$RELEASE_SHA" --target "$TARGET" --setup "npm ci" --lint "npm run lint" --test "npm test" --output tmp/json/install-plan.json
+uv run --no-sync python3 scripts/harness_install.py apply --plan tmp/json/install-plan.json
+uv run --no-sync python3 scripts/harness_install.py verify --target "$TARGET"
+```
 
-   [tests]
-   count_pattern = 'Tests\s+(\d+) passed'
+Review the plan's literal destinations, file hashes, registration entries, policy spans, collisions and local Git hook-path delta before applying.
+The payload stays in `.vulfpeck`; domain instructions, scripts, CI and tests remain user owned.
+Native profiles use individually owned `.codex/agents` files.
+Existing deny/ask rules, credentials, plugins, custom hooks and narrower Smartsheet limits survive.
+An existing domain `harness.toml`, unowned destination or ambiguous native policy requires explicit reconciliation before adoption.
+Linked installation targets are refused; installed primary-discovered hooks retain the event's checkout as their governed root.
+Native project trust and exact hook approval remain separate from installation.
 
-   [[mapped_tests]]
-   match = "*.ts"
-   self = "*.test.ts"
-   tests = ["{dir}/{stem}.test.ts"]
-   command = "npx vitest run {test}"
-   ```
+For an upgrade, plan and apply the next committed release against the unchanged owned generation.
+Restore one generation with a fresh reviewed plan:
 
-   The harness's own tests in `tests/` keep running through `./scripts/standalone_tests.sh`; to run both, set `test = "./scripts/standalone_tests.sh && npx vitest run"` and a `count_pattern` that matches the last line.
-3. Add the project's toolchain step to `.github/workflows/tests.yml` before the gate.
-4. `git config core.hooksPath .githooks`, then `python3 scripts/adr.py init` (the suite fails until the ADR directory exists and every governed file has an ADR), then `./scripts/run.sh --tests`.
-5. Make the first commit on a branch and point `main` at it (`git branch main HEAD` on an unborn `main`), since the pre-commit hook refuses commits on `main`.
+```sh
+uv run --no-sync python3 scripts/harness_install.py restore --target "$TARGET" --output tmp/json/restore-plan.json
+uv run --no-sync python3 scripts/harness_install.py restore --target "$TARGET" --apply --plan tmp/json/restore-plan.json
+```
+
+Restoring an upgrade recovers its prior owned release; restoring the first adoption removes its owned files and entries and restores the prior Git hook path.
+Foreign additions survive, while edited owned entries refuse restoration.
+Interrupted installations report their generation; use `restore --generation <id>` to plan and apply recovery.
+The common Git directory retains public payload journals and nonsecret touched spans, without whole configuration backups.
 
 ## Strengths
 
@@ -123,7 +128,7 @@ macOS or Linux.
 - **Model routing is split across two places.** Tiers live in `model_router.py` and in `tests/test_model_router_hook.py`, by design under Rule 11, so a new agent type has to be added to both by hand.
 - **The mutation runner assumes the standalone-test layout.** It runs `tests/test_*.py` scripts in parallel and reads their `FAIL <name>` lines; it does not yet use `commands.test`.
 - **Mutation tooling is the older generation.** `docs/mutation-testing.md` is the target: Jev-assisted sizing (`plan.py`), ID ranges (`registry.py`), probes and specs, and a runner that works in an isolated clone with a double baseline. The runner now uses a standalone clone, mandatory green baselines, candidate/corpus hashes, and failing status for survivors, timeouts, patch errors, or unmapped kills. Sizing and allocation remain separate work.
-- **Hook timeouts fail open.** Claude Code proceeds when a hook times out, and the fail-closed wrapper cannot catch that. Newer Claude Code documents an `onFailure: "block"` hook setting; it is not used because the installed version could not be confirmed to accept it.
+- **Runtime failure direction differs.** Claude gate registrations set `onFailure: "block"`, supported from 2.1.295 and present in the inspected 2.1.305 client. Codex 0.163.0 outer timeouts and untrusted definitions remain non-blocking; inner adapter denials cannot repair that runtime behavior. Installation alone does not prove exact hook trust or live activation.
 - **Scratch inputs are explicit.** Task provisioning, land, and mutation clones copy only `land.copy_untracked` inputs through `harness_inputs.py`, retaining file hashes and excluding credentials, scratch trees, links, and candidate-tracked files. Writer provisioning requires literal `--file` leases; `release --task <task> --expect <sha>` verifies a clean expected tip before releasing ownership.
 
 ## Open gaps

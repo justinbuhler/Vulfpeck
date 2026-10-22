@@ -11,14 +11,16 @@
 # failure mode a gate must never have.
 
 set -uo pipefail
-cd "$(dirname "$0")/.." || exit 1     # repository root
+CONTROL=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(python3 "$CONTROL/paths.py") || exit 1
+cd "$ROOT" || exit 1
 # The configured gate and direct suite share the same inherited OS mutex.
 LOCK_TOOL="$(cd "$(dirname "$0")" && pwd)/harness_lock.py"
 if ! python3 "$LOCK_TOOL" --root "$PWD" --name verification --check-held; then
   exec python3 "$LOCK_TOOL" --root "$PWD" --name verification -- bash "$0" "$@"
 fi
 
-. scripts/harness_env.sh
+. "$CONTROL/harness_env.sh"
 harness_load "$PWD" || exit 1
 
 TESTS_ONLY=0
@@ -39,7 +41,7 @@ trap 'rm -f "$log"' EXIT
 bash -c "$HARNESS_TEST" 2>&1 | tee "$log"
 fail=${PIPESTATUS[0]}
 if [ "$fail" = 0 ] && [ -n "$HARNESS_COUNT_PATTERN" ]; then
-  "${HARNESS_PY[@]}" scripts/harness_config.py --root "$PWD" --count "$log" >/dev/null || fail=1
+  "${HARNESS_PY[@]}" "$CONTROL/harness_config.py" --root "$PWD" --count "$log" >/dev/null || fail=1
 fi
 [ "$TESTS_ONLY" = 1 ] && exit "$fail"
 [ "$fail" = 0 ] || { echo "tests failed — stopping"; exit 1; }

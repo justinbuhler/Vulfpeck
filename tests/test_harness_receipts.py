@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -19,8 +20,9 @@ def approval(root, candidate, base=None, result=None):
     result = result or dict(verdict="APPROVE", complete=True, findings=[],
                             consequence=dict(tier="low", rationale="fixture deterministic change"), evidence=[])
     command = [sys.executable, "-c", "import sys; print(sys.argv[1])", json.dumps(result)]
-    fixture_directory = common_dir(root) / "harness/fixture-isolation"
-    fixture_directory.mkdir(parents=True, exist_ok=True)
+    fixture_parent = common_dir(root) / "harness/fixture-isolation"
+    fixture_parent.mkdir(parents=True, exist_ok=True)
+    fixture_directory = Path(tempfile.mkdtemp(prefix="launch-", dir=fixture_parent))
     inventory = fixture_directory / "inventory.json"
     config = fixture_directory / "config.json"
     inventory.write_text(json.dumps({"runtime": "controlled executable fixture", "external_tools": []}))
@@ -61,6 +63,13 @@ def main():
         candidate = git("rev-parse", "HEAD")
         receipt = approval(root, candidate)
         check("real registered reviewer process authorizes exact candidate", validate(root, candidate, receipt)["result"]["verdict"] == "APPROVE")
+        with ThreadPoolExecutor(max_workers=8) as workers:
+            receipts = list(workers.map(lambda _: approval(root, candidate), range(16)))
+        launches = [json.loads((path.parent / "launch.json").read_text()) for path in receipts]
+        evidence_paths = [item["path"] for launch in launches for item in launch["isolation"]["evidence"]]
+        check("concurrent reviewers retain distinct immutable isolation artifacts", len(set(evidence_paths)) == len(evidence_paths))
+        check("concurrent registered reviews all retain valid hashes",
+              all(validate(root, candidate, path)["result"]["verdict"] == "APPROVE" for path in receipts))
         git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "moved", "--allow-empty")
         check("stale approval is refused", refused(lambda: validate(root, git("rev-parse", "HEAD"), receipt)))
         raw = root / "self-approved.json"

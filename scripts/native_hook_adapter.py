@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from paths import REPO
+from paths import CODE, REPO, root_for
 
 ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 ROLES = {"reviewer": "reviewer-codex", "planner": "Plan", "explorer": "Explore"}
@@ -92,6 +92,8 @@ def normalize(payload):
     event = dict(payload)
     kind, name = event["hook_event_name"], event.get("tool_name")
     cwd = Path(event.get("cwd") or os.getcwd()).resolve()
+    if CODE.name == ".vulfpeck":
+        root_for(cwd)
     if kind in ("PreToolUse", "PostToolUse"):
         args = event.get("tool_input")
         if name == "apply_patch":
@@ -160,7 +162,9 @@ def policies(event):
 def run_policy(path, args, event, timeout, gate):
     """Convert a gate crash, timeout, or malformed result into an explicit failure."""
     try:
-        process = subprocess.Popen([sys.executable, str(REPO / path), *args],
+        if path == "scripts/codegraph_freshness.py":
+            args = [*args, "--root", str(git_root(event["cwd"]))]
+        process = subprocess.Popen([sys.executable, str(CODE / path), *args],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, cwd=event["cwd"], start_new_session=True,
                                    env={**ENV, "CLAUDE_PROJECT_DIR": str(REPO), "HARNESS_RUNTIME": "codex"})

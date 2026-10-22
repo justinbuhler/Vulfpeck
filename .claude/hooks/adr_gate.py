@@ -26,6 +26,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
+from paths import REPO
 import adr  # noqa: E402
 import harness_config  # noqa: E402
 
@@ -56,7 +57,7 @@ def trusted(top):
     The rules come from this project's harness.toml schema; another repository
     the session writes into is not this hook's business.
     """
-    mine = common_dir(os.environ.get("CLAUDE_PROJECT_DIR") or str(ROOT))
+    mine = common_dir(os.environ.get("CLAUDE_PROJECT_DIR") or str(REPO))
     return bool(mine) and mine == common_dir(top)
 
 

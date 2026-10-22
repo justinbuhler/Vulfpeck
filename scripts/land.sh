@@ -74,13 +74,17 @@ fi
 
 prepare_codegraph(){
   [ -d "$MAIN/.codegraph" ] || [ -d "$1/.codegraph" ] || return 0
-  uv run --no-sync python3 "$CALLER/scripts/codegraph_freshness.py" --ensure --root "$1" \
+  cg="$CALLER/scripts/codegraph_freshness.py"
+  [ "$(basename "$(dirname "$CONTROL")")" != .vulfpeck ] || cg="$CONTROL/codegraph_freshness.py"
+  uv run --no-sync python3 "$cg" --ensure --root "$1" \
     || return 1
 }
 
 cleanup_codegraph(){
   [ -d "$1/.codegraph" ] || return 0
-  if ! uv run --no-sync python3 "$CALLER/scripts/codegraph_freshness.py" --cleanup --root "$1"; then
+  cg="$CALLER/scripts/codegraph_freshness.py"
+  [ "$(basename "$(dirname "$CONTROL")")" != .vulfpeck ] || cg="$CONTROL/codegraph_freshness.py"
+  if ! uv run --no-sync python3 "$cg" --cleanup --root "$1"; then
     say "integration succeeded; CodeGraph cleanup deferred, local index retained at $1"
   fi
 }

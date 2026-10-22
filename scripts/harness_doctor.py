@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-from paths import REPO as ROOT
+from paths import REPO as ROOT, SCRIPTS
 
 
 def git(*args):
@@ -179,10 +179,11 @@ def findings(runtime="claude", report=None):
     need(bool(shutil.which("flock") or shutil.which("lockf")), "flock/lockf found",
          "neither flock nor lockf is on PATH; scripts/run.sh cannot serialise the suite")
     hooks_path = git("config", "--get", "core.hooksPath")
-    need(hooks_path == ".githooks", "core.hooksPath is .githooks",
-         f"core.hooksPath is {hooks_path or 'unset'}; run: git config core.hooksPath .githooks")
-    if (ROOT / "harness.toml").is_file() and sys.version_info >= (3, 11):
-        sys.path.insert(0, str(ROOT / "scripts"))
+    expected_hooks = ".vulfpeck/git-hooks" if SCRIPTS.parent.name == ".vulfpeck" else ".githooks"
+    need(hooks_path == expected_hooks, f"core.hooksPath is {expected_hooks}",
+         f"core.hooksPath is {hooks_path or 'unset'}; expected {expected_hooks}")
+    if ((ROOT / "harness.toml").is_file() or (ROOT / ".vulfpeck/harness.toml").is_file()) and sys.version_info >= (3, 11):
+        sys.path.insert(0, str(SCRIPTS))
         try:
             import harness_config
             harness_config.load(ROOT)
