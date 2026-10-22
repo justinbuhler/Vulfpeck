@@ -690,6 +690,23 @@ check("kill_group on None is a no-op rather than an error", H.kill_group(None) i
 check("a group that exists but is not ours to signal is handled, not raised",
       H._group_gone(1) is True)
 check("kill_group never raises on a group it cannot touch", H.kill_group(1) is True)
+# On Linux killpg(1) is kill(-1): every process this user owns, the test runner
+# included. Group 1 must be refused before any signal is sent, on every platform.
+_killpg, _sent = H.os.killpg, []
+try:
+    H.os.killpg = lambda pgid, sig: _sent.append((pgid, sig))
+    H.kill_group(1), H.kill_group(0), H._group_gone(1)
+finally:
+    H.os.killpg = _killpg
+check("group 1 and below are never signalled at all", _sent == [], str(_sent))
+def _refuse(pgid, sig):
+    raise PermissionError(1, "not ours")
+try:
+    H.os.killpg = _refuse
+    check("a PermissionError from a real group is handled, not raised",
+          H._group_gone(424242) is True and H.kill_group(424242) is True)
+finally:
+    H.os.killpg = _killpg
 check("the lander installs a shutdown handler, so a stop is not a leak",
       "signal.signal" in (ROOT / ".claude" / "harness" / "agent_harness.py").read_text())
 set_gate(repo, 0)

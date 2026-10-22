@@ -558,7 +558,10 @@ def _group_gone(pgid):
     EPERM counts as gone. It means the group still exists but is not ours to
     signal, so there is nothing further this process can do about it, and the
     caller is a cleanup path that must not turn that into an exception.
+    A pgid of 1 or less is never signalled, for the reason `kill_group` gives.
     """
+    if pgid <= 1:
+        return True
     try:
         os.killpg(pgid, 0)
     except (ProcessLookupError, PermissionError):
@@ -575,6 +578,11 @@ def kill_group(pgid):
     liveness probe, which killed the lander mid-landing and lost the ledger row
     for the attempt. A cleanup path that can fail loudly is worse than none.
 
+    glibc implements `killpg(1, sig)` as `kill(-1, sig)`, which signals every
+    process this user owns: on a Linux CI runner the suite's probe of group 1
+    killed the runner's own shell. No group this module starts has a pgid of 1
+    or less, so those are refused rather than signalled.
+
     Args:
         pgid (int): the group to kill, or None for nothing to do.
 
@@ -582,7 +590,7 @@ def kill_group(pgid):
         (bool): whether this process has stopped trying - the group is gone, or
             is not ours to signal.
     """
-    if pgid is None:
+    if pgid is None or pgid <= 1:
         return True
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
