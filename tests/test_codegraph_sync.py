@@ -47,7 +47,8 @@ echo "$@" >> "$FAKE_LOG"
 case "$1" in
   status) [ -n "$FAKE_FAIL_AFTER_WRITE" ] && [ -f "$FAKE_FAIL_AFTER_WRITE" ] && exit 1
           [ -f "$FAKE_STATUS" ] && cat "$FAKE_STATUS"; exit "${FAKE_STATUS_RC:-0}" ;;
-  init)   [ -n "$FAKE_ENV_LOG" ] && printf '%s|%s\\n' "$CODEGRAPH_NO_WATCH" "$CODEGRAPH_FORCE_WATCH" >> "$FAKE_ENV_LOG"
+  init)   if [ -d "${@: -1}/.codegraph" ] && [[ "$(cat "$FAKE_STATUS")" == *'"initialized": true'* ]]; then exit 0; fi
+          [ -n "$FAKE_ENV_LOG" ] && printf '%s|%s\\n' "$CODEGRAPH_NO_WATCH" "$CODEGRAPH_FORCE_WATCH" >> "$FAKE_ENV_LOG"
           mkdir -p "${@: -1}/.codegraph"
           [ -n "$FAKE_FIXED_STATUS" ] && cp "$FAKE_FIXED_STATUS" "$FAKE_STATUS"
           exit "${FAKE_RC:-0}" ;;
@@ -331,14 +332,26 @@ for name, status in (
     ("timestamp", dict(FRESH, lastIndexed=None)),
 ):
     ready, line, writes, all_calls = scenario("repair-" + name, linked1, status, fixes=True)
-    check(f"{name}: initialize locally instead of syncing a foreign or incomplete index",
-          ready and writes == [f"init --yes {linked1}"], str(all_calls))
+    check(f"{name}: retain an existing index without unverified repair",
+          not ready and writes == [] and "retained" in line, str(all_calls) + line)
 
 init_env = TMP / "init-env.log"
-ready, line, writes, all_calls = scenario("s-no-watch", linked1, {"initialized": False},
+watch_checkout = TMP / "watch-checkout"
+git("worktree", "add", "-q", "--detach", str(watch_checkout), cwd=main1)
+ready, line, writes, all_calls = scenario("s-no-watch", watch_checkout, {"initialized": False},
                                          fixes=True, CODEGRAPH_NO_WATCH="1", FAKE_ENV_LOG=init_env)
 check("init cannot install shared fallback hooks through inherited watch settings",
       ready and init_env.read_text().strip() == "|1", init_env.read_text())
+
+init_bin, init_log = make_bin("bin-init-noop")
+init_status, init_fixed = TMP / "init-status.json", TMP / "init-fixed.json"
+init_status.write_text(json.dumps(dict(FRESH, projectPath=str(linked1))))
+init_fixed.write_text(json.dumps(dict(FRESH, projectPath="/different")))
+initialized = subprocess.run([str(init_bin / "codegraph"), "init", "--yes", str(linked1)],
+                             env=env_with(init_bin, FAKE_LOG=init_log, FAKE_STATUS=init_status,
+                                          FAKE_FIXED_STATUS=init_fixed), capture_output=True, text=True)
+check("fake init preserves an already initialized index like the installed CLI",
+      initialized.returncode == 0 and json.loads(init_status.read_text())["projectPath"] == str(linked1))
 
 missing = TMP / "r1-nested" / "new checkout"
 git("worktree", "add", "-q", "--detach", str(missing), cwd=main1)

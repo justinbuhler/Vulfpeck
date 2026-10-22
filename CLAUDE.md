@@ -45,6 +45,7 @@ The project `.codex/hooks.json` calls `model_router.py --runtime codex` before n
 It requires an approved `agent_type` and refuses mismatched explicit model or effort overrides; a task name never substitutes for role selection.
 A host that omits native role selection receives a routing-unavailable denial.
 The project and the exact hook definition must be trusted through Codex before the hook runs.
+Codex 0.163.0 reads linked-worktree hook declarations from the primary checkout, so a registry added only on a linked branch needs a standalone clone for activation testing.
 These profiles do not route the interactive parent or register the remaining Claude hooks in Codex.
 
 **Rule 11, the relocating-oracle rule.** A control must not derive its expectation from the thing it checks: such an oracle agrees by construction and passes hardest exactly when the artefact is wrong.

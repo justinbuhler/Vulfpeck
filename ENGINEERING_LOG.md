@@ -3,6 +3,28 @@
 Dated failures, measurements, limitations, and implementation history (AGENTS.md ownership pointers).
 Newest first. Each entry: date, what happened, how it was measured, what changed.
 
+## 2026-10-22 - native Codex trust and linked-worktree activation
+
+The native policy probe using the real `~/.codex` did not load the untrusted project layer.
+An invocation-only project-trust override also did not activate bootstrap trust.
+An isolated `CODEX_HOME` with the primary project trusted and the existing Smartsheet header-helper string inherited proved the native read-tool policy, with literal resource-guide and workspace-list request/response artifacts at `tmp/json/native-isolated-policy-proof.json`.
+No authentication files or token values were copied, and production configuration was unchanged.
+
+The isolated probe initially returned an empty `hooks/list` despite loading the worktree's ordinary project config.
+Review identified the scope difference: Codex 0.163.0 loads linked-worktree hook declarations from the primary checkout, where this branch's registry is not yet installed.
+A standalone disposable clone of the candidate is required to prove its hook registration before integration; branch-local configuration alone does not activate the registry in this linked worktree.
+
+## 2026-10-22 - CodeGraph preparation and land receipt regressions
+
+Independent review reproduced a land that integrated its candidate, then failed during the final CodeGraph refresh without printing its successful receipt.
+Pre-gate preparation remains strict; only the post-integration refresh now reports a pending refresh while retaining the successful land status and receipt.
+The regression fixture fails refresh only after the candidate is actually reachable from `main`.
+
+The initial fake let `init --yes` overwrite metadata in an already initialized index, although installed CodeGraph 1.6.2 returns early in that state.
+The fake now preserves that behavior.
+Existing indexes with missing initialization metadata, foreign ownership or no timestamp are retained for explicit manual recovery; genuinely absent local indexes still initialize after the repository opted in, and verified local stale indexes still sync.
+Focused RED/GREEN artifacts are retained under `tmp/log/land-refresh-*.log` and `tmp/log/codegraph-ownership-*.log`.
+
 ## 2026-10-22 - mutation runner timeout hid a kill
 
 M028 (`land.sh --expect`) was recorded as a crash-only kill, then as a survivor on a rerun, although the mutant fails three named checks when `tests/test_land.py` runs alone (98 s). Under the runner's 12 parallel workers the file exceeded the 120 s per-script timeout. A baseline timeout counted as "red at baseline", which quarantined the file, so its kills disappeared. The default timeout is now 600 s, and a baseline timeout stops the runner with the timeout to raise. The uncommitted survivor row from the misconfigured rerun was discarded; the committed crash-only row (6da00dc) stays as history, superseded by the rerun after the fix.

@@ -205,6 +205,56 @@ check("a failing gate exits non-zero", r3.returncode != 0, r3.stdout + r3.stderr
 check("a failing gate leaves main untouched", git(d3, "rev-parse", "main") == before)
 check("a failing gate prints no LANDED receipt", "LANDED" not in r3.stdout, r3.stdout)
 
+# A refresh after the swap cannot turn an integrated candidate into a failed land.
+with tempfile.TemporaryDirectory(prefix="land-refresh-tools.") as td:
+    refresh_repo = repo()
+    (refresh_repo / ".gitignore").write_text(".codegraph/\n")
+    (refresh_repo / "scripts").mkdir()
+    (refresh_repo / "scripts/codegraph_freshness.py").write_text('''
+import json, os, subprocess, sys
+root = sys.argv[sys.argv.index('--root') + 1]
+main = os.environ['REFRESH_MAIN']
+integrated = subprocess.run(['git', '-C', main, 'merge-base', '--is-ancestor',
+                            os.environ['REFRESH_CANDIDATE'], 'main']).returncode == 0
+failed = root == main and (integrated or os.environ.get('REFRESH_FAIL_EARLY') == '1')
+with open(os.environ['REFRESH_TRACE'], 'a') as stream:
+    stream.write(json.dumps({'root': root, 'integrated': integrated, 'failed': failed}) + '\\n')
+print('fixture refresh failed after integration' if failed else 'fixture index ready')
+sys.exit(1 if failed else 0)
+''')
+    git(refresh_repo, "add", "-A")
+    git(refresh_repo, "commit", "-qm", "refresh fixture")
+    (refresh_repo / ".codegraph").mkdir()
+    refresh_wt = agent(refresh_repo, "refresh-pending")
+    refresh_candidate = git(refresh_wt, "rev-parse", "HEAD")
+    tools = Path(td)
+    uv = tools / "uv"
+    uv.write_text(f'#!/bin/bash\nshift; shift; shift; exec {shlex.quote(sys.executable)} "$@"\n')
+    uv.chmod(0o755)
+    trace = tools / "refresh.jsonl"
+    gate_ran = tools / "gate-ran"
+    early = land(refresh_wt, gate=f"touch {shlex.quote(str(gate_ran))}",
+                 PATH=f"{tools}:{os.environ['PATH']}", REFRESH_MAIN=str(refresh_repo),
+                 REFRESH_CANDIDATE=refresh_candidate, REFRESH_TRACE=str(trace), REFRESH_FAIL_EARLY="1")
+    check("pre-gate index failure refuses integration before running the gate",
+          early.returncode != 0 and not gate_ran.exists()
+          and not ancestor(refresh_repo, refresh_candidate, "main"), early.stdout + early.stderr)
+    trace.write_text("")
+    result = land(refresh_wt, PATH=f"{tools}:{os.environ['PATH']}",
+                  REFRESH_MAIN=str(refresh_repo), REFRESH_CANDIDATE=refresh_candidate,
+                  REFRESH_TRACE=str(trace), REFRESH_FAIL_EARLY="0")
+    calls = [json.loads(line) for line in trace.read_text().splitlines()]
+    check("only the post-swap refresh fails in the regression fixture",
+          calls and calls[-1]["failed"] and all(not row["failed"] for row in calls[:-1]), str(calls))
+    check("post-integration refresh failure keeps a successful land exit",
+          result.returncode == 0, result.stdout + result.stderr)
+    check("post-integration refresh failure preserves the integration receipt",
+          f"LANDED candidate={refresh_candidate}" in result.stdout, result.stdout + result.stderr)
+    check("post-integration refresh failure names the pending refresh",
+          "land succeeded; CodeGraph refresh pending" in result.stdout, result.stdout + result.stderr)
+    check("post-integration refresh failure leaves the reviewed candidate on main",
+          ancestor(refresh_repo, refresh_candidate, "main"))
+
 # --- compare-and-swap catches a main that moved under us ----------------------
 # The gate runs while we hold the lock; a gate that moves `main` simulates a
 # writer that bypassed the lock entirely. update-ref must refuse the swap.

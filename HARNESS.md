@@ -45,6 +45,8 @@ None of the three spells a command, so they cannot drift apart.
 Codex discovers standalone project agent files natively; no extra orchestration runner or legacy `config_file` table is required.
 The project routing hook resolves its script from the Git root and has a crash-to-deny wrapper.
 Codex must trust the project layer and the exact hook definition before executing it.
+In Codex 0.163.0, linked worktrees use the primary checkout's hook declarations while ordinary project config remains worktree-local.
+A branch-only registry is inactive in that linked worktree; verify it in a standalone disposable clone before installation in the primary checkout.
 Unsupported hosts without native role selection receive a routing-unavailable denial when they dispatch the spawn hook; hosts without hook execution cannot claim this control.
 `tests/test_codex_model_routing.py` keeps independent profile expectations and exercises the registered command from a subdirectory.
 Claude routing and the interactive parent model remain unchanged.

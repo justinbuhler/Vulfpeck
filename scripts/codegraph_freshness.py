@@ -75,7 +75,7 @@ def evaluate(status, repo=REPO):
     elif Path(indexed).resolve() != Path(repo).resolve():
         violations.append(
             f"CG-03 the index describes {str(indexed)!r}, not {str(repo)!r} - "
-            + "run `codegraph init .` in this worktree")
+            + "verify index ownership before explicit recovery")
 
     if not status.get("lastIndexed"):
         violations.append("CG-04 the index does not record when it was built")
@@ -192,7 +192,9 @@ def ensure_index(repo=REPO, sync_timeout=SYNC_TIMEOUT):
             violations = evaluate(status, repo)
             if not violations:
                 return True, "codegraph fresh: local index verified"
-            action = "init" if any(m in markers_of(violations) for m in ("CG-01", "CG-03", "CG-04")) else "sync"
+            if any(m in markers_of(violations) for m in ("CG-01", "CG-03", "CG-04")):
+                return False, "codegraph index not verified; local index retained for manual recovery: " + "; ".join(violations)
+            action = "sync"
         args = ["codegraph", action, "--yes" if action == "init" else "--quiet", str(repo)]
         env = git_env()
         if action == "init":

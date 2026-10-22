@@ -14,7 +14,9 @@ Vulfpeck must preserve the repository owner's choice to leave CodeGraph disabled
 Port the checkout-local lifecycle from LA28 commit `6709caeea76958fea41a388e137fc902c261ecd6`.
 Prepare and verify an index only when the current or primary checkout already opted in.
 Require the index project path to match the checkout, scrub inherited Git overrides, and prepare lander checkouts before verification.
+Retain an existing index when initialization metadata, checkout ownership or its timestamp cannot be verified; recovery requires an explicit repair rather than `init --yes`, which leaves an initialized index unchanged.
 Clean up only a verified linked checkout's index after stopping its own writer, retaining shared Git hooks.
+Preparation before the gate is strict; a refresh failure after integration reports a pending refresh and preserves the successful land receipt.
 Test the cleanup protocol with fake native modules using CodeGraph's bundled Node when available, otherwise Node on PATH.
 CI supplies Node for this offline test; the CodeGraph package remains optional.
 

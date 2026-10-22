@@ -23,4 +23,6 @@ Keep Claude's existing family rules and the interactive parent model unchanged.
 Codex applies the model and effort from the selected native profile, without a separate workflow runner.
 Missing role selection fails visibly instead of inheriting the parent model silently.
 Project configuration and the exact hook definition require native trust before execution.
+Codex 0.163.0 reads linked-worktree hook declarations from the primary checkout, so a registry added only on a linked branch is not active there.
+Use a standalone disposable clone to verify the candidate before installing its registry in the primary checkout.
 Runtime proof must verify effective profile discovery and blocked and allowed spawn calls on the installed client.
