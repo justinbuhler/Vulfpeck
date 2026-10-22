@@ -40,6 +40,13 @@ Workflow model routing is mechanical: every tracked `.claude/workflows/*.js` `ag
 The Agent-matcher hooks run `require_agent_model.py`, which denies an `Agent` call with no or `inherit` model, and `model_router.py`, which denies an `Agent` call whose `model` does not match its `subagent_type` tier (Haiku: Explore; Sonnet: implementation engineers and code-simplifiers; Opus or Fable: review, planning and dual-derive) and passes unlisted types and `fork`.
 These mechanisms select models only on the surfaces they control; neither routes the interactive parent session.
 
+Codex uses native project profiles in `.codex/agents/`: explorer selects `gpt-6-luna` with high effort, executor selects `gpt-6.1-sol` with medium effort, and reviewer and planner select `gpt-6-astra` with high effort.
+The project `.codex/hooks.json` calls `model_router.py --runtime codex` before native `spawn_agent` calls.
+It requires an approved `agent_type` and refuses mismatched explicit model or effort overrides; a task name never substitutes for role selection.
+A host that omits native role selection receives a routing-unavailable denial.
+The project and the exact hook definition must be trusted through Codex before the hook runs.
+These profiles do not route the interactive parent or register the remaining Claude hooks in Codex.
+
 **Rule 11, the relocating-oracle rule.** A control must not derive its expectation from the thing it checks: such an oracle agrees by construction and passes hardest exactly when the artefact is wrong.
 `MODEL-03B` in `tests/test_workflow_routing.py` is the pattern to copy - it keeps its own expectation table and refuses to read it from the files it validates.
 Its model-shaped case is delegation: bounded implementation goes to Sonnet, mechanical discovery and complete counting to Haiku, review, planning and independent re-derivation to Opus, and an `Agent` call states `model` explicitly rather than inheriting.

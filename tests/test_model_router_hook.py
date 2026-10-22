@@ -105,6 +105,8 @@ check("non-Agent tools are ignored",
       run(None, None, json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}}))[1] is None)
 check("a non-Agent tool carrying a mismatched subagent_type is ignored", run(None, None, json.dumps(
     {"tool_name": "Task", "tool_input": {"subagent_type": "Explore", "model": "opus"}}))[1] is None)
+check("Claude mode does not apply GPT policy to native spawn arguments", run(None, None, json.dumps(
+    {"tool_name": "spawn_agent", "tool_input": {"agent_type": "executor", "model": "gpt-6-astra"}}))[1] is None)
 for bad in ["", "not json", "[]"]:
     check(f"malformed stdin {bad!r} exits 0 without a verdict", run(None, None, bad) == (0, None))
 

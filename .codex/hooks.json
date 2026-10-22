@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^spawn_agent$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 \"$root/.claude/hooks/model_router.py\" --runtime codex || { rc=$?; echo \"Codex model routing failed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -25,14 +25,15 @@ dir = "docs/adr"                        # NNNN-slug.md, managed by scripts/adr.p
 # `Components:`, before it is created and at every land.
 require_for = [".claude/hooks/**", ".claude/agents/**", ".claude/skills/**",
                ".claude/workflows/**", ".claude/harness/**", ".githooks/**",
-               "scripts/**", "mutants/*.py", ".codex/config.toml"]
+               "scripts/**", "mutants/*.py", ".codex/config.toml",
+               ".codex/hooks.json", ".codex/agents/**"]
 exempt = []
 
 [hooks]
 watched_files = ["harness.toml", "scripts/paths.py", "scripts/harness_config.py",
                  "scripts/gate.sh", "scripts/land.sh", "scripts/run.sh", ".claude/settings.json",
-                 ".codex/config.toml"]
-watched_dirs = [".githooks/"]
+                 ".codex/config.toml", ".codex/hooks.json"]
+watched_dirs = [".githooks/", ".codex/agents/"]
 skip_dirs = [".venv", "__pycache__", "node_modules", ".git"]
 
 [[mapped_tests]]

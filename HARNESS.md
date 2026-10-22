@@ -12,6 +12,7 @@ It is project-agnostic. A repository describes how it builds in `harness.toml`; 
 | Gate and landing | `scripts/gate.sh`, `scripts/run.sh`, `scripts/land.sh`, `.githooks/*`, `.github/workflows/tests.yml` | No commits or merge commits on `main`; lint at commit; the same gate at land and in CI; compare-and-swap of local `main` |
 | Claude Code hooks | `.claude/settings.json`, `.claude/hooks/*.py` | Model routing on `Agent` calls, commit-landed verification, mapped test on edit, blast-radius advisory, CodeGraph freshness |
 | Codex Smartsheet policy | `.codex/config.toml`, `tests/test_codex_permissions.py` | Positive native read-tool allowlist and duplicate app disabled; credentials remain in user configuration |
+| Codex model routing | `.codex/agents/*.toml`, `.codex/hooks.json`, `.claude/hooks/model_router.py` | Native profiles pin GPT model and effort; spawn gate requires a known role and matching explicit overrides |
 | Agent and review tooling | `.claude/agents/*`, `.claude/skills/land`, `.claude/workflows/*`, `.claude/harness/agent_harness.py`, `mutants/` | Independent re-derivation, live-API proof, per-task worktrees with a serialized commit queue, mutation testing |
 
 ### One gate, three callers
@@ -28,6 +29,7 @@ None of the three spells a command, so they cannot drift apart.
 |---|---|---|
 | `require_agent_model.py` | PreToolUse `Agent` | Denies a call with no `model` or `inherit` (fork exempt) |
 | `model_router.py` | PreToolUse `Agent` | Denies a model that does not match the `subagent_type` tier (Explore: Haiku; `*-engineer`/simplifiers: Sonnet; `reviewer-*`, Plan, dual-derive, pr-review-toolkit: Opus or Fable) |
+| `model_router.py --runtime codex` | Codex PreToolUse `spawn_agent` | Requires native `agent_type`: explorer uses Luna/high, executor uses 6.1 Sol/medium, reviewer and planner use Astra/high; mismatched explicit model or effort is denied |
 | `blast_radius_advisory.py` | PreToolUse `Edit\|Write` | Advisory only. When the edit touches a file in `hooks.watched_files` or `hooks.watched_dirs`, it prints which tracked files also spell the literals being changed |
 | `verify_commit_landed.py` | PostToolUse `Bash` | Blocks when a `git commit` printed no `[branch sha]` or HEAD is not that sha (catches index.lock races and exit codes masked by a later command) |
 | `test_for_edited_module.py` | PostToolUse `Edit\|Write` | Runs the test `[[mapped_tests]]` maps to the edited file and exits 2 on failure or on an unreadable `harness.toml` |
@@ -39,6 +41,13 @@ None of the three spells a command, so they cannot drift apart.
 | `harness_doctor.py` | SessionStart | Advisory. Reports missing prerequisites (Python 3.11+, uv, rsync, flock/lockf, `core.hooksPath`) and user-level hooks that can undercut the harness: SubagentStart context injection, PreToolUse Bash hooks that can deny `git push` or `gh pr` |
 
 **Failure direction.** Claude Code lets a tool call proceed when a hook exits with anything other than 0 or 2, so a crashing gate looks like a gate with nothing to deny. Every gate's registered command therefore ends in `|| { ...; exit 2; }`, turning a crash or a missing file into a block; advisory hooks end in `|| true` so they never block. `tests/test_harness_controls.py` keeps its own inventory of every registration, runs each command exactly as registered, gives each gate a deny and an allow canary, and proves both failure directions by swapping in a crashing script. A hook that exceeds its timeout still fails open; keep gates fast (the canaries assert under half the timeout).
+
+Codex discovers standalone project agent files natively; no extra orchestration runner or legacy `config_file` table is required.
+The project routing hook resolves its script from the Git root and has a crash-to-deny wrapper.
+Codex must trust the project layer and the exact hook definition before executing it.
+Unsupported hosts without native role selection receive a routing-unavailable denial when they dispatch the spawn hook; hosts without hook execution cannot claim this control.
+`tests/test_codex_model_routing.py` keeps independent profile expectations and exercises the registered command from a subdirectory.
+Claude routing and the interactive parent model remain unchanged.
 
 ### Architecture decisions
 
