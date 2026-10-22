@@ -12,16 +12,10 @@
 
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1     # repository root
-mkdir -p .omc
-if [ "${HARNESS_REPOSITORY_LOCKED:-0}" != "1" ]; then
-  # No system ships both: flock is util-linux, lockf is BSD/macOS.
-  if command -v flock >/dev/null; then LOCK="flock"
-  elif command -v lockf >/dev/null; then LOCK="lockf -k"
-  else echo "flock or lockf is required to serialise repository verification"; exit 1
-  fi
-  # shellcheck disable=SC2086  # deliberate: LOCK carries lockf's -k as a word
-  exec $LOCK .omc/repository-verification.lock \
-    env HARNESS_REPOSITORY_LOCKED=1 "$0" "$@"
+# The configured gate and direct suite share the same inherited OS mutex.
+LOCK_TOOL="$(cd "$(dirname "$0")" && pwd)/harness_lock.py"
+if ! python3 "$LOCK_TOOL" --root "$PWD" --name verification --check-held; then
+  exec python3 "$LOCK_TOOL" --root "$PWD" --name verification -- bash "$0" "$@"
 fi
 
 . scripts/harness_env.sh

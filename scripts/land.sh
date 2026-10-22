@@ -5,13 +5,10 @@
 #   MERGED tree -> take a short lock -> compare-and-swap refs/heads/main ->
 #   verify -> release.
 #
-# The gate runs OUTSIDE the lock: it is the expensive step (tens of minutes on
-# this repo), so serialising it would cap the whole repository at a handful of
-# lands per hour. Correctness does not depend on the lock - `update-ref` with an
-# expected old value is a compare-and-swap, and a land that loses it re-merges
-# onto the new main and re-gates. The lock only keeps the read-check-swap-verify
-# section indivisible, so a land that succeeds is never reported as a failure
-# because someone else landed a millisecond later.
+# A descriptor-held common-Git verification mutex spans scratch preparation,
+# the gate, and the final update. Mutation and verification callers share it.
+# The separate integration mutex covers the final read-check-update section;
+# compare-and-swap retries still detect unrelated Git writers that ignore locks.
 #
 # The lander worktree is per-branch and persistent: it keeps its .venv and its
 # copied inputs between lands, which is worth more than the full checkout and
@@ -37,7 +34,15 @@ event(){
     --decision "$1" --reason "$2" --subject "${BRANCH:-?}@${CANDIDATE:-?}${3:+ -> $3}" \
     >/dev/null || true
 }
+land_receipt(){
+  [ -n "${CONTROL:-}" ] && [ -n "${CALLER:-}" ] || return 0
+  python3 "$CONTROL/harness_receipts.py" record-land --root "$CALLER" --candidate "${CANDIDATE:-unknown}" \
+    --receipt "${RECEIPT:-}" --base "${BASE:-}" --origin "${ORIGIN:-}" --merged "${MERGED:-}" \
+    --status "$1" --reason "$2" ${LAND_GATE_LOG:+--gate-log "$LAND_GATE_LOG"} \
+    || say "land evidence could not be recorded"
+}
 die(){
+  land_receipt REFUSED "$*"
   printf '✗ land: %s\n' "$*" >&2
   event refused "$(printf '%s' "$1" | head -1 | cut -c1-60)"
   exit 1
@@ -47,10 +52,12 @@ die(){
 # exactly as reviewed; a tip that moved after the review (a later commit, or a
 # reviewer's own) is refused rather than landed under the review's approval.
 EXPECT=${LAND_EXPECT:-}
+RECEIPT=${LAND_RECEIPT:-}
 while [ $# -gt 0 ]; do
   case $1 in
+    --receipt) [ $# -ge 2 ] || die "--receipt needs a registered receipt"; RECEIPT=$2; shift 2 ;;
     --expect) [ $# -ge 2 ] || die "--expect needs a commit"; EXPECT=$2; shift 2 ;;
-    *) die "unknown argument: $1 (usage: land.sh [--expect <reviewed sha>])" ;;
+    *) die "unknown argument: $1 (usage: land.sh --expect <reviewed sha> --receipt <registered receipt>)" ;;
   esac
 done
 
@@ -58,6 +65,12 @@ git rev-parse --git-dir >/dev/null 2>&1 || die "not a git repository"
 COMMON=$(cd "$(git rev-parse --git-common-dir)" && pwd) || die "cannot resolve the shared git dir"
 MAIN=$(dirname "$COMMON")
 CALLER=$(git rev-parse --show-toplevel) || die "cannot resolve the candidate checkout"
+
+CONTROL=$(cd "$(dirname "$0")" && pwd)
+LOCK_TOOL="$CONTROL/harness_lock.py"
+if ! python3 "$LOCK_TOOL" --root "$CALLER" --name verification --check-held; then
+  exec python3 "$LOCK_TOOL" --root "$CALLER" --name verification -- bash "$0" --expect "$EXPECT" --receipt "$RECEIPT"
+fi
 
 prepare_codegraph(){
   [ -d "$MAIN/.codegraph" ] || [ -d "$1/.codegraph" ] || return 0
@@ -108,11 +121,16 @@ fi
 
 git rev-parse --verify -q main >/dev/null || die "no local main to land onto"
 CANDIDATE=$(git rev-parse HEAD)
+[ -n "$EXPECT" ] || die "--expect is required"
+[ -n "$RECEIPT" ] || die "--receipt is required"
 if [ -n "$EXPECT" ]; then
   reviewed=$(git rev-parse --verify -q "$EXPECT^{commit}") || die "--expect $EXPECT is not a commit"
   [ "$reviewed" = "$CANDIDATE" ] || die "the candidate moved since review: $BRANCH is at $CANDIDATE, the review approved $reviewed
        land the reviewed commit, or have the new commits reviewed"
 fi
+
+python3 "$CONTROL/harness_receipts.py" validate --root "$CALLER" --candidate "$CANDIDATE" --receipt "$RECEIPT" \
+  || die "independent candidate evidence was refused"
 
 # The candidate's harness.toml, read by the reader beside this script.
 . "$(dirname "$0")/harness_env.sh"
@@ -123,29 +141,24 @@ SLUG=$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9._-' '-')
 # test that indexes the tree while skipping "/.git/" paths sees an empty index.
 # Keep this path clear of "/.git/", "/output/", "/.venv/" and "/worktrees/".
 LWT="${LAND_WORKTREE_ROOT:-$HOME/.cache/${HARNESS_NAME:-$(basename "$MAIN")}-land}/$SLUG"
-LOCK="$COMMON/land.lock"
+LOCK="$COMMON/harness/locks/integration.lock"
+mkdir -p "$(dirname "$LOCK")"
+exec 9>"$LOCK"
 ATTEMPTS=${LAND_ATTEMPTS:-3}
 # scripts/gate.sh beside this script: setup, lint and suite from harness.toml,
 # the same gate CI and the pre-commit hook run.
 GATE=${LAND_GATE:-$(printf '%q' "$(cd "$(dirname "$0")" && pwd)/gate.sh")}
 
 LOCK_HELD=0
-trap '[ "$LOCK_HELD" = 1 ] && rm -rf "$LOCK"' EXIT
-
 lock(){
-  waited=0
-  until mkdir "$LOCK" 2>/dev/null; do
-    [ "$waited" -ge "${LAND_LOCK_WAIT_SECS:-300}" ] && die "timed out waiting for the land lock.
-       holder: $(cat "$LOCK/owner" 2>/dev/null || echo unknown)
-       if that process is gone, clear it with: rmdir '$LOCK'"
-    # ponytail: no stale-lock reaper. Held for milliseconds now, so a stuck lock
-    # means a crash, and one rmdir clears it - safer than stealing from a live PID.
-    sleep 1; waited=$((waited + 1))
-  done
-  printf 'pid=%s branch=%s at=%s\n' "$$" "$BRANCH" "$(date -u +%FT%TZ)" >"$LOCK/owner"
+  python3 "$LOCK_TOOL" --root "$CALLER" --name integration --acquire-fd 9 || die "integration mutex failed"
   LOCK_HELD=1
 }
-unlock(){ rm -rf "$LOCK"; LOCK_HELD=0; }
+unlock(){
+  exec 9>&-
+  exec 9>"$LOCK"
+  LOCK_HELD=0
+}
 
 # The gate may need files git does not carry: generated data, downloaded inputs.
 # harness.toml land.copy_untracked names them, as paths relative to the
@@ -160,36 +173,8 @@ unlock(){ rm -rf "$LOCK"; LOCK_HELD=0; }
 # Nothing is copied unless it is listed. Guessing at what a suite needs copied
 # another session's live state into the gate.
 provision(){
-  [ "${#HARNESS_COPY_UNTRACKED[@]}" -gt 0 ] || return 0
-  n=0
-  TRACKED=$(mktemp "${TMPDIR:-/tmp}/harness-land-tracked.XXXXXX")
-  trap 'rm -f "$TRACKED"; [ "$LOCK_HELD" = 1 ] && rm -rf "$LOCK"' EXIT
-  for rel in "${HARNESS_COPY_UNTRACKED[@]}"; do
-    src="$MAIN/$rel"
-    if [ ! -e "$src" ]; then
-      say "⚠ land.copy_untracked lists $rel, which is absent from $MAIN; not copied"
-      continue
-    fi
-    if [ -d "$src" ]; then
-      mkdir -p "$LWT/$rel"
-      # Anchored ("/name") so a tracked file excludes only itself, not every
-      # file of the same name deeper in the tree.
-      git -C "$LWT" -c core.quotePath=false ls-files -- "$rel" \
-        | sed "s|^$rel/|/|" >"$TRACKED"
-      rsync -a --exclude-from="$TRACKED" "$src/" "$LWT/$rel/" \
-        || die "could not copy $rel into the lander worktree"
-    else
-      if git -C "$LWT" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
-        say "⚠ land.copy_untracked lists $rel, which the candidate tracks; not copied"
-        continue
-      fi
-      mkdir -p "$LWT/$(dirname "$rel")"
-      cp "$src" "$LWT/$rel" || die "could not copy $rel into the lander worktree"
-    fi
-    n=$((n + 1))
-  done
-  say "▶ copied $n untracked input(s) from $MAIN"
-  return 0
+  python3 "$CONTROL/harness_inputs.py" --source "$MAIN" --target "$LWT" --config-root "$CALLER" \
+    > "$COMMON/harness/land-inputs-$SLUG.json" || die "explicit input provisioning failed"
 }
 
 # Move local main to $1, keeping whatever worktree holds it in step. $2, when
@@ -219,65 +204,10 @@ swap_main(){
 # push path carries those - so only "behind" is corrected here, and a genuine
 # divergence is refused rather than guessed at.
 sync_with_origin(){
+  ORIGIN=""
   git rev-parse --verify -q refs/remotes/origin/main >/dev/null 2>&1 || return 0
-  git fetch -q origin main 2>/dev/null \
-    || say "… could not reach origin; landing against the local ref only"
-  om=$(git rev-parse -q --verify refs/remotes/origin/main 2>/dev/null) || return 0
-  lm=$(git rev-parse main)
-  [ "$om" = "$lm" ] && return 0
-  git merge-base --is-ancestor "$om" "$lm" && return 0        # local ahead: fine
-  if git merge-base --is-ancestor "$lm" "$om"; then
-    swap_main "$om"
-    [ "$(git rev-parse main)" = "$om" ] \
-      || die "could not fast-forward local main to origin/main: $swap_err"
-    say "▶ fast-forwarded local main to origin/main ($(git rev-parse --short "$lm") -> $(git rev-parse --short "$om"))"
-    return 0
-  fi
-  # Two-way divergence is the steady state here, not an incident: local main
-  # takes lands while origin/main takes merges of the same work, so both move
-  # independently and neither is wrong. Refusing meant the lander blocked almost
-  # every time and a human reconciled by hand - and a hand-rolled reconciliation
-  # is what silently reverted ten paths of origin's work on 2026-09-02, by
-  # recording origin as a parent while keeping only the local tree.
-  #
-  # So merge, but verify CONTENT before moving the ref: a merge that "succeeds"
-  # while discarding one side is the failure this replaces.
-  say "▶ main and origin/main diverged ($(git rev-list --count "$om..$lm") local, $(git rev-list --count "$lm..$om") origin); merging origin/main"
-  mw=$(main_worktree)
-  if [ -n "$mw" ]; then
-    # --no-verify: pre-merge-commit blocks merge commits on main, and this is the
-    # lander - the one path ORCH-12 sanctions to move it.
-    merr=$(git -C "$mw" -c user.name=land -c user.email=land@local \
-           merge --no-verify --no-edit origin/main 2>&1) \
-      || die "merging origin/main into main conflicts; main is unchanged:
-$(printf '%s\n' "$merr" | sed 's/^/       /')"
-    merged_main=$(git rev-parse main)
-  else
-    mtmp=$(mktemp -d)/wt
-    prepare_codegraph "$MAIN" || die "CodeGraph is not ready at $MAIN; refusing to continue"
-    git worktree add -q --detach "$mtmp" main \
-      || die "could not create a worktree to merge origin/main in"
-    if ! merr=$(git -C "$mtmp" -c user.name=land -c user.email=land@local \
-                merge --no-edit origin/main 2>&1); then
-      git worktree remove --force "$mtmp" >/dev/null 2>&1
-      die "merging origin/main into main conflicts; main is unchanged:
-$(printf '%s\n' "$merr" | sed 's/^/       /')"
-    fi
-    merged_main=$(git -C "$mtmp" rev-parse HEAD)
-    git worktree remove --force "$mtmp" >/dev/null 2>&1
-    git worktree prune
-  fi
-  # Both must hold before the ref moves. Ancestry alone is not enough - the bad
-  # reconciliation satisfied it while carrying the wrong tree.
-  git merge-base --is-ancestor "$om" "$merged_main" \
-    || die "the merge does not contain origin/main; refusing to move main"
-  git merge-base --is-ancestor "$lm" "$merged_main" \
-    || die "the merge does not contain the previous main; refusing to move main"
-  if [ "$(git rev-parse main)" != "$merged_main" ]; then
-    git update-ref refs/heads/main "$merged_main" "$lm" \
-      || die "main moved while merging origin/main; re-run"
-  fi
-  say "▶ merged origin/main into main ($(git rev-parse --short "$lm") -> $(git rev-parse --short main))"
+  git fetch -q origin main || say "… could not reach origin; using the recorded origin ref"
+  ORIGIN=$(git rev-parse --verify refs/remotes/origin/main) || die "cannot resolve origin/main"
 }
 
 # Lander worktrees are per-branch and persistent, so one accumulates for every
@@ -315,7 +245,6 @@ prune_landers(){
   return 0
 }
 prune_landers
-sync_with_origin
 
 if git -C "$LWT" rev-parse --git-dir >/dev/null 2>&1; then
   say "▶ reusing lander worktree $LWT"
@@ -331,6 +260,7 @@ fi
 
 attempt=1
 while :; do
+  sync_with_origin
   BASE=$(git rev-parse main)
   export LAND_BASE="$BASE"   # exported for a gate step that diffs against the main this attempt merges onto
   say "▶ attempt $attempt/$ATTEMPTS: landing $BRANCH ($CANDIDATE) onto main ($BASE)"
@@ -339,6 +269,12 @@ while :; do
   git -C "$LWT" reset -q --hard "$BASE" || die "could not reset the lander worktree to $BASE"
   git -C "$LWT" clean -qfd
   provision
+
+  if [ -n "$ORIGIN" ] && ! git merge-base --is-ancestor "$ORIGIN" "$BASE"; then
+    say "▶ reconciling origin/main in scratch"
+    git -C "$LWT" -c user.name=land -c user.email=land@local merge --no-edit "$ORIGIN" \
+      || die "origin reconciliation conflicts; main is unchanged"
+  fi
 
   if ! git -C "$LWT" -c user.name=land -c user.email=land@local \
        merge --no-ff --no-edit -m "land: $BRANCH" "$CANDIDATE" >/dev/null 2>&1; then
@@ -359,22 +295,35 @@ $conflicts
   # main, so there is nothing new to test and tens of minutes to save.
   if [ "$(git -C "$LWT" rev-parse HEAD)" = "$BASE" ]; then
     say "✓ already landed candidate=$CANDIDATE main=$BASE (main did not move)"
+    land_receipt ALREADY_LANDED "candidate already reachable"
     event noop already-landed "$BASE"
     exit 0
   fi
 
   # Every prior gate result is stale: the pre-commit hook tested each of your
   # commits against the OLD main, and git runs pre-merge-commit rather than
-  # pre-commit for the merge above. Nobody has tested this tree. No lock held.
+  # pre-commit for the merge above. Verification ownership spans this gate.
   prepare_codegraph "$LWT" || die "CodeGraph is not ready at $LWT; refusing to continue"
   say "▶ gate on the merged tree: $GATE"
-  ( cd "$LWT" && env -u VERIFY_LINT_ONLY -u VERIFY_FAST bash -c "$GATE" ) \
-    || die "the gate failed on the merged tree; main is unchanged"
+  LAND_GATE_LOG="$COMMON/harness/gate-$SLUG-$attempt.log"
+  ( cd "$LWT" && env -u VERIFY_LINT_ONLY -u VERIFY_FAST bash -c "$GATE" ) >"$LAND_GATE_LOG" 2>&1
+  gate_status=$?
+  cat "$LAND_GATE_LOG"
+  [ "$gate_status" = 0 ] || die "the gate failed on the merged tree; main is unchanged"
 
   MERGED=$(git -C "$LWT" rev-parse HEAD)
 
   # --- critical section: read, swap, and verify indivisibly ------------------
   lock
+  [ "$(git rev-parse HEAD)" = "$CANDIDATE" ] || die "candidate moved during the gate"
+  python3 "$CONTROL/harness_receipts.py" validate --root "$CALLER" --candidate "$CANDIDATE" --receipt "$RECEIPT" >/dev/null \
+    || die "review evidence moved during the gate"
+  if [ "$(git rev-parse main)" != "$BASE" ]; then
+    unlock
+    attempt=$((attempt + 1))
+    [ "$attempt" -le "$ATTEMPTS" ] || die "main moved during every gate attempt"
+    continue
+  fi
   # `main` is normally checked out in the main working tree, and moving a
   # checked-out ref with update-ref leaves that tree's index and work tree still
   # describing the old commit - so every landed change reads there as an
@@ -399,6 +348,7 @@ $conflicts
       || die "$MERGED is not the tip of git log main"
     git merge-base --is-ancestor "$CANDIDATE" main \
       || die "the reviewed candidate $CANDIDATE is NOT reachable from main"
+    land_receipt LANDED "gate_exit=0 candidate_reachable=true CAS=$BASE->$MERGED"
     unlock
     event landed "attempts=$attempt" "$MERGED"
     cleanup_codegraph "$CALLER"

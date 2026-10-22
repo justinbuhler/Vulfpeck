@@ -122,9 +122,9 @@ macOS or Linux.
 - **Comments carry dated incident history.** It explains why each control exists. Trim it once it stops being useful.
 - **Model routing is split across two places.** Tiers live in `model_router.py` and in `tests/test_model_router_hook.py`, by design under Rule 11, so a new agent type has to be added to both by hand.
 - **The mutation runner assumes the standalone-test layout.** It runs `tests/test_*.py` scripts in parallel and reads their `FAIL <name>` lines; it does not yet use `commands.test`.
-- **Mutation tooling is the older generation.** `docs/mutation-testing.md` is the target: Jev-assisted sizing (`plan.py`), ID ranges (`registry.py`), probes and specs, and a runner that works in an isolated clone with a double baseline. Only patches and the in-place runner exist here.
+- **Mutation tooling is the older generation.** `docs/mutation-testing.md` is the target: Jev-assisted sizing (`plan.py`), ID ranges (`registry.py`), probes and specs, and a runner that works in an isolated clone with a double baseline. The runner now uses a standalone clone, mandatory green baselines, candidate/corpus hashes, and failing status for survivors, timeouts, patch errors, or unmapped kills. Sizing and allocation remain separate work.
 - **Hook timeouts fail open.** Claude Code proceeds when a hook times out, and the fail-closed wrapper cannot catch that. Newer Claude Code documents an `onFailure: "block"` hook setting; it is not used because the installed version could not be confirmed to accept it.
-- **`agent_harness.py` clones ignored inputs with `cp -c` on macOS and `cp --reflink=auto` elsewhere.** On a filesystem without reflinks the Linux path is a full copy, so large inputs cost disk and time there.
+- **Scratch inputs are explicit.** Task provisioning, land, and mutation clones copy only `land.copy_untracked` inputs through `harness_inputs.py`, retaining file hashes and excluding credentials, scratch trees, links, and candidate-tracked files. Writer provisioning requires literal `--file` leases; `release --task <task> --expect <sha>` verifies a clean expected tip before releasing ownership.
 
 ## Open gaps
 
@@ -149,8 +149,13 @@ macOS or Linux.
 
 ### For auditability
 
-10. **Lands leave no durable receipt.** `land.sh` prints `✓ LANDED` and writes nothing; `agent_harness.py`'s ledger lives in `.git/` and is never pushed. Once item 5 exists, the pull request and its `tests` check are the published record; until then, append each land to a ledger.
+10. **Land evidence is local.** `land.sh --expect <sha> --receipt <registered receipt>` requires completed independent review evidence and writes outcomes under the common Git directory `harness/lands/`. Gate logs and registered launches remain local until explicitly published. Origin reconciliation and candidate merge run together in scratch before the single successful main update.
 11. **The decision log stays on the machine.** It is recorded (see Decision log) but nothing publishes it; the publish step should summarise a branch's records into its pull request.
 12. **`review-changes.js` returns findings but persists nothing**, against ORCH-09. Write its result to a named artifact.
-14. **Consequence is still prose at land.** Port `mutants/plan.py` (`docs/mutation-testing.md`, stage 2): code counts, Jev judges from paths and the author's description, code applies the 0.6 / 0.8 / 0.35 rule, and the owner settles referrals. `land.sh` then requires, offline, the recorded plan, a review receipt for Medium and above, and full-suite ledger rows for every sized mutant for High.
-13. **Track `mutants/mutation_ledger.jsonl`.** After a run it is untracked, and `land.sh` refuses untracked files. The runner has no test of its own.
+14. **Consequence is review-bound.** The registered reviewer records consequence and required mutant IDs. High and Critical land receipts require candidate/corpus-bound full-suite mutation results. Critical receipts also require independently produced candidate-bound derivation and population artifacts. Same-user local records remain forgeable; runtime launch proof and independent LEAD verification remain required.
+13. **Mutation history and run evidence differ.** The existing tracked ledger remains history. New runs default to `tmp/json/mutation-ledger.jsonl` and `tmp/json/mutation-receipt.json`; `tests/test_mutation_runner.py` exercises real cloning, green baseline, kill, survivor, and patch-error paths.
+
+The configured gate, direct standalone suite, land window, and mutation runner share descriptor-held verification ownership in the common Git directory.
+The lock order is queue ownership when used, then verification, then the short integration section; task-state operations never wait for verification.
+Read-only snapshots now include path bytes/types/modes and staged-index identities, so already-dirty changes are detected.
+Snapshots still do not revoke shell, network, MCP, app, plugin, or same-user filesystem authority.

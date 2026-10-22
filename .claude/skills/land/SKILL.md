@@ -58,12 +58,15 @@ no longer appear.
 
 ## Land, and what "landed" means
 
-`./scripts/land.sh` gates the merged tree and moves `refs/heads/main` by
+`./scripts/land.sh --expect <reviewed sha> --receipt <registered receipt>` gates the merged tree and moves `refs/heads/main` by
 compare-and-swap. Claim a land only from its exit status, never from narration.
 
 After an adversarial review, land exactly the commit it approved:
-`./scripts/land.sh --expect <reviewed sha>` refuses if the branch tip has moved
-since (a later commit, or one a reviewer made).
+`./scripts/land.sh --expect <reviewed sha> --receipt <registered receipt>` requires a completed independent review launch and refuses if the branch tip moved.
+The registered receipt binds the baseline, candidate tree, consequence, and evidence.
+High and Critical changes require complete full-suite mutation evidence; Critical changes also require independent derivation and population evidence.
+Never create an approval JSON by hand or infer approval from an empty findings list.
+Native reviewers must prove fresh history, sandboxing, and revoked external tool surfaces; project profiles alone do not provide this.
 
 It contains no `git push`, so:
 

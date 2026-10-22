@@ -4,8 +4,8 @@
 # behaviour: land.sh --expect refuses a candidate that moved since review
 --- a/scripts/land.sh
 +++ b/scripts/land.sh
-@@ -96,7 +96,7 @@
- CANDIDATE=$(git rev-parse HEAD)
+@@ -128,7 +128,7 @@
+ [ -n "$RECEIPT" ] || die "--receipt is required"
  if [ -n "$EXPECT" ]; then
    reviewed=$(git rev-parse --verify -q "$EXPECT^{commit}") || die "--expect $EXPECT is not a commit"
 -  [ "$reviewed" = "$CANDIDATE" ] || die "the candidate moved since review: $BRANCH is at $CANDIDATE, the review approved $reviewed

@@ -11,6 +11,11 @@
 set -uo pipefail
 
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+# The configured gate and direct suite share the same inherited OS mutex.
+LOCK_TOOL="$(cd "$(dirname "$0")" && pwd)/harness_lock.py"
+if ! python3 "$LOCK_TOOL" --root "$ROOT" --name verification --check-held; then
+  exec python3 "$LOCK_TOOL" --root "$ROOT" --name verification -- bash "$0" "$@"
+fi
 . "$(dirname "$0")/harness_env.sh"
 harness_load "$ROOT" || exit 1
 cd "$ROOT" || exit 1

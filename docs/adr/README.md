@@ -34,4 +34,5 @@ To change a decision, write a new ADR with `Supersedes: NNNN` and mark the old o
 - 2026-10-22 — [0014. Codex Smartsheet tools are read-only](0014-codex-smartsheet-tools-are-read-only.md) — proposed
 - 2026-10-22 — [0015. GPT routing uses native Codex agents](0015-gpt-routing-uses-native-codex-agents.md) — proposed
 - 2026-10-22 — [0016. Adapt native runtime events to repository policies](0016-native-runtime-policy-adapters.md) — proposed
+- 2026-10-22 — [0017. Require candidate evidence before integration](0017-candidate-bound-integration-evidence.md) — proposed
 <!-- adr-index:end -->

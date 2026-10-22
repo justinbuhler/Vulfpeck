@@ -9,6 +9,11 @@
 # default tests.count_pattern reads.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
+# The configured gate and direct suite share the same inherited OS mutex.
+LOCK_TOOL="$(cd "$(dirname "$0")" && pwd)/harness_lock.py"
+if ! python3 "$LOCK_TOOL" --root "$PWD" --name verification --check-held; then
+  exec python3 "$LOCK_TOOL" --root "$PWD" --name verification -- bash "$0" "$@"
+fi
 export PYTHONPATH="$PWD:$PWD/scripts${PYTHONPATH:+:$PYTHONPATH}"
 PY="uv run --no-sync python3"
 # Tests run real hooks from inside this checkout; keep their decisions out of
