@@ -179,6 +179,20 @@ check("a worktrees directory would be refused too, by name",
       not H.clonable(".claude/worktrees") and not H.clonable(".claude/worktrees/other"))
 check("rebuildable caches are skipped", not H.clonable("a/__pycache__/b.pyc"))
 check("but real ignored data is cloned", H.clonable("output/x.json"))
+# Each platform is pinned here because each CI runner only exercises its own.
+_platform = H.sys.platform
+try:
+    H.sys.platform = "darwin"
+    check("macOS clones with the full-path /bin/cp -c, never a GNU cp on PATH",
+          H.clone_argv("-R", "-n") == ["/bin/cp", "-cRn"] and H.clone_argv() == ["/bin/cp", "-c"],
+          f"{H.clone_argv('-R', '-n')} {H.clone_argv()}")
+    H.sys.platform = "linux"
+    check("Linux never passes -c, which GNU cp rejects, and reflinks where it can",
+          H.clone_argv("-R", "-n") == ["cp", "-R", "-n", "--reflink=auto"]
+          and H.clone_argv() == ["cp", "--reflink=auto"],
+          f"{H.clone_argv('-R', '-n')} {H.clone_argv()}")
+finally:
+    H.sys.platform = _platform
 check("the clone gave the worktree its own inode, not a shared one",
       (inputs / "supplied.bin").stat().st_ino
       != (repo / "func" / "sources" / "supplied.bin").stat().st_ino)
@@ -670,19 +684,41 @@ check("and it was killed with the rest of the tree, not orphaned",
 check("kill_group reports success on a group that is already gone",
       H.kill_group(int(grandchild)) is True)
 check("kill_group on None is a no-op rather than an error", H.kill_group(None) is True)
+# On Linux killpg(1) is kill(-1): every process this user owns, the test runner
+# included. Group 1 must be refused before any signal is sent, on every platform,
+# so no check here may pass it to the real killpg.
+_killpg, _sent = H.os.killpg, []
+try:
+    H.os.killpg = lambda pgid, sig: _sent.append((pgid, sig))
+    _answers = (H.kill_group(1), H.kill_group(0), H._group_gone(1))
+finally:
+    H.os.killpg = _killpg
+check("group 1 and below are never signalled at all", _sent == [], str(_sent))
+check("and both report them as done", _answers == (True, True, True), str(_answers))
 # It runs from `finally` and from a signal handler. The first version let
 # PermissionError escape its own liveness probe, which killed the lander
 # mid-landing and lost the ledger row - the exact evidence it exists to write.
-check("a group that exists but is not ours to signal is handled, not raised",
-      H._group_gone(1) is True)
-check("kill_group never raises on a group it cannot touch", H.kill_group(1) is True)
+def _refuse(pgid, sig):
+    raise PermissionError(1, "not ours")
+try:
+    H.os.killpg = _refuse
+    check("a group that exists but is not ours to signal is handled, not raised",
+          H._group_gone(424242) is True and H.kill_group(424242) is True)
+finally:
+    H.os.killpg = _killpg
 check("the lander installs a shutdown handler, so a stop is not a leak",
       "signal.signal" in (ROOT / ".claude" / "harness" / "agent_harness.py").read_text())
 set_gate(repo, 0)
 
 print("\ntwo live landers cannot run at once, but a dead one cannot wedge the queue")
 check("a running process reads as alive", H.alive(str(os.getpid())))
-check("a process that has exited does not", not H.alive("999999"))
+# A pid_max of 4194304 makes any fixed pid a possible live process on Linux, so
+# the dead holder is a child that has really exited and been reaped.
+_reaped = subprocess.Popen(["true"])
+_reaped.wait()
+DEAD_PID = str(_reaped.pid)
+check("a process that has exited does not", not H.alive(DEAD_PID))
+check("nor does a pid too large for kill()", not H.alive("9" * 20))
 check("and neither does an unreadable holder", not H.alive("") and not H.alive("nonsense"))
 
 lander_lock = state / "lander.lock"
@@ -695,7 +731,7 @@ check("and says who holds it", "already holds" in out.stderr, out.stderr.strip()
 # A lander killed between taking the lock and releasing it leaves this behind.
 # Before the takeover check, every later lander refused forever and the queue
 # needed a human to unwedge it. That happened during the harness's trial run.
-lander_lock.write_text("999999\n")
+lander_lock.write_text(f"{DEAD_PID}\n")
 run("enqueue", "--task", "delta", "-m", "after a crashed lander", "--file", "a.txt",
     cwd=tmp / "wt-delta")
 (tmp / "wt-delta" / "a.txt").write_text("delta again\n")

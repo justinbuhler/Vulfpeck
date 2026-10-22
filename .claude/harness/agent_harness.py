@@ -301,6 +301,18 @@ def missing_after_clone(src, dst):
     return missing
 
 
+def clone_argv(*flags):
+    """Return the `cp` argv prefix that clones rather than copies, for this platform.
+
+    macOS clones with `-c` (APFS copy-on-write). GNU cp has no `-c` and rejects it,
+    so a Linux runner copied nothing and every provision died on the comparison
+    below; `--reflink=auto` clones on Btrfs or XFS and falls back to a plain copy.
+    """
+    if sys.platform == "darwin":
+        return ["/bin/cp", "-c" + "".join(f.lstrip("-") for f in flags)]
+    return ["cp", *flags, "--reflink=auto"]
+
+
 def clone_ignored_inputs(worktree):
     """Clone the gitignored inputs into a fresh worktree, and verify they arrived.
 
@@ -310,8 +322,9 @@ def clone_ignored_inputs(worktree):
     change. A gate that fails for a reason the agent did not cause teaches
     agents to bypass it.
 
-    The macOS `/bin/cp` is named in full: GNU cp earlier on PATH (coreutils) rejects `-c`, and
+    On macOS `/bin/cp` is named in full: GNU cp earlier on PATH (coreutils) rejects `-c`, and
     a failed clone looked like a clean one until the file-by-file comparison below.
+    `clone_argv` picks the flags for the platform.
 
     On APFS `cp -c` is a copy-on-write clone: gigabytes cost seconds and no
     disk, and each worktree still gets its own inodes, so a writer in one
@@ -321,7 +334,8 @@ def clone_ignored_inputs(worktree):
     ignored ones - so the destination already exists
     after the checkout. Skipping it left the three behind silently, which is why
     this merges with `-n` instead: existing files are kept, missing ones are
-    cloned in. macOS `cp -n` exits 1 whenever it skips an existing file, so the
+    cloned in. `cp -n` exits 1 whenever it skips an existing file, on macOS and
+    in GNU coreutils 9.2 to 9.4 (Ubuntu 24.04), so the
     exit code cannot tell a skip from a real failure. The file-by-file
     comparison below is the check that can.
 
@@ -338,7 +352,7 @@ def clone_ignored_inputs(worktree):
         dst = worktree / rel
         if src.is_dir():
             dst.mkdir(parents=True, exist_ok=True)
-            subprocess.run(["/bin/cp", "-Rcn", f"{src}/.", f"{dst}/"],
+            subprocess.run([*clone_argv("-R", "-n"), f"{src}/.", f"{dst}/"],
                            capture_output=True, text=True, timeout=900,
                            env=clean_env())
             missing = missing_after_clone(src, dst)
@@ -348,7 +362,7 @@ def clone_ignored_inputs(worktree):
         elif src.is_file():
             dst.parent.mkdir(parents=True, exist_ok=True)
             if not os.path.lexists(dst):
-                subprocess.run(["/bin/cp", "-c", str(src), str(dst)],
+                subprocess.run([*clone_argv(), str(src), str(dst)],
                                capture_output=True, text=True, timeout=900)
             if not os.path.lexists(dst):
                 die(f"cloning {rel} into the worktree produced no file")
@@ -545,7 +559,10 @@ def _group_gone(pgid):
     EPERM counts as gone. It means the group still exists but is not ours to
     signal, so there is nothing further this process can do about it, and the
     caller is a cleanup path that must not turn that into an exception.
+    A pgid of 1 or less is never signalled, for the reason `kill_group` gives.
     """
+    if pgid <= 1:
+        return True
     try:
         os.killpg(pgid, 0)
     except (ProcessLookupError, PermissionError):
@@ -562,6 +579,11 @@ def kill_group(pgid):
     liveness probe, which killed the lander mid-landing and lost the ledger row
     for the attempt. A cleanup path that can fail loudly is worse than none.
 
+    glibc implements `killpg(1, sig)` as `kill(-1, sig)`, which signals every
+    process this user owns: on a Linux CI runner the suite's probe of group 1
+    killed the runner's own shell. No group this module starts has a pgid of 1
+    or less, so those are refused rather than signalled.
+
     Args:
         pgid (int): the group to kill, or None for nothing to do.
 
@@ -569,7 +591,7 @@ def kill_group(pgid):
         (bool): whether this process has stopped trying - the group is gone, or
             is not ours to signal.
     """
-    if pgid is None:
+    if pgid is None or pgid <= 1:
         return True
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
@@ -602,7 +624,10 @@ def run_in_group(argv, timeout):
     global _child_pgid
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, env=clean_env(), start_new_session=True)
-    _child_pgid = os.getpgid(proc.pid)
+    # start_new_session makes the child its own group leader. getpgid() would say
+    # the same, except that on macOS it raises ESRCH for a child that has already
+    # exited but is not yet reaped - a `git add` that fails at once on index.lock.
+    _child_pgid = proc.pid
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -629,7 +654,7 @@ def alive(pid_text):
         return False
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
+    except (ProcessLookupError, OverflowError):
         return False
     except PermissionError:
         return True
