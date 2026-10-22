@@ -59,6 +59,10 @@ def register_review_launch(root: Path, *, candidate: str, base: str, author_sess
             or isolation.get("kind") not in ("read-only", "sandbox-read-only")
             or not isolation.get("working_directory")):
         raise ValueError("verified no-history sandbox with external tools disabled is required")
+    working_directory = Path(isolation["working_directory"])
+    if not working_directory.is_absolute() or not working_directory.is_dir():
+        raise ValueError("review working directory must be an existing absolute directory")
+    isolation = {**isolation, "working_directory": str(working_directory.resolve(strict=True))}
     proof = isolation.get("evidence", [])
     if not isinstance(proof, list) or not {"effective_config", "tool_inventory"}.issubset(
             {item.get("kind") for item in proof if isinstance(item, dict)}):
@@ -161,15 +165,24 @@ def validate(root: Path, candidate: str, receipt: Path, base: str | None = None)
             and finding.get("disposition") != "resolved" for finding in result["findings"]):
         raise ValueError("review did not approve or has unresolved blockers")
     evidence = result.get("evidence", [])
+    working_directory = Path(launch["isolation"]["working_directory"])
+    if (not working_directory.is_absolute() or not working_directory.is_dir()
+            or working_directory.resolve(strict=True) != working_directory):
+        raise ValueError("registered review working directory is no longer stable and absolute")
+
+    def evidence_path(item):
+        path = Path(item["path"])
+        return path if path.is_absolute() else working_directory / path
+
     for item in evidence:
-        if not isinstance(item, dict) or sha256(Path(item["path"])) != item["sha256"]:
+        if not isinstance(item, dict) or sha256(evidence_path(item)) != item["sha256"]:
             raise ValueError("review evidence digest does not match")
     tier = result["consequence"]["tier"]
     if tier in ("high", "critical"):
         required = result["consequence"].get("required_mutant_ids", [])
         if not required or len(set(required)) != len(required):
             raise ValueError("high consequence requires an explicit mutation selection")
-        mutations = [json.loads(Path(item["path"]).read_text()) for item in evidence if item.get("kind") == "mutation"]
+        mutations = [json.loads(evidence_path(item).read_text()) for item in evidence if item.get("kind") == "mutation"]
         if not any(_mutation_valid(root, candidate, mutation, required) for mutation in mutations):
             raise ValueError("complete full-suite candidate mutation evidence is required")
     if tier == "critical" and not {"independent_derivation", "full_population"}.issubset(
@@ -178,7 +191,7 @@ def validate(root: Path, candidate: str, receipt: Path, base: str | None = None)
     if tier == "critical":
         for item in evidence:
             if item.get("kind") in ("independent_derivation", "full_population"):
-                proof = json.loads(Path(item["path"]).read_text())
+                proof = json.loads(evidence_path(item).read_text())
                 if (proof.get("candidate_sha") != candidate or proof.get("complete") is not True
                         or not proof.get("producer_session_id")
                         or proof["producer_session_id"] == launch["author_session_id"]):

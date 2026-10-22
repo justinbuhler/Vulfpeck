@@ -5,6 +5,7 @@ client isolation. LEAD retains the separate actual-client proof obligation.
 """
 import contextlib
 import io
+import hashlib
 import json
 import os
 import subprocess
@@ -20,9 +21,10 @@ from harness_lock import git_environment
 from harness_receipts import validate
 
 FIXTURE = r'''
-import json, os, sys, time
+import hashlib, json, os, sys, time
 from pathlib import Path
 ROOT, CASE, FEATURES = SETTINGS
+SUPPLIED = []
 if "--version" in sys.argv:
     print("codex-cli 0.163.1" if CASE == "future-version" else "codex-cli 0.163.0")
     raise SystemExit(0)
@@ -38,11 +40,14 @@ def registered():
     assert "SECRET_TOKEN" not in os.environ and "BASH_ENV" not in os.environ
     assert "GIT_DIR" not in os.environ and "ANTHROPIC_API_KEY" not in os.environ
 def result():
+    evidence = SUPPLIED
+    if CASE == "relative-source":
+        evidence = [{"kind":"source", "path":"tracked.txt", "sha256":hashlib.sha256(Path("tracked.txt").read_bytes()).hexdigest()}]
     return {"verdict":"REQUEST_CHANGES" if CASE == "request-changes" else "APPROVE",
             "complete":CASE != "incomplete", "findings":[],
-            "consequence":{"tier":"high" if CASE == "high" else "low",
-                "rationale":"fixture change", "required_mutant_ids":["M1"] if CASE == "high" else []},
-            "evidence":[]}
+            "consequence":{"tier":"critical" if CASE == "supplied-critical" else "high" if CASE == "high" or CASE.startswith("supplied-") else "low",
+                "rationale":"fixture independent assessment", "required_mutant_ids":["M001"] if CASE == "high" or CASE.startswith("supplied-") else []},
+            "evidence":evidence}
 def done():
     for line in sys.stdin:
         pass
@@ -84,8 +89,12 @@ for line in sys.stdin:
         flags = {name:False for name in FEATURES}
         if CASE == "apps-feature":
             flags["apps"] = True
+        path_value = json.loads(next(arg.split("=",1)[1] for arg in sys.argv if arg.startswith("shell_environment_policy.set.PATH=")))
+        assert path_value == os.pathsep.join(p for p in ("/opt/homebrew/bin","/usr/local/bin","/usr/bin","/bin","/usr/sbin","/sbin") if Path(p).is_dir())
+        shell_set = {"PATH":"/wrong-path" if CASE == "shell-path" else path_value}
+        if CASE == "shell-secret": shell_set["API_TOKEN"] = "DO_NOT_RETAIN"
         reply(request, {"config":{"features":flags, "web_search":"disabled",
-              "shell_environment_policy":{"inherit":"none"},
+              "shell_environment_policy":{"inherit":"none", "set":shell_set},
               "mcp_servers":{"fixture.with.dots":{"enabled":not disabled, "env":{"DO_NOT_RETAIN":"secret"}}}},
               "layers":[]})
     elif method == "thread/start":
@@ -115,6 +124,17 @@ for line in sys.stdin:
                                  "auth":{"DO_NOT_RETAIN":"secret"}}]})
     elif method == "turn/start":
         registered()
+        prompt = request["params"]["input"][0]["text"]
+        SUPPLIED = json.loads(prompt.split("Supplied candidate-bound evidence:\n",1)[1].split("\nDiff:\n",1)[0])
+        for proof in SUPPLIED:
+            path = Path(proof["path"])
+            assert path.is_absolute() and path.is_relative_to(Path.cwd())
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == proof["sha256"]
+            assert json.loads(path.read_text())["candidate_sha"] in prompt
+        if CASE == "supplied-tamper-original":
+            (Path(ROOT)/"tmp/evidence-inputs/mutation.json").write_text("changed original")
+        if CASE == "supplied-tamper-snapshot":
+            Path(SUPPLIED[0]["path"]).write_text("changed snapshot")
         reply(request, {"turn":{"id":"turn-1", "status":"inProgress"}})
         if CASE == "timeout":
             time.sleep(10)
@@ -160,7 +180,7 @@ def main():
     with tempfile.TemporaryDirectory(dir=scratch, prefix="native-review-test-") as temporary:
         directory = Path(temporary)
 
-        def run(case, runtime="codex", succeeds=False, timeout=3):
+        def run(case, runtime="codex", succeeds=False, timeout=3, cli=False):
             root = directory / f"{runtime}-{case}"
             root.mkdir()
 
@@ -172,6 +192,12 @@ def main():
             git("init", "-q", "-b", "main")
             (root / "tracked.txt").write_text("base")
             (root / ".gitignore").write_text("tmp/\n")
+            needs_evidence = case.startswith(("supplied-", "input-"))
+            if needs_evidence:
+                (root / "tests").mkdir()
+                (root / "tests/test_fixture.py").write_text('print("fixture")\n')
+                (root / "mutants/patches").mkdir(parents=True)
+                (root / "mutants/patches/M001.patch").write_text("controlled mutation patch fixture\n")
             git("add", ".")
             git("commit", "-qm", "base")
             base = git("rev-parse", "HEAD")
@@ -179,6 +205,31 @@ def main():
             git("add", "tracked.txt")
             git("commit", "-qm", "candidate")
             candidate = git("rev-parse", "HEAD")
+            inputs = []
+            if needs_evidence:
+                input_directory = root / "tmp/evidence-inputs"
+                input_directory.mkdir(parents=True)
+                suite_name = "tests/test_fixture.py"
+                mutation = dict(schema_version=1, kind="mutation", candidate_sha=candidate,
+                    candidate_tree=git("rev-parse", "HEAD^{tree}"), requested_mutant_ids=["M001"], mode="full", exit_code=0,
+                    all_requested_completed=True, green_baseline=True,
+                    corpus_digest=hashlib.sha256(b"M001\0"+(root/"mutants/patches/M001.patch").read_bytes()).hexdigest(),
+                    suite_inventory_digest=hashlib.sha256(f"{suite_name}:{review.sha256(root/suite_name)}".encode()).hexdigest(),
+                    baselines=[{suite_name:dict(returncode=0)} for _ in range(2)],
+                    mutants={"M001":dict(status="KILLED", failing_spec_names=[suite_name])},
+                    source_before="fixture same", source_after="fixture same")
+                if case == "input-wrong-candidate": mutation["candidate_sha"] = base
+                if case == "input-wrong-tree": mutation["candidate_tree"] = git("rev-parse", base+"^{tree}")
+                if case == "input-unknown-kind": mutation["kind"] = "review"
+                path = input_directory / "mutation.json"
+                path.write_text(json.dumps(mutation))
+                inputs.append(path)
+                if case == "supplied-critical":
+                    for kind in ("independent_derivation", "full_population"):
+                        path = input_directory / f"{kind}.json"
+                        path.write_text(json.dumps(dict(kind=kind, candidate_sha=candidate, complete=True,
+                                                       producer_session_id="independent-fixture")))
+                        inputs.append(path)
             binaries = root / "tmp/bin"
             binaries.mkdir(parents=True)
             executable = binaries / runtime
@@ -189,7 +240,18 @@ def main():
                     "SECRET_TOKEN":"fixture-only", "BASH_ENV":"fixture-only", "ANTHROPIC_API_KEY":"fixture-only"}):
                 try:
                     with contextlib.redirect_stdout(io.StringIO()):
-                        receipt = review.launch(root, candidate, base, "fixture-author", runtime, timeout)
+                        if cli:
+                            command = [sys.executable, str(ROOT/"scripts/native_review.py"), "--root", str(root),
+                                       "--candidate", candidate, "--base", base, "--author-session-id", "fixture-author",
+                                       "--runtime", runtime, "--timeout", str(timeout)]
+                            command += [arg for path in inputs for arg in ("--evidence", str(path))]
+                            completed = subprocess.run(command, capture_output=True, text=True, timeout=20)
+                            if completed.returncode:
+                                error = completed.stderr
+                            else:
+                                receipt = Path(completed.stdout.splitlines()[-1])
+                        else:
+                            receipt = review.launch(root, candidate, base, "fixture-author", runtime, timeout, inputs)
                 except (ValueError, OSError, EOFError, subprocess.SubprocessError, KeyError, TypeError) as exc:
                     error = str(exc)
             check(f"{runtime} {case} {'authorizes' if succeeds else 'refuses'}", (receipt is not None) == succeeds and (error is None) == succeeds)
@@ -211,7 +273,8 @@ def main():
                           and inventory["intrinsic_discovery"]["sources"])
             elif case in ("implicit", "callable", "history", "writable", "apps-feature", "no-inventory", "claude-write-tool",
                           "no-environment", "remote-environment", "wrong-workspace", "connection-starting",
-                          "connection-ready", "connection-active", "connection-unknown", "resources", "templates"):
+                          "connection-ready", "connection-active", "connection-unknown", "resources", "templates",
+                          "shell-path", "shell-secret", "input-wrong-candidate", "input-wrong-tree", "input-unknown-kind"):
                 check(f"{runtime} {case} refuses before registration", not list((root / ".git/harness/reviews").glob("*/launch.json")))
             if not succeeds:
                 check(f"{runtime} {case} leaves no accepted receipt", not any(
@@ -226,16 +289,26 @@ def main():
                       rejected[0]["item_name"] == "fixture-name")
                 check("forbidden event omits arguments and commands", "DO_NOT_RETAIN" not in json.dumps(events) and
                       "arguments" not in rejected[0] and "command" not in rejected[0])
+            if case == "shell-secret":
+                check("extra shell environment values are never retained", "DO_NOT_RETAIN" not in "".join(
+                      path.read_text() for path in (root/"tmp/json").rglob("*.json*")))
+            if case.startswith("supplied-tamper-"):
+                check(f"{case} fails before completion", error is not None and "supplied evidence changed" in error)
             return error
 
         run("approve", succeeds=True)
         run("intrinsic", succeeds=True)
+        run("relative-source", succeeds=True)
+        run("supplied-high", succeeds=True)
+        run("supplied-critical", succeeds=True, cli=True)
         run("approve", runtime="claude", succeeds=True)
         for case in ("implicit", "callable", "history", "writable", "apps-feature", "no-environment", "remote-environment",
                      "wrong-workspace", "hook", "late-hook", "external", "write",
                      "malformed", "incomplete", "request-changes", "high", "nonzero", "timeout", "forced",
                      "connection-starting", "connection-ready", "connection-active", "connection-unknown", "resources", "templates",
-                     "intrinsic-target", "intrinsic-cursor", "intrinsic-configured", "intrinsic-fetch", "intrinsic-unknown", "future-version"):
+                     "intrinsic-target", "intrinsic-cursor", "intrinsic-configured", "intrinsic-fetch", "intrinsic-unknown", "future-version",
+                     "shell-path", "shell-secret", "input-wrong-candidate", "input-wrong-tree", "input-unknown-kind",
+                     "supplied-tamper-original", "supplied-tamper-snapshot"):
             run(case, timeout=1 if case == "timeout" else 3)
         reason = run("no-inventory", runtime="claude")
         check("Claude absent native inventory has exact refusal", "no complete pre-inference tool inventory" in reason)
@@ -251,6 +324,7 @@ def main():
                "--candidate", "unused", "--base", "unused", "--author-session-id", "author", "--runtime", "codex",
                "--mode", "write"], capture_output=True, text=True, env=git_environment())
         check("WRITE mode refuses before Git or native launch", denied.returncode == 1 and "WRITE mode unsupported" in denied.stderr)
+    print(f"{len(passed)} passed, {len(failed)} failed")
     print(json.dumps({"passed":passed, "failed":failed}))
     return bool(failed)
 
