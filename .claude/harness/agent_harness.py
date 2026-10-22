@@ -334,7 +334,8 @@ def clone_ignored_inputs(worktree):
     ignored ones - so the destination already exists
     after the checkout. Skipping it left the three behind silently, which is why
     this merges with `-n` instead: existing files are kept, missing ones are
-    cloned in. macOS `cp -n` exits 1 whenever it skips an existing file, so the
+    cloned in. `cp -n` exits 1 whenever it skips an existing file, on macOS and
+    in GNU coreutils 9.2 to 9.4 (Ubuntu 24.04), so the
     exit code cannot tell a skip from a real failure. The file-by-file
     comparison below is the check that can.
 
@@ -623,7 +624,10 @@ def run_in_group(argv, timeout):
     global _child_pgid
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, env=clean_env(), start_new_session=True)
-    _child_pgid = os.getpgid(proc.pid)
+    # start_new_session makes the child its own group leader. getpgid() would say
+    # the same, except that on macOS it raises ESRCH for a child that has already
+    # exited but is not yet reaped - a `git add` that fails at once on index.lock.
+    _child_pgid = proc.pid
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -650,7 +654,7 @@ def alive(pid_text):
         return False
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
+    except (ProcessLookupError, OverflowError):
         return False
     except PermissionError:
         return True

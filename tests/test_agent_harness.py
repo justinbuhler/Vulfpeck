@@ -684,26 +684,25 @@ check("and it was killed with the rest of the tree, not orphaned",
 check("kill_group reports success on a group that is already gone",
       H.kill_group(int(grandchild)) is True)
 check("kill_group on None is a no-op rather than an error", H.kill_group(None) is True)
-# It runs from `finally` and from a signal handler. The first version let
-# PermissionError escape its own liveness probe, which killed the lander
-# mid-landing and lost the ledger row - the exact evidence it exists to write.
-check("a group that exists but is not ours to signal is handled, not raised",
-      H._group_gone(1) is True)
-check("kill_group never raises on a group it cannot touch", H.kill_group(1) is True)
 # On Linux killpg(1) is kill(-1): every process this user owns, the test runner
-# included. Group 1 must be refused before any signal is sent, on every platform.
+# included. Group 1 must be refused before any signal is sent, on every platform,
+# so no check here may pass it to the real killpg.
 _killpg, _sent = H.os.killpg, []
 try:
     H.os.killpg = lambda pgid, sig: _sent.append((pgid, sig))
-    H.kill_group(1), H.kill_group(0), H._group_gone(1)
+    _answers = (H.kill_group(1), H.kill_group(0), H._group_gone(1))
 finally:
     H.os.killpg = _killpg
 check("group 1 and below are never signalled at all", _sent == [], str(_sent))
+check("and both report them as done", _answers == (True, True, True), str(_answers))
+# It runs from `finally` and from a signal handler. The first version let
+# PermissionError escape its own liveness probe, which killed the lander
+# mid-landing and lost the ledger row - the exact evidence it exists to write.
 def _refuse(pgid, sig):
     raise PermissionError(1, "not ours")
 try:
     H.os.killpg = _refuse
-    check("a PermissionError from a real group is handled, not raised",
+    check("a group that exists but is not ours to signal is handled, not raised",
           H._group_gone(424242) is True and H.kill_group(424242) is True)
 finally:
     H.os.killpg = _killpg
@@ -713,7 +712,13 @@ set_gate(repo, 0)
 
 print("\ntwo live landers cannot run at once, but a dead one cannot wedge the queue")
 check("a running process reads as alive", H.alive(str(os.getpid())))
-check("a process that has exited does not", not H.alive("999999"))
+# A pid_max of 4194304 makes any fixed pid a possible live process on Linux, so
+# the dead holder is a child that has really exited and been reaped.
+_reaped = subprocess.Popen(["true"])
+_reaped.wait()
+DEAD_PID = str(_reaped.pid)
+check("a process that has exited does not", not H.alive(DEAD_PID))
+check("nor does a pid too large for kill()", not H.alive("9" * 20))
 check("and neither does an unreadable holder", not H.alive("") and not H.alive("nonsense"))
 
 lander_lock = state / "lander.lock"
@@ -726,7 +731,7 @@ check("and says who holds it", "already holds" in out.stderr, out.stderr.strip()
 # A lander killed between taking the lock and releasing it leaves this behind.
 # Before the takeover check, every later lander refused forever and the queue
 # needed a human to unwedge it. That happened during the harness's trial run.
-lander_lock.write_text("999999\n")
+lander_lock.write_text(f"{DEAD_PID}\n")
 run("enqueue", "--task", "delta", "-m", "after a crashed lander", "--file", "a.txt",
     cwd=tmp / "wt-delta")
 (tmp / "wt-delta" / "a.txt").write_text("delta again\n")
