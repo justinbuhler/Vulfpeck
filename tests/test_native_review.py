@@ -115,7 +115,9 @@ for line in sys.stdin:
         if CASE == "hook":
             emit({"method":"hook/started", "params":{}})
         if CASE == "external":
-            emit({"method":"item/started", "params":{"item":{"type":"mcpToolCall"}}})
+            emit({"method":"item/started", "params":{"item":{"type":"mcpToolCall", "id":"forbidden-1",
+                  "tool":"fixture-write", "name":"fixture-name", "server":"fixture-server",
+                  "arguments":{"DO_NOT_RETAIN":"secret"}, "command":"DO_NOT_RETAIN"}}})
         if CASE == "write":
             Path("tracked.txt").write_text("unexpected write")
         emit({"method":"item/completed", "params":{"item":{"type":"agentMessage",
@@ -190,6 +192,16 @@ def main():
             if not succeeds:
                 check(f"{runtime} {case} leaves no accepted receipt", not any(
                       validate_if_present(root, candidate, path, base) for path in (root / ".git/harness/reviews").glob("*/receipt.json")))
+            if case == "external":
+                events = [json.loads(line) for path in (root / "tmp/json").glob("review-*/native-events.jsonl")
+                          for line in path.read_text().splitlines()]
+                rejected = [event["rejected_event"] for event in events if "rejected_event" in event]
+                check("forbidden event retains diagnostic metadata", len(rejected) == 1 and
+                      rejected[0]["method"] == "item/started" and rejected[0]["item_type"] == "mcpToolCall" and
+                      rejected[0]["item_id"] == "forbidden-1" and rejected[0]["item_tool"] == "fixture-write" and
+                      rejected[0]["item_name"] == "fixture-name")
+                check("forbidden event omits arguments and commands", "DO_NOT_RETAIN" not in json.dumps(events) and
+                      "arguments" not in rejected[0] and "command" not in rejected[0])
             return error
 
         run("approve", succeeds=True)

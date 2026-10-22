@@ -112,16 +112,28 @@ class Process:
 
     def event(self, value):
         """Refuse unknown host requests and external/write tool events."""
+        def reject(reason):
+            # Tool arguments, commands, content and config can carry credentials.
+            params = value.get("params", {})
+            item = params.get("item", {})
+            metadata = {"reason": reason, "method": value.get("method"),
+                        "event_type": value.get("type"), "subtype": value.get("subtype")}
+            for key in ("type", "id", "tool", "toolName", "name", "server"):
+                if isinstance(item.get(key), (str, int, bool)):
+                    metadata["item_" + key] = item[key]
+            self.retain({"rejected_event": metadata})
+            raise ValueError(reason)
+
         if ("method" in value and "id" in value) or value.get("type") == "control_request":
-            raise ValueError("native runtime requested unsupported host authority")
+            reject("native runtime requested unsupported host authority")
         method, params = value.get("method", ""), value.get("params", {})
         item = params.get("item", {})
         if (method.startswith("hook") or value.get("type") == "hook_event"
                 or value.get("subtype", "").startswith("hook_")):
-            raise ValueError("native hooks executed despite review isolation")
+            reject("native hooks executed despite review isolation")
         if item.get("type") in ("fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall",
                                 "subAgentActivity", "webSearch", "imageGeneration"):
-            raise ValueError("unexpected external, delegated or write activity in review")
+            reject("unexpected external, delegated or write activity in review")
         self.retain(value)
 
     def rpc(self, method, params):
