@@ -24,7 +24,7 @@ import json, os, sys, time
 from pathlib import Path
 ROOT, CASE, FEATURES = SETTINGS
 if "--version" in sys.argv:
-    print("controlled protocol fixture, not native-client proof")
+    print("codex-cli 0.163.1" if CASE == "future-version" else "codex-cli 0.163.0")
     raise SystemExit(0)
 def emit(value):
     print(json.dumps(value), flush=True)
@@ -91,9 +91,12 @@ for line in sys.stdin:
     elif method == "thread/start":
         params = request["params"]
         assert "cwd" not in params and params["ephemeral"] is True
+        assert "environments" not in params
         assert params["sandbox"] == "read-only" and params["approvalPolicy"] == "never"
         assert params["dynamicTools"] == [] and params["config"]["model_reasoning_effort"] == "high"
         reply(request, {"thread":{"id":"fixture-native-session", "ephemeral":True,
+                      "environments":[] if CASE == "no-environment" else [{"environmentId":"remote" if CASE == "remote-environment" else "local",
+                      "cwd":os.getcwd(), "runtimeWorkspaceRoots":[os.getcwd()] if CASE != "wrong-workspace" else ["/"]}],
                       "turns":[{"id":"old"}] if CASE == "history" else []},
                "cwd":os.getcwd(), "sandbox":{"type":"workspaceWrite" if CASE == "writable" else "readOnly",
                                              "networkAccess":False},
@@ -102,7 +105,10 @@ for line in sys.stdin:
     elif method == "mcpServerStatus/list":
         # Page two models the implicit server absent from config/read.
         second = request["params"].get("cursor") == "page-two"
-        reply(request, {"data":[{"name":"implicit", "tools":{"write":{}} if CASE == "implicit" and second else {}}],
+        reply(request, {"data":[{"name":"implicit", "tools":{"write":{}} if CASE == "implicit" and second else {},
+                       "runtimeStatus": CASE.removeprefix("connection-") if CASE.startswith("connection-") and second else "disabled",
+                       "resources":[{}] if CASE == "resources" and second else [],
+                       "resourceTemplates":[{}] if CASE == "templates" and second else []}],
                         "nextCursor":None if second else "page-two"})
     elif method == "app/installed":
         reply(request, {"apps":[{"id":"fixture-app", "enabled":False, "callable":CASE == "callable",
@@ -118,6 +124,16 @@ for line in sys.stdin:
             emit({"method":"item/started", "params":{"item":{"type":"mcpToolCall", "id":"forbidden-1",
                   "tool":"fixture-write", "name":"fixture-name", "server":"fixture-server",
                   "arguments":{"DO_NOT_RETAIN":"secret"}, "command":"DO_NOT_RETAIN"}}})
+        if CASE in ("intrinsic", "intrinsic-target", "intrinsic-cursor", "intrinsic-configured", "intrinsic-fetch", "intrinsic-unknown", "future-version"):
+            for tool in ("list_mcp_resources", "list_mcp_resource_templates"):
+                item = {"type":"mcpToolCall", "id":"discovery-1", "server":"codex", "tool":tool, "arguments":{}}
+                if CASE == "intrinsic-target": item["arguments"] = {"server":"disabled"}
+                if CASE == "intrinsic-cursor": item["arguments"] = {"cursor":"nonempty"}
+                if CASE == "intrinsic-configured": item["server"] = "configured"
+                if CASE == "intrinsic-fetch": item["tool"] = "read_mcp_resource"
+                if CASE == "intrinsic-unknown": item["tool"] = "list_mcp_resources_unknown"
+                emit({"method":"item/started", "params":{"item":item}})
+                emit({"method":"item/completed", "params":{"item":item}})
         if CASE == "write":
             Path("tracked.txt").write_text("unexpected write")
         emit({"method":"item/completed", "params":{"item":{"type":"agentMessage",
@@ -187,7 +203,15 @@ def main():
                 artifacts = next((root / "tmp/json").glob("review-*"))
                 check(f"{runtime} configuration excludes secret-bearing fields", "DO_NOT_RETAIN" not in
                       "".join(path.read_text() for path in artifacts.rglob("*.json*")))
-            elif case in ("implicit", "callable", "history", "writable", "apps-feature", "no-inventory", "claude-write-tool"):
+                if case == "intrinsic":
+                    inventory = json.loads((artifacts / "tool_inventory.json").read_text())
+                    check("empty discovery allowance retains version/source proof", inventory["intrinsic_discovery"]["enabled"] is True
+                          and inventory["intrinsic_discovery"]["runtime_version"] == "codex-cli 0.163.0"
+                          and inventory["intrinsic_discovery"]["active_connections"] == 0
+                          and inventory["intrinsic_discovery"]["sources"])
+            elif case in ("implicit", "callable", "history", "writable", "apps-feature", "no-inventory", "claude-write-tool",
+                          "no-environment", "remote-environment", "wrong-workspace", "connection-starting",
+                          "connection-ready", "connection-active", "connection-unknown", "resources", "templates"):
                 check(f"{runtime} {case} refuses before registration", not list((root / ".git/harness/reviews").glob("*/launch.json")))
             if not succeeds:
                 check(f"{runtime} {case} leaves no accepted receipt", not any(
@@ -205,9 +229,13 @@ def main():
             return error
 
         run("approve", succeeds=True)
+        run("intrinsic", succeeds=True)
         run("approve", runtime="claude", succeeds=True)
-        for case in ("implicit", "callable", "history", "writable", "apps-feature", "hook", "late-hook", "external", "write",
-                     "malformed", "incomplete", "request-changes", "high", "nonzero", "timeout", "forced"):
+        for case in ("implicit", "callable", "history", "writable", "apps-feature", "no-environment", "remote-environment",
+                     "wrong-workspace", "hook", "late-hook", "external", "write",
+                     "malformed", "incomplete", "request-changes", "high", "nonzero", "timeout", "forced",
+                     "connection-starting", "connection-ready", "connection-active", "connection-unknown", "resources", "templates",
+                     "intrinsic-target", "intrinsic-cursor", "intrinsic-configured", "intrinsic-fetch", "intrinsic-unknown", "future-version"):
             run(case, timeout=1 if case == "timeout" else 3)
         reason = run("no-inventory", runtime="claude")
         check("Claude absent native inventory has exact refusal", "no complete pre-inference tool inventory" in reason)

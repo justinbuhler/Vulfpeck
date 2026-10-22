@@ -25,6 +25,9 @@ FEATURES_OFF = ("apps", "plugins", "hooks", "memories", "multi_agent", "browser_
                 "browser_use_external", "browser_use_full_cdp_access", "computer_use",
                 "in_app_browser", "in_app_local_automation", "image_generation")
 READ_TOOLS = {"Read", "Glob", "Grep", "EndConversation"}
+DISCOVERY_VERSION = "codex-cli 0.163.0"
+DISCOVERY_TOOLS = ("list_mcp_resources", "list_mcp_resource_templates")
+DISCOVERY_SOURCE = "https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/"
 REVIEW_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {
@@ -80,6 +83,7 @@ class Process:
         self.selector = selectors.DefaultSelector()
         self.selector.register(self.process.stdout, selectors.EVENT_READ)
         self.buffer, self.sequence, self.forced, self.status = b"", 0, False, None
+        self.intrinsic_discovery = False
 
     def retain(self, value):
         """Retain safe protocol evidence, excluding credential-bearing configuration."""
@@ -128,11 +132,18 @@ class Process:
             reject("native runtime requested unsupported host authority")
         method, params = value.get("method", ""), value.get("params", {})
         item = params.get("item", {})
+        arguments = item.get("arguments")
+        empty_discovery_args = arguments is None or (isinstance(arguments, dict)
+            and not arguments.keys() - {"server", "cursor"}
+            and all(value in (None, "") for value in arguments.values()))
+        intrinsic = (self.intrinsic_discovery and method in ("item/started", "item/completed")
+                     and item.get("type") == "mcpToolCall" and item.get("server") == "codex"
+                     and item.get("tool") in DISCOVERY_TOOLS and empty_discovery_args)
         if (method.startswith("hook") or value.get("type") == "hook_event"
                 or value.get("subtype", "").startswith("hook_")):
             reject("native hooks executed despite review isolation")
         if item.get("type") in ("fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall",
-                                "subAgentActivity", "webSearch", "imageGeneration"):
+                                "subAgentActivity", "webSearch", "imageGeneration") and not intrinsic:
             reject("unexpected external, delegated or write activity in review")
         self.retain(value)
 
@@ -225,7 +236,7 @@ def safe_config(result):
                        for item in result.get("layers", [])]}
 
 
-def codex_prepare(executable, clone, directory, timeout):
+def codex_prepare(executable, clone, directory, timeout, *, version=None):
     """Measure final thread capabilities before registering or sending a review turn."""
     discovery = directory / "discovery"
     discovery.mkdir()
@@ -251,7 +262,8 @@ def codex_prepare(executable, clone, directory, timeout):
             raise ValueError("CODEX_ISOLATION_UNVERIFIED: effective external capability or hooks remain enabled")
         thread = process.rpc("thread/start", {
             "ephemeral": True, "sandbox": "read-only", "approvalPolicy": "never", "model": "gpt-6-astra",
-            "environments": [], "dynamicTools": [],
+            # Omitted selects local; [] disables access (v0.163.0 thread.rs:136).
+            "dynamicTools": [],
             "config": {"model_reasoning_effort": "high", "project_doc_max_bytes": 0},
             "baseInstructions": "You are an independent code reviewer using native read-only tools.",
             "developerInstructions": "Read the candidate and its project policy. Do not delegate, write or call external services."})
@@ -262,6 +274,12 @@ def codex_prepare(executable, clone, directory, timeout):
                 or thread.get("sandbox", {}).get("networkAccess") is not False
                 or thread.get("model") != "gpt-6-astra" or thread.get("reasoningEffort") != "high"):
             raise ValueError("CODEX_ISOLATION_UNVERIFIED: fresh read-only thread contract differs")
+        environments = thread["thread"].get("environments")
+        if (not isinstance(environments, list) or len(environments) != 1
+                or environments[0].get("environmentId") != "local"
+                or Path(environments[0]["cwd"]).resolve() != clone
+                or [Path(path).resolve() for path in environments[0].get("runtimeWorkspaceRoots", [])] != [clone]):
+            raise ValueError("CODEX_ISOLATION_UNVERIFIED: exact local review environment unavailable")
         thread_id, inventory, cursor = thread["thread"]["id"], [], None
         while True:
             page = process.rpc("mcpServerStatus/list", {"threadId": thread_id,
@@ -277,11 +295,26 @@ def codex_prepare(executable, clone, directory, timeout):
         app_states = [{"id": app["id"], "enabled": app.get("enabled"), "callable": app.get("callable")}
                       for app in apps["apps"]]
         process.retain({"tool_inventory": {"mcp_servers": inventory, "apps": app_states}})
-        if any(server.get("tools") for server in inventory) or any(app["callable"] is not False for app in app_states):
+        if (any(server.get("runtimeStatus") != "disabled" or server.get("tools") or server.get("resources")
+                or server.get("resourceTemplates") for server in inventory)
+                or any(app["callable"] is not False for app in app_states)):
             raise ValueError("CODEX_ISOLATION_UNVERIFIED: native or implicit external tool catalogue remains")
+        # These built-ins enumerate the active connection set, not local-only
+        # metadata. The cited manager filters disabled servers before insertion.
+        # Permit empty enumeration only after the measured set has no connections.
+        process.intrinsic_discovery = version == DISCOVERY_VERSION
+        intrinsic_inventory = {"enabled": process.intrinsic_discovery, "runtime_version": version,
+            "source_version": DISCOVERY_VERSION, "server": "codex", "tools": list(DISCOVERY_TOOLS),
+            "arguments": "only omitted/null/empty server and cursor", "active_connections": 0,
+            "sources": [DISCOVERY_SOURCE + "core/src/tools/handlers/mcp_resource/list_mcp_resources.rs#L80",
+                        DISCOVERY_SOURCE + "core/src/tools/handlers/mcp_resource/list_mcp_resource_templates.rs#L80",
+                        DISCOVERY_SOURCE + "codex-mcp/src/connection_manager.rs#L330",
+                        DISCOVERY_SOURCE + "codex-mcp/src/connection_manager/resources.rs#L38"]}
         config["thread"] = {key: thread.get(key) for key in
                             ("cwd", "sandbox", "approvalPolicy", "model", "reasoningEffort", "instructionSources")}
-        return process, thread_id, config, {"mcp_servers": inventory, "apps": app_states}
+        config["thread"]["environments"] = environments
+        return process, thread_id, config, {"mcp_servers": inventory, "apps": app_states,
+                                           "intrinsic_discovery": intrinsic_inventory}
     except BaseException:
         process.finish(False)
         raise
@@ -394,8 +427,10 @@ def launch(root, candidate, base, author_session_id, runtime, timeout=600):
     process, launch_id, status, error = None, None, None, None
     response_path = directory / "review-response.json"
     try:
-        prepare = codex_prepare if runtime == "codex" else claude_prepare
-        process, session, config, inventory = prepare(executable, clone, directory, timeout)
+        if runtime == "codex":
+            process, session, config, inventory = codex_prepare(executable, clone, directory, timeout, version=version)
+        else:
+            process, session, config, inventory = claude_prepare(executable, clone, directory, timeout)
         config.update(runtime=runtime, version=version, command=process.command, candidate_sha=candidate,
                       environment_variables=sorted(environment()), credential_confidentiality=False)
         evidence = []
