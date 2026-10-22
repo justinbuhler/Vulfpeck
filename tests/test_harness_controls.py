@@ -49,6 +49,7 @@ EXPECTED = {
     ("SessionStart", "startup", "codegraph_freshness.py", "advisory"),
     ("SessionStart", "startup", "harness_doctor.py", "advisory"),
     ("PreToolUse", "Bash", "queue_guard.py", "advisory"),
+    ("PreToolUse", "Bash", "verify_commit_landed.py", "gate"),
     ("SubagentStart", "", "readonly_guard.py", "advisory"),
     ("SubagentStop", "", "readonly_guard.py", "advisory"),
     ("Stop", "", "session_guard.py", "advisory"),
@@ -112,6 +113,11 @@ for event, matcher, script, kind in sorted(EXPECTED):
     check(f"{script} exists", path.is_file(), str(path))
     _, timeout = REG.get((event, matcher, script), ("", None))
     check(f"{event} {script} declares a timeout", isinstance(timeout, int) and timeout > 0)
+    definition = next(h for g in json.loads(SETTINGS.read_text())["hooks"][event]
+                      if g.get("matcher", "") == matcher for h in g["hooks"]
+                      if script_of(h["command"]) == script)
+    check(f"{event} {script} declares runtime failure direction",
+          definition.get("onFailure") == "block" if kind == "gate" else "onFailure" not in definition)
 
 
 def command(event, matcher, script):

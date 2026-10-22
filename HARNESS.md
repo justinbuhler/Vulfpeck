@@ -13,6 +13,7 @@ It is project-agnostic. A repository describes how it builds in `harness.toml`; 
 | Claude Code hooks | `.claude/settings.json`, `.claude/hooks/*.py` | Model routing on `Agent` calls, commit-landed verification, mapped test on edit, blast-radius advisory, CodeGraph freshness |
 | Codex Smartsheet policy | `.codex/config.toml`, `tests/test_codex_permissions.py` | Positive native read-tool allowlist and duplicate app disabled; credentials remain in user configuration |
 | Codex model routing | `.codex/agents/*.toml`, `.codex/hooks.json`, `.claude/hooks/model_router.py` | Native profiles pin GPT model and effort; spawn gate requires a known role and matching explicit overrides |
+| Codex event adapter | `scripts/native_hook_adapter.py`, `.codex/hooks.json` | Per-file patch policy, shell workdir normalization and stable lifecycle IDs reuse the existing policy scripts |
 | Agent and review tooling | `.claude/agents/*`, `.claude/skills/land`, `.claude/workflows/*`, `.claude/harness/agent_harness.py`, `mutants/` | Independent re-derivation, live-API proof, per-task worktrees with a serialized commit queue, mutation testing |
 
 ### One gate, three callers
@@ -31,7 +32,7 @@ None of the three spells a command, so they cannot drift apart.
 | `model_router.py` | PreToolUse `Agent` | Denies a model that does not match the `subagent_type` tier (Explore: Haiku; `*-engineer`/simplifiers: Sonnet; `reviewer-*`, Plan, dual-derive, pr-review-toolkit: Opus or Fable) |
 | `model_router.py --runtime codex` | Codex PreToolUse `spawn_agent` | Requires native `agent_type`: explorer uses Luna/high, executor uses 6.1 Sol/medium, reviewer and planner use Astra/high; mismatched explicit model or effort is denied |
 | `blast_radius_advisory.py` | PreToolUse `Edit\|Write` | Advisory only. When the edit touches a file in `hooks.watched_files` or `hooks.watched_dirs`, it prints which tracked files also spell the literals being changed |
-| `verify_commit_landed.py` | PostToolUse `Bash` | Blocks when a `git commit` printed no `[branch sha]` or HEAD is not that sha (catches index.lock races and exit codes masked by a later command) |
+| `verify_commit_landed.py` | PreToolUse / PostToolUse `Bash` | Records before-state using stable session/call IDs; checks HEAD, intended branch and status after plain, git -C and RTK commits, including quiet output |
 | `test_for_edited_module.py` | PostToolUse `Edit\|Write` | Runs the test `[[mapped_tests]]` maps to the edited file and exits 2 on failure or on an unreadable `harness.toml` |
 | `codegraph_freshness.py` | UserPromptSubmit / SessionStart / Git checkout and merge | Reports CG-01..04 against the event checkout; prepares and verifies checkout-local indexes only in repositories already opted in |
 | `readonly_guard.py` | SubagentStart / SubagentStop | When an agent matching `[roles] read_only` starts, snapshots the main checkout (HEAD, checked-out branch, local `main`, every ref, the local git config, `info/exclude`, `.git/hooks`, the worktree list, full status) and records the snapshot's hash in the decision log. At its stop, any difference blocks the stop once with the changes, then lets it stop and tells the parent. A branch checked out in another worktree may only advance, and its advance is reported; land a reviewed candidate with `land.sh --expect <reviewed sha>` so an advance is never landed unreviewed. A snapshot that no longer matches its logged hash, or a missing, broken or doubled log, blocks. A stop with no snapshot is reported as unverified |
@@ -40,7 +41,20 @@ None of the three spells a command, so they cannot drift apart.
 | `adr_gate.py` | PreToolUse and PostToolUse `Edit\|Write` | In the session's own project only, denies creating (by Write, or Edit of a missing file) a file matching `adr.require_for` unless a proposed or accepted ADR in `docs/adr/` names it; exits 2 when an ADR just written does not parse. The land enforces the same coverage for files created any other way (`tests/test_adr.py`) |
 | `harness_doctor.py` | SessionStart | Advisory. Reports missing prerequisites (Python 3.11+, uv, rsync, flock/lockf, `core.hooksPath`) and user-level hooks that can undercut the harness: SubagentStart context injection, PreToolUse Bash hooks that can deny `git push` or `gh pr` |
 
-**Failure direction.** Claude Code lets a tool call proceed when a hook exits with anything other than 0 or 2, so a crashing gate looks like a gate with nothing to deny. Every gate's registered command therefore ends in `|| { ...; exit 2; }`, turning a crash or a missing file into a block; advisory hooks end in `|| true` so they never block. `tests/test_harness_controls.py` keeps its own inventory of every registration, runs each command exactly as registered, gives each gate a deny and an allow canary, and proves both failure directions by swapping in a crashing script. A hook that exceeds its timeout still fails open; keep gates fast (the canaries assert under half the timeout).
+**Failure direction.** Claude gates use `onFailure: "block"`, supported from Claude Code 2.1.295, as well as crash-to-deny wrappers.
+Advisories retain `|| true` and their existing normal output semantics.
+The Codex adapter supervises policy subprocesses with a deadline inside its native timeout and turns gate crashes, missing files, malformed output and inner timeouts into explicit denials.
+Codex 0.163.0 still treats an outer hook timeout or invalid outer output as a failed hook without blocking the tool.
+An untrusted hook definition is also skipped.
+Doctor reports these restrictions; no wrapper proves enforcement when the runtime never executes it.
+`tests/test_harness_controls.py` and `tests/test_native_hook_adapter.py` exercise the registered commands and controlled failures; actual client execution canaries remain separate evidence.
+
+The native adapter expands every patch operation before policy runs and includes both sides of a rename.
+It rejects malformed patches, path traversal and symlink escapes from the checkout.
+Native shell arguments use `workdir` when supplied, while native session, tool-call and agent IDs remain unchanged.
+Reviewer, planner and explorer lifecycle roles map to the existing read-only policy names; these drift snapshots are detectors, not shell or credential isolation.
+Run `uv run python scripts/harness_doctor.py --runtime both --probe-native --json` to inspect effective Codex layers and exact-definition trust without a model turn.
+Claude hook activation still needs the client hook inventory and live event canary; its declared settings and supported version alone are insufficient.
 
 Codex discovers standalone project agent files natively; no extra orchestration runner or legacy `config_file` table is required.
 The project routing hook resolves its script from the Git root and has a crash-to-deny wrapper.
@@ -128,7 +142,9 @@ macOS or Linux.
 5. **Publication is manual.** `land.sh` stops at local `main`; nothing pushes the branch or opens the pull request. Add a publish step (`git push -u origin <branch>`, `gh pr create`, `gh pr merge --auto`) so CI, not a human, is the last gate before `origin/main`.
 6. **The read-only check is tamper-evident, not tamper-proof.** An agent runs as the user and can reach every file the user can, including the snapshot and the decision log. Rewriting the snapshot, deleting or breaking the log, or appending a second snapshot row is caught, because the stop checks the snapshot against the one row the start logged for that run. An agent that deliberately forges entries through `scripts/harness_events.py` itself (a fake finished stop, then a fake snapshot) is not caught: nothing running as the same user can stop that. Real isolation needs an OS sandbox or a separate user. **Read-only agents are also checked only against the main checkout.** `readonly_guard.py` cannot see a reviewer writing outside the repository, or into another worktree. Run reviewers with `isolation: "worktree"` so anything they change is discarded; whether a workflow `agent()` call can request that is unverified.
 7. **Stop lints the whole tree.** `session_guard.py` runs the configured lint over the repository, not only the files this session changed, so a pre-existing lint failure blocks once in every session that edits anything. Lint is quick; scoping it would need a per-tool file list in `harness.toml`.
-8. **`verify_commit_landed.py` false positive.** It needs git's `[branch sha]` line, so `git commit -q` (or a wrapper that condenses git output) is blocked although the commit landed. The land skill forbids `-q`; a sturdier check reads `git reflog -1` instead of the output.
+8. **Commit proof scope.** Quiet and RTK-filtered commits require the paired PreToolUse receipt; post-tool output alone is insufficient.
+   Supported forms are plain Git, git -C, and RTK Git/proxy commands addressing one checkout per tool call.
+   Arbitrary shell wrappers and git-dir/work-tree overrides do not supply supported proof.
 9. **Model routing covers one plugin set.** Agent types it does not list pass with any model. List the types each installation uses in both `model_router.py` and its test.
 
 ### For auditability

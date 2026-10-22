@@ -44,3 +44,23 @@ The lander's hard-coded input provisioning was replaced by `land.copy_untracked`
 
 Fixed: the mutation runner crashed with `ZeroDivisionError` on an empty corpus, wrote its ledger at the repository root while `CLAUDE.md` named `mutants/`, and missed indented `N passed` lines (199 of 488 checks counted). A `CLAUDE_VERIFY_ON_STOP` setting had no consumer and was removed.
 Measured: suite and lint pass in a clean environment with no git identity and no `codegraph`; `land.sh` landed a branch end to end in a scratch clone; the runner killed M001.
+
+## 2026-10-22 - native event adapter and commit proof
+
+Added per-file native patch adaptation with rename coverage, path validation, shell execution workdir handling and stable lifecycle identities.
+Existing policy scripts still decide ADR, test, routing, snapshot and session outcomes.
+The adapter bounds policy subprocesses and kills their process groups on inner timeouts, then emits explicit gate denials; advisory crashes continue.
+Claude gate registrations now use onFailure:block, which installed Claude 2.1.305 supports according to the documented 2.1.295 floor.
+Installed Codex 0.163.0 source leaves outer command-hook timeout, invalid output and untrusted definitions non-blocking; this is a runtime restriction, not repaired by the adapter.
+The real local doctor config/read and hooks/list probe is retained at tmp/json/native-doctor-phase1.json.
+Its effective configuration response is restricted to safe layer metadata; it is not a byte-for-byte config response and contains no copied credential configuration.
+The probe found real user project trust disabled and the new project registrations absent.
+No user or global trust/configuration was modified.
+Paired commit receipts now capture branch, HEAD and status before and after supported plain, git-C and RTK commands, so quiet output does not hide failure.
+Receipt command identity is hashed rather than storing shell command text.
+The native review launcher remains pending the integration receipt core and real isolation canary.
+
+The documented worktree_capacity.py helper was absent from both ~/.claude/scripts and ~/.claude/skills/process/worktree-agent/scripts.
+Work continued in the existing isolated candidate checkout; no checkout was allocated.
+Explicit git -C addresses the intended checkout when global home-cwd hook detection otherwise reports not-a-repo.
+No global toolkit script was changed.

@@ -82,8 +82,8 @@ with tempfile.TemporaryDirectory() as tmp:
           blocked(tmp, 'rg "git commit" ENGINEERING_LOG.md', "12: git commit --amend") == "")
     check("a dry run is ignored",
           blocked(tmp, "git commit --dry-run", "nothing to commit") == "")
-    check("a commit into another repository is not judged against this HEAD",
-          blocked(tmp, "git -C /elsewhere commit -m x", "") == "")
+    check("an unreadable git-C target is explicitly unverified",
+          "cannot be read" in blocked(tmp, "git -C /elsewhere commit -m x", ""))
 
     # A control that cannot read its input must not read as "nothing wrong".
     quiet = subprocess.run([sys.executable, str(HOOK)], input="not json",
@@ -117,6 +117,39 @@ with tempfile.TemporaryDirectory() as tmp:
         del os.environ["GIT_DIR"]
     check("ENV carries no GIT_ variable through to a subprocess",
           not [k for k in ENV if k.startswith("GIT_")])
+
+    def event_hook(kind, command, call="quiet", response=""):
+        """Run a paired native or Claude commit lifecycle against real Git state."""
+        event = {"hook_event_name": kind, "session_id": "commit-session", "tool_use_id": call,
+                 "cwd": str(Path(tmp).parent), "tool_name": "Bash",
+                 "tool_input": {"command": command}, "tool_response": {"stdout": response}}
+        return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(event), cwd=tmp,
+                              capture_output=True, text=True, env=ENV)
+
+    for wrapper in ("git", "rtk proxy git", "rtk git"):
+        command = f'{wrapper} -C "{tmp}" commit -q -m quiet'
+        call = wrapper.replace(" ", "-")
+        (Path(tmp) / "a.txt").write_text(call + "\n")
+        subprocess.run(["git", "-C", tmp, "add", "a.txt"], check=True, env=ENV)
+        pre = event_hook("PreToolUse", command, call)
+        check(f"{wrapper} quiet preflight captures independent state", pre.returncode == 0 and not pre.stdout, pre.stdout + pre.stderr)
+        subprocess.run(["git", "-C", tmp, "-c", "user.email=t@t", "-c", "user.name=t",
+                        "commit", "-q", "-m", "quiet"], check=True, env=ENV)
+        post = event_hook("PostToolUse", command, call)
+        check(f"{wrapper} quiet commit is proved without an output line", post.returncode == 0 and not post.stdout,
+              post.stdout + post.stderr)
+    command = f'rtk proxy git -C "{tmp}" commit -q -m masked; echo done'
+    event_hook("PreToolUse", command, "masked")
+    post = event_hook("PostToolUse", command, "masked", "done")
+    check("quiet masked failure cannot reuse an unchanged HEAD", "did not advance" in post.stdout, post.stdout)
+    missing = event_hook("PostToolUse", f'git -C "{tmp}" commit -q -m quiet', "never-preflighted")
+    check("a native post-tool call cannot invent its missing preflight", "receipt is missing" in missing.stdout)
+    receipts = [json.loads(p.read_text()) for p in (Path(tmp) / ".git/harness/commits").glob("*.json")]
+    check("quiet proof retains status and intended branch evidence",
+          any(r.get("verified") and "status" in r["after"] and r["after"]["branch_head"] == r["after"]["head"]
+              for r in receipts))
+    check("commit receipts retain command hashes instead of command text",
+          all("command" not in r and len(r["command_sha256"]) == 64 for r in receipts))
 
 # ── the parser, at the shapes git actually prints ─────────────────────────────
 check("the root commit line still yields its sha",
