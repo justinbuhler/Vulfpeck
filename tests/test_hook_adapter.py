@@ -612,5 +612,39 @@ with tempfile.TemporaryDirectory() as raw:
         finally:
             adapter.write_text(original)
 
+
+# --- a guard or a stdin that outlives the hook timeout must block a gate -------------
+import time  # noqa: E402
+
+import render_hooks  # noqa: E402
+
+check("the adapter's budget is about 1s under the registered timeout", ha.budget(10) == 9.0 and ha.budget(2) == 1.0)
+check("no --timeout means no deadline", ha.budget(None) is None)
+env = {k: v for k, v in os.environ.items() if k not in GIT_ENV}
+for runtime, event in (("codex", "PreToolUse"), ("gemini", "BeforeTool")):
+    for kind, want_rc in (("gate", 2), ("advisory", 0)):
+        entry = {"command": "sleep 30", "kind": kind, "timeout": 3}
+        command = render_hooks.adapted(entry, runtime, event)
+        began = time.monotonic()
+        done = subprocess.run(["bash", "-c", command], input="{}", capture_output=True, text=True, env=env, cwd=str(ROOT),
+                              timeout=20)
+        took = time.monotonic() - began
+        check(f"{runtime} {kind}: a guard that sleeps past the timeout ends the hook with rc {want_rc} before it",
+              done.returncode == want_rc and took < 3.0, f"rc={done.returncode} {took:.1f}s {done.stderr}")
+        check(f"{runtime} {kind}: the timeout is reported", "before the hook timeout" in done.stderr or kind == "advisory",
+              done.stderr)
+    entry = {"command": "true", "kind": "gate", "timeout": 3}
+    proc = subprocess.Popen(["bash", "-c", render_hooks.adapted(entry, runtime, event)], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=str(ROOT))
+    began = time.monotonic()
+    try:
+        proc.wait(timeout=10)
+        err = proc.stderr.read()
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        err = "HUNG"
+    check(f"{runtime} gate: a stdin that never closes ends the hook with rc 2 before the timeout",
+          proc.returncode == 2 and time.monotonic() - began < 3.0 and "stdin was not closed" in err, f"rc={proc.returncode} {err}")
+
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

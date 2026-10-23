@@ -62,7 +62,7 @@ def translate_matcher(event, matcher, table):
 
 def adapted(entry, runtime, native_event):
     """Return the registered command that runs the entry's guard through the adapter."""
-    command = f"{ADAPTER} --runtime {runtime} --event {native_event} -- {shlex.quote(entry['command'])}"
+    command = f"{ADAPTER} --timeout {entry['timeout']} --runtime {runtime} --event {native_event} -- {shlex.quote(entry['command'])}"
     if entry["kind"] == "gate":
         return (
             command

@@ -161,6 +161,24 @@ def adapted_registrations(path, runtime):
     return out
 
 
+def registration_list(path):
+    """Return every (event, matcher, script) in a rendered file as a list, duplicates kept."""
+    out = []
+    for event, groups in json.loads(path.read_text())["hooks"].items():
+        for group in groups:
+            for hook in group["hooks"]:
+                scripts = [x for x in re.findall(r"[\w.-]+\.py\b", hook["command"]) if x != "hook_adapter.py"]
+                out.append((event, group.get("matcher", ""), scripts[0]))
+    return sorted(out)
+
+
+for label, listed, expected in (("settings.json", registration_list(SETTINGS), EXPECTED),
+                                ("hooks.json", registration_list(ROOT / ".codex" / "hooks.json"), CODEX_EXPECTED),
+                                ("gemini settings.json", registration_list(ROOT / ".gemini" / "settings.json"),
+                                 GEMINI_EXPECTED)):
+    check(f"{label} lists each expected hook exactly once (a duplicate or missing entry fails)",
+          listed == sorted((e, m, s_) for e, m, s_, _ in expected), str(listed))
+
 for runtime, path, expected in (("codex", ROOT / ".codex" / "hooks.json", CODEX_EXPECTED),
                                 ("gemini", ROOT / ".gemini" / "settings.json", GEMINI_EXPECTED)):
     reg = adapted_registrations(path, runtime)
@@ -172,7 +190,8 @@ for runtime, path, expected in (("codex", ROOT / ".codex" / "hooks.json", CODEX_
             continue
         cmd, timeout = reg[(event, matcher, script)]
         check(f"{runtime} {event} {script} runs through hook_adapter for {runtime}",
-              f"hook_adapter.py\" --runtime {runtime} --event {event} -- " in cmd, cmd)
+              f"hook_adapter.py\" --timeout {timeout // (1 if runtime == 'codex' else 1000)} "
+              f"--runtime {runtime} --event {event} -- " in cmd, cmd)
         tail = cmd.rsplit("' ", 1)[-1]
         if kind == "gate":
             check(f"{runtime} {event} gate {script} fails closed", tail.endswith("exit 2; }") and "|| true" not in tail, tail)

@@ -29,8 +29,11 @@ The apply_patch parser is adapted from vexjoy-agent's codex-hook-adapter.py.
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -351,29 +354,54 @@ def emit(runtime, event, result):
 
 
 # --- run -------------------------------------------------------------------------
-def run_guard(command, payload):
-    """Run the guard command on one Claude-shaped payload; return a Result."""
-    cwd = (
-        payload.get("cwd")
-        if isinstance(payload.get("cwd"), str) and os.path.isdir(payload["cwd"])
-        else str(REPO)
-    )
+def budget(timeout):
+    """Return the seconds the adapter may use of a registered timeout: about 1s under it.
+
+    A runtime that kills a hook at its timeout lets the call proceed, so a gate must
+    answer first; None (no --timeout) means no deadline.
+    """
+    return None if timeout is None else max(timeout - 1.0, timeout / 2)
+
+
+def read_stdin(deadline):
+    """Read stdin to EOF within `deadline` seconds (None: no limit) or raise AdapterError."""
+    if deadline is None:
+        return sys.stdin.read()
+    box = []
+    reader = threading.Thread(target=lambda: box.append(sys.stdin.read()), daemon=True)
+    reader.start()
+    reader.join(deadline)
+    if reader.is_alive():
+        raise AdapterError(f"stdin was not closed within {deadline:g}s")
+    return box[0]
+
+
+def run_guard(command, payload, deadline=None):
+    """Run the guard command on one Claude-shaped payload; return a Result.
+
+    `deadline` is a time.monotonic() instant; past it the guard's process group is
+    killed and AdapterError is raised.
+    """
+    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) and os.path.isdir(payload["cwd"]) else str(REPO)
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(REPO)}
-    done = subprocess.run(
-        ["bash", "-c", command],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        cwd=cwd,
-        env=env,
-        check=False,
-    )
-    if done.stderr and done.returncode == 0:
-        print(done.stderr, file=sys.stderr, end="")
-    return interpret(done.returncode, done.stdout, done.stderr)
+    proc = subprocess.Popen(["bash", "-c", command], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, cwd=cwd, env=env, start_new_session=True)
+    try:
+        stdout, stderr = proc.communicate(json.dumps(payload),
+                                          timeout=None if deadline is None else max(deadline - time.monotonic(), 0.01))
+    except subprocess.TimeoutExpired as exc:
+        os.killpg(proc.pid, signal.SIGKILL)
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+        raise AdapterError("guard did not answer before the hook timeout") from exc
+    if stderr and proc.returncode == 0:
+        print(stderr, file=sys.stderr, end="")
+    return interpret(proc.returncode, stdout, stderr)
 
 
-def handle(runtime, native_event, raw, command):
+def handle(runtime, native_event, raw, command, deadline=None):
     """Translate, run the guard and return the native output object."""
     if runtime == "gemini":
         if native_event not in GEMINI_EVENTS:
@@ -387,7 +415,7 @@ def handle(runtime, native_event, raw, command):
         native = json.loads(raw)
     except ValueError as exc:
         raise AdapterError(f"payload is not JSON: {exc}") from exc
-    result = merge([run_guard(command, p) for p in to_claude(runtime, event, native)])
+    result = merge([run_guard(command, p, deadline) for p in to_claude(runtime, event, native)])
     return emit(runtime, event, result)
 
 
@@ -395,14 +423,19 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--runtime", choices=("codex", "gemini"), required=True)
     parser.add_argument("--event", required=True, help="the runtime's own event name")
+    parser.add_argument("--timeout", type=float, default=None, help="the registered hook timeout, in seconds")
     parser.add_argument("guard", nargs=argparse.REMAINDER, help="-- <guard command>")
     args = parser.parse_args(argv)
     guard = args.guard[1:] if args.guard[:1] == ["--"] else args.guard
     if not guard:
         print("hook_adapter: no guard command after --", file=sys.stderr)
         return 1
+    started = time.monotonic()
+    limit = budget(args.timeout)
     try:
-        output = handle(args.runtime, args.event, sys.stdin.read(), " ".join(guard))
+        raw = read_stdin(limit)
+        deadline = None if limit is None else started + limit
+        output = handle(args.runtime, args.event, raw, " ".join(guard), deadline)
     except AdapterError as exc:
         print(f"hook_adapter: {exc}", file=sys.stderr)
         return 1
