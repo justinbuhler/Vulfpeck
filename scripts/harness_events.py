@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Append-only, hash-chained record of the decisions the harness's gates make.
+"""Append-only, size-rotated record of the decisions the harness's gates make.
 
 A log of denials alone cannot be audited: a gate that silently started allowing
 everything leaves an empty log, which reads the same as a gate with nothing to
@@ -7,30 +7,26 @@ deny. So the low-volume gates record every decision, allow and deny alike: each
 Agent call (require_agent_model, model_router), each verified commit
 (verify_commit_landed), each land (scripts/land.sh).
 
-Each line carries the sha256 of the line before it, so an edited or deleted line
-breaks the chain and `verify` names where. That makes the log tamper-evident,
-not tamper-proof: whoever can write the file can rewrite the whole chain.
+One plain JSON object per line. When the file reaches MAX_BYTES it is moved to
+`events.jsonl.1`, replacing the previous backup, so the log holds at most about
+twice that.
 
 Rules every caller relies on:
   - record() never raises and never prints to stdout. Logging must not change a
     decision, and a hook's stdout is its decision.
   - No prompts, commands or tool output are recorded; only identifiers, a reason
     code and a short subject (an agent type and model, a SHA).
-  - One gate reads this log, for integrity only: .claude/hooks/readonly_guard.py
-    checks the snapshot it wrote at an agent's start against the hash it
-    logged then. No gate derives a verdict from earlier verdicts, which would
-    be a gate checking itself.
+  - No gate reads this log. A gate deriving a verdict from earlier verdicts
+    would be a gate checking itself.
 
 The log lives in the repository's common git directory, shared by every worktree
 and never committed: <git common dir>/harness/events.jsonl.
 
-    python3 scripts/harness_events.py verify        # exit 1 if the chain is broken
     python3 scripts/harness_events.py tail [-n N]   # last N records
     python3 scripts/harness_events.py record --hook land --decision landed --subject SHA
 """
 import argparse
 import fcntl
-import hashlib
 import json
 import os
 import subprocess
@@ -39,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA = 1
-GENESIS = "0" * 64
+MAX_BYTES = 5 * 1024 * 1024  # not in harness.toml: hooks run copied beside this file, without harness_config
 SUBJECT_MAX = 160
 
 
@@ -65,20 +61,10 @@ def log_path(cwd=None):
     return Path(done.stdout.strip()) / "harness" / "events.jsonl"
 
 
-def line_hash(line):
-    return hashlib.sha256(line.rstrip("\n").encode("utf-8")).hexdigest()
-
-
-def last_line(handle):
-    """Return the final line of an open binary file, or "" when it is empty."""
-    handle.seek(0, os.SEEK_END)
-    end = handle.tell()
-    if end == 0:
-        return ""
-    size = min(end, 65536)
-    handle.seek(end - size)
-    tail = handle.read(size).decode("utf-8", errors="replace").rstrip("\n")
-    return tail.rsplit("\n", 1)[-1]
+def rotate(path):
+    """Move a log at or over MAX_BYTES to `<path>.1`, replacing the old backup."""
+    if path.is_file() and path.stat().st_size >= MAX_BYTES:
+        os.replace(path, path.with_name(path.name + ".1"))
 
 
 def record(hook, decision, reason="", subject="", payload=None, cwd=None):
@@ -110,16 +96,12 @@ def record(hook, decision, reason="", subject="", payload=None, cwd=None):
             "agent_id": str(payload.get("agent_id") or ""),
             "agent_type": str(payload.get("agent_type") or ""),
         }
-        with open(path, "a+b") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-            try:
-                previous = last_line(handle)
-                event["prev"] = line_hash(previous) if previous else GENESIS
-                handle.seek(0, os.SEEK_END)
+        # Lock a sidecar, not the log: rotation replaces the log's inode under a held lock.
+        with open(path.with_name(path.name + ".lock"), "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            rotate(path)
+            with open(path, "ab") as handle:
                 handle.write((json.dumps(event, sort_keys=True) + "\n").encode("utf-8"))
-                handle.flush()
-            finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
         return True
     except Exception as exc:  # logging must never change a decision
         try:
@@ -129,27 +111,9 @@ def record(hook, decision, reason="", subject="", payload=None, cwd=None):
         return False
 
 
-def verify(path):
-    """Return (records checked, first broken line number or None, why)."""
-    if not path.is_file():
-        return 0, None, "no log"
-    expected = GENESIS
-    lines = path.read_text(encoding="utf-8").splitlines()
-    for number, line in enumerate(lines, 1):
-        try:
-            event = json.loads(line)
-        except ValueError:
-            return number - 1, number, "not JSON"
-        if event.get("prev") != expected:
-            return number - 1, number, "prev does not match the line before it"
-        expected = line_hash(line)
-    return len(lines), None, ""
-
-
 def main():
     parser = argparse.ArgumentParser(description="Inspect the harness decision log.")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("verify")
     tail = sub.add_parser("tail")
     tail.add_argument("-n", type=int, default=20)
     rec = sub.add_parser("record", help="append one decision (for shell controls)")
@@ -166,13 +130,6 @@ def main():
     if path is None:
         print("not inside a git repository", file=sys.stderr)
         return 2
-    if args.cmd == "verify":
-        checked, broken, why = verify(path)
-        if broken:
-            print(f"✗ {path}: chain broken at line {broken} ({why}); {checked} record(s) before it verify")
-            return 1
-        print(f"✓ {path}: {checked} record(s), chain intact")
-        return 0
     if path.is_file():
         for line in path.read_text(encoding="utf-8").splitlines()[-args.n:]:
             print(line)

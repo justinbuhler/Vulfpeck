@@ -1,4 +1,4 @@
-"""The harness decision log records allows and denies, chains, and never decides.
+"""The harness decision log records allows and denies, rotates by size, and never decides.
 
 Expectations are literals (CLAUDE.md Rule 11). Every write goes to a scratch
 HARNESS_EVENTS_LOG; nothing here touches the real record in .git/harness/.
@@ -37,25 +37,41 @@ def rows(path):
     return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
 
-# --- chain ---------------------------------------------------------------------
-log = fresh("chain")
+# --- flat lines ----------------------------------------------------------------
+log = fresh("flat")
 for i in range(3):
     harness_events.record("model_router", "allow", "tier-match", f"Explore/haiku#{i}",
                           {"session_id": "s1", "agent_id": "a1", "agent_type": "reviewer-code"})
 got = rows(log)
 check("three records are written", len(got) == 3)
-check("the first record chains from genesis", got[0]["prev"] == "0" * 64)
-check("each record chains from the line before it",
-      got[1]["prev"] == harness_events.line_hash(log.read_text().splitlines()[0]))
+check("a record has no hash link", all("prev" not in row for row in got))
+check("the subjects are kept in order", [r["subject"] for r in got] == [f"Explore/haiku#{i}" for i in range(3)])
 check("identity fields come from the hook payload",
       (got[0]["session"], got[0]["agent_id"], got[0]["agent_type"]) == ("s1", "a1", "reviewer-code"))
-check("an intact chain verifies", harness_events.verify(log)[1] is None)
+check("the verify subcommand is gone",
+      subprocess.run([sys.executable, str(ROOT / "scripts" / "harness_events.py"), "verify"],
+                     capture_output=True, text=True, env=dict(os.environ)).returncode == 2)
+check("the module has no chain helpers",
+      not any(hasattr(harness_events, name) for name in ("verify", "line_hash", "GENESIS")))
 
-lines = log.read_text().splitlines()
-log.write_text("\n".join([lines[0], lines[1].replace("#1", "#9"), lines[2]]) + "\n")
-check("an edited record breaks the chain at the line after it", harness_events.verify(log)[1] == 3)
-log.write_text("\n".join([lines[0], lines[2]]) + "\n")
-check("a deleted record breaks the chain", harness_events.verify(log)[1] == 2)
+# --- rotation --------------------------------------------------------------------
+log = fresh("rotate")
+backup = log.with_name(log.name + ".1")
+harness_events.MAX_BYTES = 600
+for i in range(6):
+    harness_events.record("h", "allow", "", f"n{i:02d}")
+harness_events.MAX_BYTES = 5 * 1024 * 1024
+check("a log over the cap is moved to .1", backup.is_file() and log.is_file())
+check("rotation keeps every record across the two files",
+      [r["subject"] for r in rows(backup) + rows(log)] == [f"n{i:02d}" for i in range(6)])
+check("a rotated file stays under the cap plus one record", backup.stat().st_size < 600 + 400, str(backup.stat().st_size))
+log.write_text("x" * 500)
+backup.write_text("old backup")
+harness_events.MAX_BYTES = 400
+harness_events.record("h", "allow", "", "after")
+harness_events.MAX_BYTES = 5 * 1024 * 1024
+check("a second rotation replaces the backup", backup.read_text() == "x" * 500)
+check("the new log starts with the new record", [r["subject"] for r in rows(log)] == ["after"])
 
 # --- what is recorded is bounded ----------------------------------------------
 log = fresh("bounded")
@@ -64,10 +80,10 @@ row = rows(log)[0]
 check("reason and subject are truncated", len(row["reason"]) == 80 and len(row["subject"]) == 160)
 check("a record carries exactly the declared fields",
       set(row) == {"v", "ts", "hook", "decision", "reason", "subject", "session",
-                   "agent_id", "agent_type", "prev"}, str(sorted(row)))
+                   "agent_id", "agent_type"}, str(sorted(row)))
 
 
-# --- concurrent writers keep one chain -----------------------------------------
+# --- concurrent writers lose nothing -----------------------------------------
 def writer(args):
     path, n = args
     os.environ["HARNESS_EVENTS_LOG"] = path
@@ -79,8 +95,7 @@ log = fresh("concurrent")
 with multiprocessing.get_context("fork").Pool(8) as pool:
     pool.map(writer, [(str(log), 25)] * 8)
 check("200 concurrent appends are all present", len(rows(log)) == 200, str(len(rows(log))))
-check("concurrent appends still form one intact chain", harness_events.verify(log)[1] is None,
-      str(harness_events.verify(log)))
+check("every concurrent line is whole JSON", all(isinstance(r, dict) for r in rows(log)))
 
 # --- record() never raises, never prints to stdout -------------------------------
 blocker = SCRATCH / "a-file"

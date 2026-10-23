@@ -24,7 +24,7 @@ To change a decision, write a new ADR with `Supersedes: NNNN` and mark the old o
 - 2026-10-22 — [0004. Agent model routing is a table, stated per call](0004-agent-model-routing-is-a-table-stated-per-call.md) — proposed
 - 2026-10-22 — [0005. Read-only agents are checked by snapshot, not by command blocklist](0005-read-only-agents-are-checked-by-snapshot.md) — proposed
 - 2026-10-22 — [0006. Task worktrees land through one serialized queue](0006-task-worktrees-land-through-one-queue.md) — proposed
-- 2026-10-22 — [0007. Gate decisions go into a hash-chained local log](0007-gate-decisions-go-into-a-hash-chained-local-log.md) — proposed
+- 2026-10-22 — [0007. Gate decisions go into a rotated local log](0007-gate-decisions-go-into-a-rotated-local-log.md) — proposed
 - 2026-10-22 — [0008. Harness hooks are proven registered; prerequisites are reported](0008-harness-hooks-are-proven-registered-and-prerequisites-reported.md) — proposed
 - 2026-10-22 — [0009. Lint before a session stops; record where it left the repository](0009-lint-before-a-session-stops.md) — proposed
 - 2026-10-22 — [0010. Mutation testing through one runner](0010-mutation-testing-through-one-runner.md) — proposed
