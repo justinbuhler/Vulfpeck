@@ -30,4 +30,5 @@ To change a decision, write a new ADR with `Supersedes: NNNN` and mark the old o
 - 2026-10-22 — [0010. Mutation testing through one runner](0010-mutation-testing-through-one-runner.md) — proposed
 - 2026-10-22 — [0011. Code intelligence and blast radius are advisory](0011-code-intelligence-hooks-are-advisory.md) — proposed
 - 2026-10-22 — [0012. GitHub setup is a dry-run-by-default script](0012-github-setup-is-a-dry-run-by-default-script.md) — proposed
+- 2026-10-23 — [0014. Skills live once in .agents/skills for every runtime](0014-skills-live-once-in-agents-skills-for-every-runtime.md) — proposed
 <!-- adr-index:end -->

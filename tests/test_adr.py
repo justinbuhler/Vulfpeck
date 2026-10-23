@@ -248,7 +248,7 @@ check("deleting the ADR README is reported, not a way to switch the index check 
 # Rule 11: the governed set is pinned here, not read back from harness.toml. Each
 # path must stay governed; narrowing adr.require_for to drop one fails this.
 MUST_BE_GOVERNED = (".claude/hooks/adr_gate.py", ".claude/hooks/lib/helper.py", ".claude/agents/dual-derive.md",
-                    ".claude/skills/land/SKILL.md", ".claude/workflows/review-changes.js",
+                    ".claude/skills/land/SKILL.md", ".agents/skills/land/SKILL.md", ".claude/workflows/review-changes.js",
                     ".claude/harness/agent_harness.py", ".githooks/pre-commit", "scripts/land.sh",
                     "scripts/sub/tool.py", "mutants/runner.py")
 repo_config = harness_config.load(ROOT)
