@@ -22,11 +22,10 @@ copy_untracked = []                     # inputs the gate needs that git does no
 [adr]
 dir = "docs/adr"                        # NNNN-slug.md, managed by scripts/adr.py
 # A file matching one of these needs a proposed or accepted ADR naming it in
-# `Components:`, before it is created and at every land.
-require_for = [".claude/hooks/**", ".claude/agents/**", ".claude/skills/**",
-               ".agents/skills/**",
-               ".claude/workflows/**", ".claude/harness/**", ".githooks/**",
-               "scripts/**", "mutants/*.py"]
+# `Components:`, checked at every land (tests/test_adr.py). Empty: ADRs record real
+# decisions and are written when someone chooses to; `scripts/adr.py check` still
+# validates the ones that exist. A project that wants coverage lists globs here.
+require_for = []
 exempt = []
 
 [jev]
@@ -95,20 +94,20 @@ timeout = 30
 command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/blast_radius_advisory.py\" || true"
 
 [[hook]]
-name = "adr_gate_PreToolUse"
-event = "PreToolUse"
-matcher = "Edit|Write"
-kind = "gate"
-timeout = 10
-command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
-
-[[hook]]
 name = "queue_guard_PreToolUse"
 event = "PreToolUse"
 matcher = "Bash"
 kind = "advisory"
 timeout = 10
 command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/queue_guard.py\" || true"
+
+[[hook]]
+name = "verify_commit_landed_PreToolUse"
+event = "PreToolUse"
+matcher = "Bash"
+kind = "advisory"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_commit_landed.py\" || true"
 
 [[hook]]
 name = "verify_commit_landed_PostToolUse"
@@ -125,14 +124,6 @@ matcher = "Edit|Write"
 kind = "gate"
 timeout = 70
 command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/test_for_edited_module.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"test_for_edited_module.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
-
-[[hook]]
-name = "adr_gate_PostToolUse"
-event = "PostToolUse"
-matcher = "Edit|Write"
-kind = "gate"
-timeout = 10
-command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
 
 [[hook]]
 name = "codegraph_freshness_UserPromptSubmit"

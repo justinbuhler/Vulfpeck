@@ -19,10 +19,10 @@ Status is one of proposed, accepted, rejected, deprecated, superseded. A
 superseded ADR names its successor in `Superseded-by:`, and the successor names
 it back in `Supersedes:`. `Components` are literal repository-relative paths, never globs.
 
-Governed files (harness.toml `adr.require_for`, minus `adr.exempt`) must each be
-named by a proposed or accepted ADR. The ADR comes first: .claude/hooks/adr_gate.py
-denies creating a governed file that none names, and tests/test_adr.py fails the
-land if any tracked governed file is uncovered, however it was created.
+Governed files (harness.toml `adr.require_for`, minus `adr.exempt`; empty by default)
+must each be named by a proposed or accepted ADR: tests/test_adr.py fails the land
+if any tracked governed file is uncovered. .claude/hooks/adr_gate.py is an optional
+creation-time gate a project registers itself; this repository does not.
 
     python3 scripts/adr.py init                              # create the ADR directory
     python3 scripts/adr.py new "Title" --component PATH...   # next number, proposed

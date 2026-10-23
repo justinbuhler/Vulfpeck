@@ -9,7 +9,7 @@ python3 scripts/adr.py for path/to/file.py
 python3 scripts/adr.py list
 ```
 
-A file matching `harness.toml` `adr.require_for` needs a proposed or accepted ADR that names it in `Components:` before it is created, and at every land. An author writes **proposed**. **Accepted** is the outcome of review, set by the reviewer, never by the author of the decision. `Components:` may be empty: a project decision (a data-handling rule, an assurance policy) is an ADR that governs no file.
+`harness.toml` `adr.require_for` is empty by default: write an ADR when a real decision is made. A project that lists globs there needs a proposed or accepted ADR naming each matching file in `Components:` at every land. An author writes **proposed**. **Accepted** is the outcome of review, set by the reviewer, never by the author of the decision. `Components:` may be empty: a project decision (a data-handling rule, an assurance policy) is an ADR that governs no file.
 
 Other records have their own homes: dated measurements, failures and limitations go in `ENGINEERING_LOG.md`, and plans go in issues. An ADR records a decision, not the work that implements it, so there is no checklist to tick off. After a land, `land.sh` lists the ADRs whose components the land changed (`adr.py touched`), so a reviewer can see which decisions to re-read.
 
@@ -24,7 +24,7 @@ To change a decision, write a new ADR with `Supersedes: NNNN` and mark the old o
 - 2026-10-22 — [0004. Agent model routing is a table, stated per call](0004-agent-model-routing-is-a-table-stated-per-call.md) — proposed
 - 2026-10-22 — [0005. Read-only agents are checked by snapshot, not by command blocklist](0005-read-only-agents-are-checked-by-snapshot.md) — proposed
 - 2026-10-22 — [0006. Task worktrees land through one serialized queue](0006-task-worktrees-land-through-one-queue.md) — proposed
-- 2026-10-22 — [0007. Gate decisions go into a hash-chained local log](0007-gate-decisions-go-into-a-hash-chained-local-log.md) — proposed
+- 2026-10-22 — [0007. Gate decisions go into a rotated local log](0007-gate-decisions-go-into-a-rotated-local-log.md) — proposed
 - 2026-10-22 — [0008. Harness hooks are proven registered; prerequisites are reported](0008-harness-hooks-are-proven-registered-and-prerequisites-reported.md) — proposed
 - 2026-10-22 — [0009. Lint before a session stops; record where it left the repository](0009-lint-before-a-session-stops.md) — proposed
 - 2026-10-22 — [0010. Mutation testing through one runner](0010-mutation-testing-through-one-runner.md) — proposed

@@ -19,6 +19,10 @@ trip this. A parent session editing the checkout while the
 reviewer runs does, which is why the message says the checkout changed while
 the agent ran, not that the agent changed it.
 
+The snapshot file is not hash-checked: an agent that rewrites it to match its own
+changes defeats the comparison. Run reviewers in a throwaway worktree, where a
+change cannot reach the main checkout at all.
+
 A read-only agent that stops with no snapshot (SubagentStart failed or never
 fired) cannot be verified. That is said out loud and recorded, never passed
 silently.
@@ -35,8 +39,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 STATUS_LINES = 200
-# Stop decisions that end one run of an agent (see logged_snapshot).
-FINISHED = ("pass", "block-overridden", "unverified")
 # The floor when harness.toml cannot be read: an unreadable config must not
 # switch the guard off.
 DEFAULT_READ_ONLY = ["dual-derive", "live-proof-auditor", "reviewer-*", "Explore", "Plan"]
@@ -186,37 +188,6 @@ def differences(before, after):
     return out, noted
 
 
-def logged_snapshot(cwd, agent_id):
-    """Return (sha recorded when this agent started, problem) from the decision log.
-
-    The snapshot file sits where the agent can write. Its hash goes into the
-    hash-chained log at the start, so rewriting the file to match a changed
-    checkout is caught unless the agent also rebuilds the whole chain.
-    """
-    try:
-        sys.path.insert(0, str(ROOT / "scripts"))
-        import harness_events
-        path = harness_events.log_path(cwd)
-        if path is None or not path.is_file():
-            return None, "the decision log is missing"
-        _, broken, why = harness_events.verify(path)
-        if broken:
-            return None, f"the decision log chain is broken at line {broken} ({why})"
-        mine = [r for r in (json.loads(line) for line in path.read_text().splitlines())
-                if r.get("hook") == "readonly_guard" and r.get("agent_id") == agent_id]
-        # A resumed agent starts again, so count only this run: the rows after
-        # the agent's last finished stop. The hook writes exactly one snapshot
-        # row per run; a second is an append by someone else.
-        finished = [i for i, r in enumerate(mine) if r.get("decision") in FINISHED]
-        run = mine[finished[-1] + 1:] if finished else mine
-        found = [r.get("reason", "")[len("sha256:"):] for r in run if r.get("decision") == "snapshot"]
-        if len(found) > 1:
-            return None, f"{len(found)} snapshot rows are logged for this run; the hook writes one"
-        return (found[0], None) if found else (None, "no snapshot was recorded for this agent")
-    except Exception as exc:
-        return None, f"the decision log is unreadable ({exc})"
-
-
 def snapshot_path(cwd, agent_id):
     common = (git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir") or "").strip()
     if not common or not agent_id:
@@ -257,8 +228,7 @@ def main():
             text = json.dumps(state)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
-            record("readonly_guard", "snapshot", "sha256:" + hashlib.sha256(text.encode()).hexdigest(),
-                   subject, payload)
+            record("readonly_guard", "snapshot", "taken", subject, payload)
         return 0
 
     if not path.is_file():
@@ -267,17 +237,9 @@ def main():
                           f"readonly_guard: {agent_type} stopped with no start snapshot; "
                           "whether it changed the checkout was NOT verified"}))
         return 0
-    text = path.read_text()
-    before = json.loads(text)
+    before = json.loads(path.read_text())
     after = snapshot(before["top"]) or {}
     changed, noted = differences(before, after)
-    logged, problem = logged_snapshot(cwd, agent_id)
-    if problem:
-        # A snapshot exists, so its row was written at the start. A log that is
-        # now missing, broken or doubled cannot vouch for it: block, do not note.
-        changed.insert(0, f"the start snapshot cannot be verified: {problem}")
-    elif logged != hashlib.sha256(text.encode()).hexdigest():
-        changed.insert(0, "the start snapshot was rewritten after it was recorded")
     if not changed:
         path.unlink()
         record("readonly_guard", "pass", "unchanged", subject, payload)

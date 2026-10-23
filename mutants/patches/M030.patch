@@ -1,0 +1,14 @@
+# mutant_id: M030
+# target: .claude/hooks/verify_commit_landed.py
+# operator: drop-check
+# behaviour: with no recorded baseline the commit is judged by git output, not passed
+--- a/.claude/hooks/verify_commit_landed.py
++++ b/.claude/hooks/verify_commit_landed.py
+@@ -156,6 +156,7 @@ def verdict(before, where, output):
+     reported = LANDED.findall(output)
+     failed = FAILED.search(output)
+     if before is None:
++        return None
+         if not head or (reported and head.startswith(reported[-1])):
+             return None
+         why = ("No HEAD was recorded before this call, so git's output was checked instead, and it holds "

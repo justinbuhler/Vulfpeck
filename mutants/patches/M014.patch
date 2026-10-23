@@ -11,5 +11,5 @@
 -                if payload.get("stop_hook_active"):
 +                if False:
                      record("session_guard", "block-overridden", "lint-failing", subject, payload)
-                     out["systemMessage"] = f"session_guard: lint still fails ({command}):\n{tail}"
+                     out["systemMessage"] = f"session_guard: lint still fails ({run}):\n{tail}"
                  else:

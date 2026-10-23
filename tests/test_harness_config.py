@@ -105,7 +105,7 @@ check("a mapped test rule needs a command",
 check("malformed TOML is an error naming the file",
       "harness.toml" in (config_error("[commands\n") or ""))
 for toml, expect in (
-        ('[adr]\ndir = ".claude"\n', "adr.dir '.claude' contains the governed path '.claude/hooks/**'"),
+        ('[adr]\ndir = ".claude"\nrequire_for = [".claude/hooks/**"]\n', "adr.dir '.claude' contains the governed path '.claude/hooks/**'"),
         ('[adr]\ndir = "docs/*"\n', "must be a plain directory, not a glob"),
         ('[adr]\nrequire_for = ["**"]\n', "must start with a fixed directory or file name"),
         ('[adr]\nexempt = ["*/hooks/x.py"]\n', "adr.exempt: '*/hooks/x.py' must be a literal path, not a glob"),

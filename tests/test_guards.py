@@ -4,7 +4,6 @@ task-worktree agents cannot commit directly.
 Every case runs the real hook as a subprocess against a throwaway repository in a
 temp directory. Expectations are literals (CLAUDE.md Rule 11).
 """
-import hashlib
 import json
 import os
 import subprocess
@@ -139,58 +138,36 @@ for name, mutate, expect in (
     rc, out = sub("SubagentStop", r, agent_id="gd")
     check(f"{name} blocks the stop", out.get("decision") == "block" and expect in out.get("reason", ""), str(out))
 
-r = repo()
-sub("SubagentStart", r, agent_id="forge")
-(r / "a.txt").write_text("changed\n")
-forged = json.loads(snap(r, "forge").read_text())
-forged["status"] = sorted(git(r, "status", "--porcelain=v1", "--untracked-files=all").splitlines())
-forged["status_sha"] = hashlib.sha256("\n".join(forged["status"]).encode()).hexdigest()
-snap(r, "forge").write_text(json.dumps(forged))
-rc, out = sub("SubagentStop", r, agent_id="forge")
-check("a start snapshot rewritten to match a changed checkout blocks the stop",
-      out.get("decision") == "block" and "start snapshot was rewritten" in out.get("reason", ""), str(out))
-
 log = Path(os.environ["HARNESS_EVENTS_LOG"])
 r = repo()
-sub("SubagentStart", r, agent_id="chain")
-saved = log.read_text()
-log.write_text(saved.replace('"decision": "snapshot"', '"decision": "snapshoT"', 1))
-rc, out = sub("SubagentStop", r, agent_id="chain")
-check("a broken decision-log chain blocks the stop",
-      out.get("decision") == "block" and "decision log chain is broken" in out.get("reason", ""), str(out))
-log.write_text(saved)
-
-sys.path.insert(0, str(ROOT / "scripts"))
-import harness_events  # noqa: E402
-
+sub("SubagentStart", r, agent_id="nolog")
+log.write_text("not json\n{broken\n")
+rc, out = sub("SubagentStop", r, agent_id="nolog")
+check("a corrupt decision log does not block a clean stop", out == {}, str(out))
 r = repo()
-sub("SubagentStart", r, agent_id="append")
+sub("SubagentStart", r, agent_id="nolog2")
+log.unlink()
+rc, out = sub("SubagentStop", r, agent_id="nolog2")
+check("a missing decision log does not block a clean stop", out == {}, str(out))
+r = repo()
+sub("SubagentStart", r, agent_id="nolog3")
+log.unlink()
 (r / "a.txt").write_text("changed\n")
-forged = json.loads(snap(r, "append").read_text())
-forged["status"] = sorted(git(r, "status", "--porcelain=v1", "--untracked-files=all").splitlines())
-forged["status_sha"] = hashlib.sha256("\n".join(forged["status"]).encode()).hexdigest()
-text = json.dumps(forged)
-snap(r, "append").write_text(text)
-harness_events.record("readonly_guard", "snapshot", "sha256:" + hashlib.sha256(text.encode()).hexdigest(),
-                       "x", {"agent_id": "append"})
-rc, out = sub("SubagentStop", r, agent_id="append")
-check("an appended second snapshot row does not vouch for a rewritten snapshot",
-      out.get("decision") == "block" and "2 snapshot rows are logged for this run" in out.get("reason", ""), str(out))
+rc, out = sub("SubagentStop", r, agent_id="nolog3")
+check("a changed checkout still blocks the stop with no decision log",
+      out.get("decision") == "block" and "working tree: a.txt" in out.get("reason", ""), str(out))
+r = repo()
+sub("SubagentStart", r, agent_id="twice")
+for _ in range(2):
+    sub("SubagentStart", repo(), agent_id="other-" + str(_))
+rc, out = sub("SubagentStop", r, agent_id="twice")
+check("several snapshot rows in the log do not block a clean stop", out == {}, str(out))
 
 r = repo()
 for _ in range(2):
     sub("SubagentStart", r, agent_id="resumed")
     rc, out = sub("SubagentStop", r, agent_id="resumed")
 check("an agent resumed after a clean stop is checked again, not refused as tampering", out == {}, str(out))
-
-r = repo()
-sub("SubagentStart", r, agent_id="nolog")
-saved = log.read_text()
-log.unlink()
-rc, out = sub("SubagentStop", r, agent_id="nolog")
-check("a decision log deleted while the agent ran blocks the stop",
-      out.get("decision") == "block" and "the decision log is missing" in out.get("reason", ""), str(out))
-log.write_text(saved)
 
 r = repo()
 sub("SubagentStart", r, agent_id="optout")

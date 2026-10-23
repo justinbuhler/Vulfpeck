@@ -4,10 +4,10 @@
 # behaviour: a read-only agent's working-tree change blocks its stop
 --- a/.claude/hooks/readonly_guard.py
 +++ b/.claude/hooks/readonly_guard.py
-@@ -94,7 +94,7 @@
-     for key, label in (("head", "HEAD"), ("branch", "checked-out branch"), ("main", "local main")):
-         if before.get(key) != after.get(key):
-             out.append(f"{label}: {(before.get(key) or '-')[:12]} -> {(after.get(key) or '-')[:12]}")
+@@ -179,7 +179,7 @@ def differences(before, after):
+         out.append("git dir changed (info/exclude, hooks, or the worktree list)")
+     if before.get("config_sha") != after.get("config_sha"):
+         out.append("local git config changed (git config --local --list)")
 -    if before.get("status_sha") != after.get("status_sha"):
 +    if False:
          was, now = set(before.get("status", [])), set(after.get("status", []))
