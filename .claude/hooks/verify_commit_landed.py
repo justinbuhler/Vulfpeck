@@ -8,13 +8,20 @@ later command in the same invocation (`git commit -m x; echo done`). Both leave
 the tool call looking successful with no new commit.
 
     PreToolUse   a command that runs `git commit`: record HEAD and the number of
-                 HEAD reflog entries in the directory the commit runs in.
+                 HEAD reflog entries in the directory the commit runs in. Each
+                 call gets its own baseline file; PostToolUse takes the oldest
+                 for that call id (else session and command), so parallel
+                 identical commands each get theirs.
     PostToolUse  read both again. Unchanged means no commit was created: block.
+                 Git's output is a second witness: a `[branch sha]` line must
+                 equal the new HEAD, and a failure marker (index.lock, nothing
+                 to commit, a hook rejection) with no sha line blocks even when
+                 HEAD moved, because a peer commit in the same worktree can move it.
 
-Reading git on both sides, never the tool's output, means `git commit -q` and
-wrappers that condense output pass, and a masked or locked commit still blocks. With
-no recorded baseline (the PreToolUse call never ran) the commit is reported as
-unchecked, not blocked.
+With no recorded baseline (the PreToolUse call crashed, never fired, or its file was
+taken) the old output check applies: block unless the output holds a `[branch sha]`
+line equal to HEAD. A `git commit -q` is falsely blocked on that rare path; that is
+accepted, because the alternative is a gate that passes whatever it cannot see.
 """
 
 import hashlib
@@ -28,6 +35,10 @@ import sys
 from pathlib import Path
 
 STALE_SECONDS = 86400  # a baseline whose PostToolUse never ran
+# `[main 1a2b3c4] subject` - the one line a successful commit prints.
+LANDED = re.compile(r"^\[[^\]\n]* ([0-9a-f]{7,40})\]", re.M)
+# What git or a hook prints when a commit is refused.
+FAILED = re.compile(r"index\.lock|nothing (?:added )?to commit|^fatal:|hook .*(?:exit|fail|reject)", re.M | re.I)
 
 
 def commit_dir(command, cwd):
@@ -54,6 +65,17 @@ def commit_dir(command, cwd):
         if words[i:i + 1] == ["commit"]:
             return where
     return None
+
+
+def text_of(value):
+    """Flatten a tool response of any shape into searchable text."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return "\n".join(text_of(v) for v in value.values())
+    if isinstance(value, list):
+        return "\n".join(text_of(v) for v in value)
+    return ""
 
 
 # An inherited GIT_DIR would point these reads at another repository, and a read
@@ -89,34 +111,68 @@ def position(where):
     return [git(where, "rev-parse", "HEAD"), len(git(where, "reflog", "show", "--format=%h", "HEAD").splitlines())]
 
 
-def baseline_path(where, event):
-    """Return the file holding this call's before-state, or None outside a repository."""
+def baseline_dir(where):
+    """Return the directory holding before-states, or None outside a repository."""
     common = git(where, "rev-parse", "--path-format=absolute", "--git-common-dir")
-    if not common:
-        return None
+    return Path(common) / "harness" / "commits" if common else None
+
+
+def call_key(event):
     key = event.get("tool_use_id") or hashlib.sha256(
         f"{event.get('session_id')}|{event['tool_input']['command']}".encode()).hexdigest()
-    return Path(common) / "harness" / "commits" / ("".join(c for c in str(key) if c.isalnum() or c in "-_") + ".json")
+    return "".join(c for c in str(key) if c.isalnum() or c in "-_")
 
 
 def save_baseline(where, event):
-    path = baseline_path(where, event)
-    if path is None:
+    folder = baseline_dir(where)
+    if folder is None:
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    for old in path.parent.glob("*.json"):
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in folder.glob("*.json"):
         if time.time() - old.stat().st_mtime > STALE_SECONDS:
             old.unlink(missing_ok=True)
-    path.write_text(json.dumps({"position": position(where)}))
+    (folder / f"{call_key(event)}.{time.time_ns()}.{os.getpid()}.json").write_text(json.dumps(position(where)))
 
 
-def verdict(before, where):
-    """Return the reason the commit run in `where` is unverified, or None when HEAD moved."""
-    if position(where) != before:
+def take_baseline(where, event):
+    """Return and remove the oldest baseline recorded for this call, or None."""
+    folder = baseline_dir(where)
+    for path in sorted(folder.glob(f"{call_key(event)}.*.json")) if folder else []:
+        try:
+            before = json.loads(path.read_text())
+            path.unlink()
+        except (OSError, ValueError):
+            continue  # a parallel Post took it first
+        return before
+    return None
+
+
+def verdict(before, where, output):
+    """Return the reason the commit run in `where` is unverified, or None when it landed.
+
+    before is the recorded position, or None when no baseline exists.
+    """
+    head = git(where, "rev-parse", "HEAD")
+    reported = LANDED.findall(output)
+    failed = FAILED.search(output)
+    if before is None:
+        if not head or (reported and head.startswith(reported[-1])):
+            return None
+        why = ("No HEAD was recorded before this call, so git's output was checked instead, and it holds "
+               "no `[branch sha]` line equal to HEAD. A `git commit -q`, or a wrapper that condenses output, is "
+               "blocked on this path although the commit may have landed; confirm with `git log -1`.")
+    elif reported and not head.startswith(reported[-1]):
+        why = (f"git printed commit {reported[-1]}, but HEAD is {head[:12]}. "
+               "The commit just reported is not the one this branch is on.")
+    elif position(where) == before:
+        why = (f"HEAD was {before[0][:12] or '(unborn)'} before the call and has not moved, so no commit was created. "
+               "An index.lock collision, or an exit code masked by a later "
+               "command in the same invocation, both look exactly like this.")
+    elif failed and not reported:
+        why = (f"HEAD moved, but git's output reports a failure ({failed.group(0)!r}) and no `[branch sha]` line. "
+               "Another commit in this worktree may have moved HEAD while this one failed.")
+    else:
         return None
-    why = (f"HEAD was {before[0][:12] or '(unborn)'} before the call and has not moved, so no commit was created. "
-           "An index.lock collision, or an exit code masked by a later "
-           "command in the same invocation, both look exactly like this.")
     # Asked for as a standing warning; it earns its place only here. A lock is
     # held during a git operation and gone after, so its presence after the call
     # explains a commit that did not land - and says nothing after an `ls`.
@@ -145,20 +201,13 @@ def main():
     if event.get("hook_event_name") == "PreToolUse":
         save_baseline(where, event)
         return
-    path = baseline_path(where, event)
-    if path is None:
+    if baseline_dir(where) is None:
         return  # not a repository: nothing to verify against
-    try:
-        before = json.loads(path.read_text())["position"]
-        path.unlink()
-    except (OSError, ValueError, KeyError):
-        print("verify_commit_landed: no HEAD recorded before this call, commit NOT checked", file=sys.stderr)
-        record("verify_commit_landed", "unchecked", "no-baseline", git(where, "rev-parse", "--short", "HEAD") or "-", event)
-        return
-    reason = verdict(before, where)
+    before = take_baseline(where, event)
+    reason = verdict(before, where, text_of(event.get("tool_response") or {}))
     head = git(where, "rev-parse", "--short", "HEAD") or "-"
     record("verify_commit_landed", "block" if reason else "pass",
-           "not-landed" if reason else "landed", head, event)
+           "not-landed" if reason else ("landed" if before else "landed-no-baseline"), head, event)
     if reason:
         json.dump({"decision": "block", "reason": reason,
                    "systemMessage": "git commit did not land - see the blocked reason"},

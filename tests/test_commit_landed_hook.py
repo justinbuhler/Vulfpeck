@@ -62,6 +62,8 @@ def blocked(repo, command, stdout="", commit_in=None, payload_cwd=None):
     fire(repo, "PreToolUse", command, payload_cwd)
     if commit_in:
         git(commit_in, "commit", "-q", "--allow-empty", "-m", "made during the call")
+    if callable(stdout):  # the output a real commit prints, built from the HEAD it made
+        stdout = stdout(git(commit_in, "rev-parse", "--short", "HEAD"))
     return fire(repo, "PostToolUse", command, payload_cwd, stdout)[0]
 
 
@@ -78,7 +80,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # The commit that landed, with git's own line, with `-q` (no line), and as a wrapper
     # condenses it: the text is never read, so none of these can false-block.
     check("a landed commit passes silently",
-          blocked(tmp, "git commit -m first", f"[main {head[:7]}] first\n 1 file changed", commit_in=tmp) == "")
+          blocked(tmp, "git commit -m first", lambda sha: f"[main {sha}] first\n 1 file changed", commit_in=tmp) == "")
     check("a landed `git commit -q` that printed nothing passes silently",
           blocked(tmp, "git commit -q -m first", "", commit_in=tmp) == "")
     check("a landed commit whose output a wrapper condensed passes silently",
@@ -151,9 +153,62 @@ with tempfile.TemporaryDirectory() as tmp:
     check("a second call's baseline is not the first's: its own unmoved HEAD blocks",
           fire(tmp, "PostToolUse", "git commit -m b", session="s-b")[0] != "")
     check("the first call, whose HEAD moved, passes", fire(tmp, "PostToolUse", "git commit -m a", session="s-a")[0] == "")
-    reason, err = fire(tmp, "PostToolUse", "git commit -m a", session="s-a")
-    check("with no recorded baseline the commit is reported unchecked, not blocked",
-          reason == "" and "NOT checked" in err, f"{reason!r} {err!r}")
+
+    # No baseline (Pre crashed, never fired, or was taken): the output check applies and
+    # the gate fails closed, not open.
+    def post_only(command, stdout, session="nb"):
+        return fire(tmp, "PostToolUse", command, stdout=stdout, session=session)[0]
+
+    git(tmp, "commit", "-q", "--allow-empty", "-m", "nb")
+    nb_head = git(tmp, "rev-parse", "--short", "HEAD")
+    check("no baseline and a real `[branch sha]` equal to HEAD passes",
+          post_only("git commit -m nb", f"[main {nb_head}] nb") == "")
+    check("no baseline and a stale `[branch sha]` blocks",
+          post_only("git commit -m nb", "[main deadbee] nb") != "")
+    quiet_reason = post_only("git commit -q -m nb", "")
+    check("no baseline and no output blocks, and says why, as the accepted false block for -q",
+          "No HEAD was recorded" in quiet_reason and "git commit -q" in quiet_reason, quiet_reason)
+    lock_file = Path(git(tmp, "rev-parse", "--path-format=absolute", "--git-path", "index.lock"))
+    lock_file.write_text("")
+    masked_nb = post_only('git commit -m x; echo done', "fatal: Unable to create '.git/index.lock': File exists.\ndone")
+    lock_file.unlink()
+    check("no baseline with an index.lock and a masked exit blocks",
+          masked_nb != "" and "index.lock is still present" in masked_nb, masked_nb)
+
+    # A peer commit in the same worktree moves HEAD while ours fails.
+    fire(tmp, "PreToolUse", "git commit -q -m mine", session="peer")
+    git(tmp, "commit", "-q", "--allow-empty", "-m", "peer")
+    peer_lock = fire(tmp, "PostToolUse", "git commit -q -m mine", session="peer",
+                     stdout="fatal: Unable to create '.git/index.lock': File exists.")[0]
+    check("a peer commit moving HEAD does not hide a failed commit whose output shows the failure",
+          peer_lock != "" and "may have moved HEAD" in peer_lock, peer_lock)
+    fire(tmp, "PreToolUse", "git commit -m mine", session="peer2")
+    git(tmp, "commit", "-q", "--allow-empty", "-m", "peer")
+    check("a peer commit moving HEAD, with our output naming another sha, blocks",
+          fire(tmp, "PostToolUse", "git commit -m mine", session="peer2", stdout="[main deadbee] mine")[0] != "")
+    fire(tmp, "PreToolUse", "git commit -m mine", session="peer3")
+    git(tmp, "commit", "-q", "--allow-empty", "-m", "peer")
+    check("a peer commit moving HEAD, with our commit refused by a hook, blocks",
+          fire(tmp, "PostToolUse", "git commit -m mine", session="peer3",
+               stdout="husky - pre-commit hook exited with code 1")[0] != "")
+    fire(tmp, "PreToolUse", "git commit -q -m ok", session="peer4")
+    git(tmp, "commit", "-q", "--allow-empty", "-m", "ok")
+    check("HEAD moved and a quiet success still passes", fire(tmp, "PostToolUse", "git commit -q -m ok", session="peer4")[0] == "")
+
+    # Parallel identical commands (no tool id) each keep their own baseline; the first lands, the second fails.
+    cmd = "git commit -q --allow-empty -m par"
+    fire(tmp, "PreToolUse", cmd, session="par")
+    fire(tmp, "PreToolUse", cmd, session="par")
+    commits = Path(git(tmp, "rev-parse", "--path-format=absolute", "--git-common-dir")) / "harness" / "commits"
+    check("two identical Pre calls leave two baselines, not one overwritten", len(list(commits.glob("*.json"))) == 2)
+    git(tmp, "commit", "-q", "--allow-empty", "-m", "par")
+    first = fire(tmp, "PostToolUse", cmd, session="par")[0]
+    check("the first parallel commit, which landed, passes", first == "", first)
+    check("one baseline is left for the second", len(list(commits.glob("*.json"))) == 1)
+    second = fire(tmp, "PostToolUse", cmd, session="par",
+                  stdout="fatal: Unable to create '.git/index.lock': File exists.")[0]
+    check("the second parallel commit, which hit the lock, is blocked", second != "", second)
+    check("no baseline files are left", len(list(commits.glob("*.json"))) == 0)
 
     # The first commit of a repository has no HEAD before it.
     with tempfile.TemporaryDirectory() as fresh:
