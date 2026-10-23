@@ -5,7 +5,10 @@ Stop fires after every reply of the main agent, not once per session, so this
 stays quiet unless something changed:
 
     Stop        if HEAD or the working tree changed since this session's last
-                check, run harness.toml commands.lint. A failure blocks the stop
+                check, run harness.toml commands.lint, on the .py files changed
+                since the merge-base with main plus untracked ones when the
+                command is `ruff check .`, else on the whole tree. A pre-existing
+                failure in an untouched file never blocks. A failure blocks the stop
                 once with the output; on the continuation (stop_hook_active) the
                 session may stop and is told lint still fails. Uncommitted or
                 unlanded work gets a one-line notice when that state changed since
@@ -19,6 +22,8 @@ Per-session state lives in <git common dir>/harness/sessions/<session>.json.
 import hashlib
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -80,6 +85,34 @@ def lint_command(top):
         return f"__unreadable__:{exc}"
 
 
+RUFF_ALL = re.compile(r"(?:uvx )?ruff check \.")
+
+
+def changed_py(top):
+    """Return the .py files this branch or session changed, or None when that is unknown.
+
+    Changed means: differs from the merge-base with local main (else origin/main),
+    in the commits or the working tree, plus untracked files. Deleted files are left out.
+    """
+    base = next((b for ref in ("main", "origin/main") if (b := git(top, "merge-base", "HEAD", ref))), None)
+    if not base:
+        return None
+    tracked = git(top, "diff", "-z", "--name-only", "--diff-filter=d", base)
+    untracked = git(top, "ls-files", "-z", "--others", "--exclude-standard")
+    if tracked is None or untracked is None:
+        return None
+    return sorted({f for f in (tracked + "\0" + untracked).split("\0") if f.endswith(".py")})
+
+
+def scoped(top, command):
+    """Return the lint command to run: `ruff check .` limited to the changed .py files,
+    "" when none changed, any other command unchanged (it cannot take paths)."""
+    files = changed_py(top) if RUFF_ALL.fullmatch(command) else None
+    if files is None:
+        return command
+    return f"{command[:-1]}--force-exclude {' '.join(shlex.quote(f) for f in files)}" if files else ""
+
+
 def session_file(top, session):
     common = git(top, "rev-parse", "--path-format=absolute", "--git-common-dir")
     if not common:
@@ -115,13 +148,16 @@ def on_stop(payload, top):
         if command.startswith("__unreadable__:"):
             out["systemMessage"] = f"session_guard: lint not run, harness.toml unreadable: {command[15:]}"
         elif command:
-            try:
-                done = subprocess.run(["bash", "-c", command], cwd=top, capture_output=True,
-                                      text=True, timeout=LINT_TIMEOUT, env=ENV)
-                failed, text = done.returncode != 0, f"{done.stdout}{done.stderr}"
-            except subprocess.TimeoutExpired:
-                failed, text = None, ""
-                out["systemMessage"] = f"session_guard: lint exceeded {LINT_TIMEOUT}s; not checked"
+            run = scoped(top, command)
+            failed, text = False, ""
+            if run:
+                try:
+                    done = subprocess.run(["bash", "-c", run], cwd=top, capture_output=True,
+                                          text=True, timeout=LINT_TIMEOUT, env=ENV)
+                    failed, text = done.returncode != 0, f"{done.stdout}{done.stderr}"
+                except subprocess.TimeoutExpired:
+                    failed = None
+                    out["systemMessage"] = f"session_guard: lint exceeded {LINT_TIMEOUT}s; not checked"
             if failed is not None:      # a timed-out tree was not checked: try it again
                 memo.update(linted_tree=now["tree"], lint_failed=failed)
             if failed:
@@ -129,11 +165,11 @@ def on_stop(payload, top):
                 subject = f"{now['branch']}@{now['head'][:9]}"
                 if payload.get("stop_hook_active"):
                     record("session_guard", "block-overridden", "lint-failing", subject, payload)
-                    out["systemMessage"] = f"session_guard: lint still fails ({command}):\n{tail}"
+                    out["systemMessage"] = f"session_guard: lint still fails ({run}):\n{tail}"
                 else:
                     record("session_guard", "block", "lint-failing", subject, payload)
                     out = {"decision": "block",
-                           "reason": f"Lint fails ({command}). Fix it before stopping:\n{tail}"}
+                           "reason": f"Lint fails ({run}). Fix it before stopping:\n{tail}"}
 
     if "decision" not in out:
         message = notice(now)

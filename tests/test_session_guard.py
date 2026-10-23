@@ -48,8 +48,10 @@ def repo():
     return d
 
 
-def hook(event, d, session="s1", active=False, project=None):
+def hook(event, d, session="s1", active=False, project=None, path=None):
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project or d)}
+    if path:
+        env["PATH"] = f"{path}{os.pathsep}{env['PATH']}"
     done = subprocess.run([sys.executable, str(HOOK)], capture_output=True, text=True, env=env,
                           input=json.dumps({"hook_event_name": event, "session_id": session,
                                             "cwd": str(d), "stop_hook_active": active}))
@@ -89,6 +91,77 @@ check("lint that still fails is rechecked on the next reply, not trusted from me
 (d / "BAD").unlink()
 rc, out = hook("Stop", d)
 check("fixed lint no longer blocks", "decision" not in out, str(out))
+
+# --- lint only what this session or branch changed ---------------------------------
+# A fake `uvx` records its arguments and fails exactly when bad.py is among them, so
+# the test sees both which paths were passed and whether a pre-existing failure bit.
+FAKE = SCRATCH / "fakebin"
+FAKE.mkdir()
+ARGV = SCRATCH / "uvx-argv.txt"
+(FAKE / "uvx").write_text(f'#!/bin/bash\n(IFS=\\|; echo "$*") >> "{ARGV}"\n'
+                          'for a in "$@"; do [ "$a" = bad.py ] && { echo "ruff: bad.py failed"; exit 1; }; done\nexit 0\n')
+(FAKE / "uvx").chmod(0o755)
+RUFF_TOML = '[commands]\nlint = "uvx ruff check ."\n'
+
+
+def ruff_repo():
+    """A repository whose main already contains a lint-failing bad.py, on branch feature."""
+    d = repo()
+    (d / "harness.toml").write_text(RUFF_TOML)
+    (d / "bad.py").write_text("bad = 1\n")
+    (d / "ok.py").write_text("ok = 1\n")
+    git(d, "add", "-A")
+    git(d, "commit", "-qm", "base with a pre-existing lint failure")
+    git(d, "checkout", "-q", "-b", "feature")
+    return d
+
+
+def stop(d):
+    """Run Stop with the fake uvx; return (hook output, the argument lines uvx was called with)."""
+    ARGV.write_text("")
+    out = hook("Stop", d, path=FAKE)[1]
+    return out, ARGV.read_text().splitlines()
+
+
+d = ruff_repo()
+(d / "ok.py").write_text("ok = 2\n")
+out, seen = stop(d)
+check("a pre-existing failure in an untouched file does not block the stop", "decision" not in out, str(out))
+check("only the changed .py path is linted, with --force-exclude", seen == ["ruff|check|--force-exclude|ok.py"], str(seen))
+
+d = ruff_repo()
+(d / "bad.py").write_text("bad = 2\n")
+rc, out = hook("Stop", d, path=FAKE)
+check("a failure in a file this session changed still blocks the stop",
+      out.get("decision") == "block" and "bad.py failed" in out.get("reason", ""), str(out))
+
+d = ruff_repo()
+(d / "ok.py").write_text("ok = 2\n")
+git(d, "commit", "-qam", "edit ok")
+(d / "new file.py").write_text("n = 1\n")
+(d / "bad.py").unlink()
+out, seen = stop(d)
+check("a committed branch change and an untracked file are both linted, whole, and a deleted file is not",
+      seen == ["ruff|check|--force-exclude|new file.py|ok.py"], str(seen))
+
+d = ruff_repo()
+(d / "notes.md").write_text("n\n")
+out, seen = stop(d)
+check("a session that changed no .py file runs no lint and does not block", seen == [] and "decision" not in out,
+      str(seen) + str(out))
+
+d = ruff_repo()
+git(d, "checkout", "-q", "main")
+(d / "ok.py").write_text("ok = 3\n")
+out, seen = stop(d)
+check("on main, only the uncommitted .py change is linted", seen == ["ruff|check|--force-exclude|ok.py"], str(seen))
+
+d = ruff_repo()
+(d / "harness.toml").write_text('[commands]\nlint = "uvx ruff check src tests"\n')
+git(d, "commit", "-qam", "explicit paths")
+(d / "ok.py").write_text("ok = 2\n")
+out, seen = stop(d)
+check("a lint command that is not `ruff check .` runs unchanged on the whole tree", seen == ["ruff|check|src|tests"], str(seen))
 
 d = repo()
 git(d, "checkout", "-q", "-b", "feature")
