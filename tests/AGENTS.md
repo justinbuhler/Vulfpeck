@@ -41,4 +41,4 @@ Production code. Fixtures large enough to need their own folder.
   path it was written for the moment someone sets the variable. Neutralise the
   loader (`mod.load_env = lambda *a, **k: []`) so both paths always run.
 
-See the repository CLAUDE.md for the invariants these protect.
+See the repository AGENTS.md for the invariants these protect.

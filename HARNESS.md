@@ -7,7 +7,7 @@ It is project-agnostic. A repository describes how it builds in `harness.toml`; 
 
 | Layer | Files | What it enforces |
 |---|---|---|
-| Governance contract | `AGENTS.md`, `CLAUDE.md`, `tests/AGENTS.md` | ORCH-01..12 delegation rules, the consequence-to-review table, Rule 11 (relocating oracle), test conventions |
+| Governance contract | `AGENTS.md` (shared by Claude Code, Codex, Gemini via `CLAUDE.md` and `.gemini/settings.json`), `tests/AGENTS.md` | ORCH-01..12 delegation rules, the consequence-to-review table, Rule 11 (relocating oracle), test conventions |
 | Project config | `harness.toml`, `scripts/harness_config.py`, `scripts/harness_env.sh` | One definition of setup, lint, test, untracked inputs, watched controls and mapped tests; unknown keys are errors |
 | Gate and landing | `scripts/gate.sh`, `scripts/run.sh`, `scripts/land.sh`, `.githooks/*`, `.github/workflows/tests.yml` | No commits or merge commits on `main`; lint at commit; the same gate at land and in CI; compare-and-swap of local `main` |
 | Claude Code hooks | `.claude/settings.json`, `.claude/hooks/*.py` | Model routing on `Agent` calls, commit-landed verification, mapped test on edit, blast-radius advisory, CodeGraph freshness |
@@ -57,7 +57,7 @@ None of the three spells a command, so they cannot drift apart.
 
 Requirements: git, bash, Python 3.11+ and uv for the harness's own scripts, `rsync`, and `flock` or `lockf`. macOS or Linux.
 
-1. Copy `AGENTS.md`, `CLAUDE.md`, `HARNESS.md`, `harness.toml`, `.claude/`, `.githooks/`, `.github/`, `scripts/`, `tests/` and `mutants/` into the repository.
+1. Copy `AGENTS.md`, `CLAUDE.md`, `.gemini/`, `HARNESS.md`, `harness.toml`, `.claude/`, `.githooks/`, `.github/`, `scripts/`, `tests/` and `mutants/` into the repository.
 2. Edit `harness.toml`. For example, a Node project:
 
    ```toml
@@ -103,7 +103,7 @@ Requirements: git, bash, Python 3.11+ and uv for the harness's own scripts, `rsy
 
 1. Decide visibility and a licence. Branch protection on a private repository needs a paid GitHub plan, and `github_bootstrap.sh --apply` exits non-zero when it is refused.
 2. Create the repository, push `main`, set it in `docs/agents/issue-tracker.md`, run `./scripts/github_bootstrap.sh --apply`. The first CI run is the first test of `run.sh`'s `flock` path on Linux.
-3. Fill in the Project context in `CLAUDE.md` and add domain invariants to `AGENTS.md`.
+3. Fill in the Project context and add domain invariants in `AGENTS.md`.
 4. Run `codegraph init`, or remove the freshness hooks. Until then every prompt reports CG-01.
 
 ### For autonomous operation
