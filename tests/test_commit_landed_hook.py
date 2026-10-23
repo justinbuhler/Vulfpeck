@@ -105,6 +105,11 @@ with tempfile.TemporaryDirectory() as tmp:
               blocked(tmp, "git -c user.name=t commit -m other", line, payload_cwd=other) == "")
         check("a masked commit in another repository is still caught",
               blocked(tmp, f"cd {other} && git commit -m x; echo done", "done") != "")
+    # A separator inside a quoted message must not switch the check off.
+    check("a commit message containing ; is still verified",
+          blocked(tmp, 'git commit -m "fix: a; b"', "") != "")
+    check("a commit message containing | is still verified",
+          blocked(tmp, "git commit -m 'a | b'", "") != "")
     check("git help commit is not a commit",
           blocked(tmp, "git help commit", "GIT-COMMIT(1) manual") == "")
     check("git log --grep commit is not a commit",

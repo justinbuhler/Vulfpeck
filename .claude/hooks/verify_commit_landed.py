@@ -31,8 +31,8 @@ def commit_dir(command, cwd):
     for segment in re.split(r"[;&|\n]+", command):
         try:
             words = shlex.split(segment)
-        except ValueError:
-            continue
+        except ValueError:  # the split cut inside a quoted `;`/`|`; fail toward checking
+            words = segment.split()
         if len(words) == 2 and words[0] == "cd":
             here = os.path.join(here, os.path.expanduser(words[1]))
             continue
@@ -87,11 +87,8 @@ def git(cwd, *args):
     return done.stdout.strip() if done.returncode == 0 else ""
 
 
-def verdict(command, response, cwd):
-    """Return the reason this commit is unverified, or None when HEAD confirms it."""
-    where = commit_dir(command, cwd) if isinstance(command, str) else None
-    if where is None:
-        return None
+def verdict(response, where):
+    """Return the reason the commit run in `where` is unverified, or None when HEAD confirms it."""
     head = git(where, "rev-parse", "HEAD")
     if not head:
         return None  # not a repository, or no commits yet - nothing to verify against
@@ -127,8 +124,8 @@ def main():
         return
     command = (event.get("tool_input") or {}).get("command", "")
     cwd = event.get("cwd") or os.getcwd()
-    reason = verdict(command, event.get("tool_response") or {}, cwd)
     where = commit_dir(command, cwd) if isinstance(command, str) else None
+    reason = verdict(event.get("tool_response") or {}, where) if where is not None else None
     if where is not None:
         head = git(where, "rev-parse", "--short", "HEAD") or "-"
         record("verify_commit_landed", "block" if reason else "pass",
