@@ -42,7 +42,7 @@ The pre-commit hook lints and refuses commits on `main`; the suite gates the lan
 6. A reported count, rate or coverage figure is derived twice by independent means before it enters a commit message, PR body or report (`.claude/agents/dual-derive.md`).
 7. An external-API claim needs a retained request/response artifact on disk (`.claude/agents/live-proof-auditor.md`).
 8. Never commit secrets, private keys, `.env`, HAR captures, or data and binaries over 10 MB.
-9. Record the decision before the component. A file matching `harness.toml` `adr.require_for` needs a proposed or accepted ADR in `docs/adr/` naming it in `Components:` before it is created (`.claude/hooks/adr_gate.py`) and at every land (`tests/test_adr.py`). An author writes `proposed`; `accepted` is set by the reviewer. Change a decision with a new ADR that supersedes the old one, never by rewriting an accepted one.
+9. ADRs record real decisions, written when a choice is made and validated by `python3 scripts/adr.py check`; `harness.toml` `adr.require_for` is empty by default, and a project that lists globs there needs an ADR naming each matching file at every land. An author writes `proposed`; `accepted` is set by the reviewer. Change a decision with a new ADR that supersedes the old one, never by rewriting an accepted one.
 
 ## Delegation and review
 

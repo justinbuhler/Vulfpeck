@@ -9,7 +9,7 @@ python3 scripts/adr.py for path/to/file.py
 python3 scripts/adr.py list
 ```
 
-A file matching `harness.toml` `adr.require_for` needs a proposed or accepted ADR that names it in `Components:` before it is created, and at every land. An author writes **proposed**. **Accepted** is the outcome of review, set by the reviewer, never by the author of the decision. `Components:` may be empty: a project decision (a data-handling rule, an assurance policy) is an ADR that governs no file.
+`harness.toml` `adr.require_for` is empty by default: write an ADR when a real decision is made. A project that lists globs there needs a proposed or accepted ADR naming each matching file in `Components:` at every land. An author writes **proposed**. **Accepted** is the outcome of review, set by the reviewer, never by the author of the decision. `Components:` may be empty: a project decision (a data-handling rule, an assurance policy) is an ADR that governs no file.
 
 Other records have their own homes: dated measurements, failures and limitations go in `ENGINEERING_LOG.md`, and plans go in issues. An ADR records a decision, not the work that implements it, so there is no checklist to tick off. After a land, `land.sh` lists the ADRs whose components the land changed (`adr.py touched`), so a reviewer can see which decisions to re-read.
 

@@ -185,10 +185,14 @@ check("touched names an ADR whose own file changed", hits.get("0004", [None])[0]
 fresh = SCRATCH / "fresh"
 fresh.mkdir()
 git(fresh, "init", "-q")
+check("a missing ADR directory passes check when require_for is empty",
+      adr.check_repo(fresh, harness_config.load(fresh)) == [], str(adr.check_repo(fresh, harness_config.load(fresh))))
+(fresh / "harness.toml").write_text('[adr]\nrequire_for = ["scripts/**"]\n')
 problems = adr.check_repo(fresh, harness_config.load(fresh))
-check("a missing ADR directory fails check and names the command that creates it",
+check("a missing ADR directory fails check when require_for governs files and names the command that creates it",
       problems == ["docs/adr/: the ADR directory does not exist, and adr.require_for governs files "
                    "(python3 scripts/adr.py init)"], problems)
+(fresh / "harness.toml").unlink()
 done = subprocess.run([sys.executable, str(ROOT / "scripts" / "adr.py"), "init"], cwd=fresh,
                       capture_output=True, text=True, env=ENV)
 check("adr init creates the directory and its README", done.returncode == 0
@@ -248,15 +252,39 @@ check("deleting the ADR README is reported, not a way to switch the index check 
       "README.md: the ADR index is missing (python3 scripts/adr.py init)" in problems, problems)
 
 # --- this repository ---------------------------------------------------------------
-# Rule 11: the governed set is pinned here, not read back from harness.toml. Each
-# path must stay governed; narrowing adr.require_for to drop one fails this.
-MUST_BE_GOVERNED = (".claude/hooks/adr_gate.py", ".claude/hooks/lib/helper.py", ".claude/agents/dual-derive.md",
-                    ".claude/skills/land/SKILL.md", ".agents/skills/land/SKILL.md", ".claude/workflows/review-changes.js",
-                    ".claude/harness/agent_harness.py", ".githooks/pre-commit", "scripts/land.sh",
-                    "scripts/sub/tool.py", "mutants/runner.py")
+# Rule 11: both lists are written here, not read back from harness.toml.
+SAMPLE_PATHS = (".claude/hooks/adr_gate.py", ".claude/hooks/lib/helper.py", ".claude/agents/dual-derive.md",
+                ".claude/skills/land/SKILL.md", ".agents/skills/land/SKILL.md", ".claude/workflows/review-changes.js",
+                ".claude/harness/agent_harness.py", ".githooks/pre-commit", "scripts/land.sh",
+                "scripts/sub/tool.py", "mutants/runner.py")
 repo_config = harness_config.load(ROOT)
-for path in MUST_BE_GOVERNED:
-    check(f"this repository governs {path}", adr.governed(repo_config, path))
+check("this repository requires an ADR for no path by default", repo_config["adr"]["require_for"] == [])
+for path in SAMPLE_PATHS:
+    check(f"this repository does not govern {path}", not adr.governed(repo_config, path))
+
+# A project that opts in gets full coverage from a fixture config: each sample path is
+# governed, and a governed file no ADR names fails the check.
+opt_in = harness_config.merge({"adr": {"require_for": [
+    ".claude/hooks/**", ".claude/agents/**", ".claude/skills/**", ".agents/skills/**", ".claude/workflows/**",
+    ".claude/harness/**", ".githooks/**", "scripts/**", "mutants/*.py"]}})
+for path in SAMPLE_PATHS:
+    check(f"an opted-in config governs {path}", adr.governed(opt_in, path))
+check("an opted-in config leaves docs ungoverned", not adr.governed(opt_in, "docs/guide.md"))
+o = SCRATCH / "optin"
+(o / "scripts").mkdir(parents=True)
+(o / "docs" / "adr").mkdir(parents=True)
+git(o, "init", "-q")
+(o / "harness.toml").write_text('[adr]\nrequire_for = ["scripts/**"]\n')
+(o / "scripts" / "tool.py").write_text("x = 1\n")
+(o / "docs" / "adr" / "README.md").write_text("")
+adr.write_index(o / "docs" / "adr", [])
+git(o, "add", "-A")
+problems = adr.check_repo(o, harness_config.load(o))
+check("with require_for set, a governed file no ADR names fails the check",
+      any(p.startswith("scripts/tool.py: governed by adr.require_for") for p in problems), str(problems))
+(o / "harness.toml").write_text("")
+check("with require_for empty, the same tree passes the check",
+      adr.check_repo(o, harness_config.load(o)) == [], str(adr.check_repo(o, harness_config.load(o))))
 
 done = subprocess.run([sys.executable, str(ROOT / "scripts" / "adr.py"), "check"], cwd=ROOT,
                       capture_output=True, text=True, env=ENV)

@@ -62,10 +62,10 @@ DEFAULTS = {
         "dir": "docs/adr",
         # Repository-relative globs ('*' stays inside one path segment, '**'
         # spans any number). A file matching one must be named, literally, in
-        # the `Components:` of a proposed or accepted ADR: before it is created
-        # (.claude/hooks/adr_gate.py) and at every land (tests/test_adr.py).
-        "require_for": [".claude/hooks/**", ".claude/agents/**", ".claude/skills/**",
-                        ".agents/skills/**", ".claude/workflows/**", ".claude/harness/**", ".githooks/**"],
+        # the `Components:` of a proposed or accepted ADR at every land
+        # (tests/test_adr.py). Empty: ADRs are written for real decisions, and
+        # `scripts/adr.py check` still validates the ones that exist.
+        "require_for": [],
         "exempt": [],           # literal paths, each one named
     },
     "jev": {

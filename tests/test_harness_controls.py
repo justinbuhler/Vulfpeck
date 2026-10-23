@@ -52,8 +52,6 @@ EXPECTED = {
     ("SubagentStart", "", "readonly_guard.py", "advisory"),
     ("SubagentStop", "", "readonly_guard.py", "advisory"),
     ("Stop", "", "session_guard.py", "advisory"),
-    ("PreToolUse", "Edit|Write", "adr_gate.py", "gate"),
-    ("PostToolUse", "Edit|Write", "adr_gate.py", "gate"),
     ("SessionEnd", "", "session_guard.py", "advisory"),
 }
 GATES = {script for _, _, script, kind in EXPECTED if kind == "gate"}
@@ -129,8 +127,6 @@ CODEX_EXPECTED = {
     ("SubagentStart", "", "readonly_guard.py", "advisory"),
     ("SubagentStop", "", "readonly_guard.py", "advisory"),
     ("Stop", "", "session_guard.py", "advisory"),
-    ("PreToolUse", "apply_patch|Bash", "adr_gate.py", "gate"),
-    ("PostToolUse", "apply_patch|Bash", "adr_gate.py", "gate"),
     ("SessionEnd", "", "session_guard.py", "advisory"),
 }
 GEMINI_EXPECTED = {
@@ -142,8 +138,6 @@ GEMINI_EXPECTED = {
     ("SessionStart", "startup", "harness_doctor.py", "advisory"),
     ("BeforeTool", "run_shell_command", "queue_guard.py", "advisory"),
     ("AfterAgent", "", "session_guard.py", "advisory"),
-    ("BeforeTool", "replace|write_file", "adr_gate.py", "gate"),
-    ("AfterTool", "replace|write_file", "adr_gate.py", "gate"),
     ("SessionEnd", "", "session_guard.py", "advisory"),
 }
 # Expected timeouts are the Claude ones: seconds for Codex, milliseconds for Gemini.
@@ -304,8 +298,10 @@ with tempfile.TemporaryDirectory() as raw:
     (project / "scripts").mkdir()
     for name in ("adr.py", "harness_config.py", "harness_events.py"):
         shutil.copy2(ROOT / "scripts" / name, project / "scripts")
-    pre, _ = command("PreToolUse", "Edit|Write", "adr_gate.py")
-    post, _ = command("PostToolUse", "Edit|Write", "adr_gate.py")
+    # adr_gate.py is unregistered here (adr.require_for is empty); this is the command a
+    # project that opts in registers, so the canaries below still prove the guard.
+    pre = post = ('python3 "${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py" || { rc=$?; [ "$rc" = 2 ] || '
+                  'echo "adr_gate.py crashed (rc=$rc); failing closed" >&2; exit 2; }')
 
     def write_event(event, name, tool="Write", where=None):
         where = where or project
@@ -317,7 +313,7 @@ with tempfile.TemporaryDirectory() as raw:
         return run(cmd, payload, project=project)
 
     rc, out, err, secs = as_project(pre, write_event("PreToolUse", "hooks/new.py"))
-    check("canary: registered adr_gate.py denies a governed file no ADR names", rc == 0 and denied(out), out + err)
+    check("canary: opt-in adr_gate.py denies a governed file no ADR names", rc == 0 and denied(out), out + err)
     check("canary: adr_gate.py answers well inside its timeout", secs < 5, f"{secs:.1f}s")
     rc, out, err, _ = as_project(pre, write_event("PreToolUse", "hooks/new.py", tool="Edit"))
     check("canary: an Edit that would create a governed file is denied too", rc == 0 and denied(out), out + err)
@@ -333,13 +329,13 @@ with tempfile.TemporaryDirectory() as raw:
         "# 0001. New hook\n\nStatus: proposed\nDate: 2026-10-22\nComponents: hooks/new.py\n\n"
         "## Context\n\nc\n\n## Decision\n\nd\n\n## Consequences\n\nq\n")
     rc, out, err, _ = as_project(pre, write_event("PreToolUse", "hooks/new.py"))
-    check("canary: registered adr_gate.py allows it once an ADR names it", rc == 0 and not denied(out), out + err)
+    check("canary: opt-in adr_gate.py allows it once an ADR names it", rc == 0 and not denied(out), out + err)
     (project / "docs" / "adr" / "0002-bad.md").write_text("# 0002. Bad\n\nStatus: maybe\n")
     rc, out, err, _ = as_project(post, write_event("PostToolUse", "docs/adr/0002-bad.md"))
-    check("canary: registered adr_gate.py exits 2 on a malformed ADR", rc == 2 and "Status must be" in err,
+    check("canary: opt-in adr_gate.py exits 2 on a malformed ADR", rc == 2 and "Status must be" in err,
           f"rc={rc} {err}")
     rc, out, err, _ = as_project(post, write_event("PostToolUse", "docs/adr/0001-new-hook.md"))
-    check("canary: registered adr_gate.py passes a well-formed ADR", rc == 0, f"rc={rc} {err}")
+    check("canary: opt-in adr_gate.py passes a well-formed ADR", rc == 0, f"rc={rc} {err}")
 
 # --- failure direction: gates fail closed, advisories fail open ---------------
 with tempfile.TemporaryDirectory() as raw:
