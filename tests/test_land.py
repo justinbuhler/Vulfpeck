@@ -9,6 +9,7 @@ session's branch ref. Every subprocess.run below must pass env=scrubbed_env().
 The gate is overridden via LAND_GATE so these run in seconds; the real gate is
 the verify spine and is exercised by landing for real, not here.
 """
+import argparse
 import json
 import os
 import shlex
@@ -16,6 +17,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_harness_receipts import approval
 
 LAND = Path(__file__).resolve().parents[1] / "scripts" / "land.sh"
 
@@ -70,7 +74,7 @@ def git(cwd, *args, check_rc=True):
 LANDER_ROOT = tempfile.mkdtemp(prefix="harness-land-wt.")
 
 
-def land(cwd, gate="true", **env):
+def land(cwd, gate="true", review_base=None, **env):
     # Pin every knob land.sh reads. Inheriting os.environ is right for PATH and
     # HOME, and wrong for the lander's own switches: running the suite from a
     # shell that exported LAND_ALLOW_UNTRACKED=1 silently turned the "refused by
@@ -80,6 +84,9 @@ def land(cwd, gate="true", **env):
     e.update(LAND_GATE=gate, LAND_LOCK_WAIT_SECS="10", LAND_WORKTREE_ROOT=LANDER_ROOT,
              LAND_ALLOW_UNTRACKED="0", LAND_ATTEMPTS="3", LAND_EXPECT="")
     e.update(env)
+    candidate = git(cwd, "rev-parse", "HEAD")
+    e["LAND_EXPECT"] = e.get("LAND_EXPECT") or candidate
+    e["LAND_RECEIPT"] = str(approval(Path(cwd), candidate, base=review_base))
     if gate is None:
         e.pop("LAND_GATE")
     e.pop("VERIFY_LINT_ONLY", None)
@@ -132,6 +139,90 @@ def ancestor(d, a, b):
                           env=scrubbed_env()).returncode == 0
 
 
+def baseline_coverage():
+    """Exercise registered review ranges against real per-attempt Git targets."""
+    cases = []
+
+    def attempt(root, wt, baseline, gate="true"):
+        before = git(root, "rev-parse", "main")
+        result = land(wt, gate=gate, review_base=baseline)
+        cases.append(dict(root=str(root), candidate=git(wt, "rev-parse", "HEAD"),
+                          review_base=baseline, main_before=before,
+                          main_after=git(root, "rev-parse", "main"),
+                          returncode=result.returncode, stdout=result.stdout, stderr=result.stderr))
+        return result
+
+    def candidate(root, name):
+        wt = agent(root, name, "a.txt")
+        intermediate = git(wt, "rev-parse", "HEAD")
+        (wt / "c.txt").write_text("candidate\n")
+        git(wt, "add", "c.txt")
+        git(wt, "commit", "-qm", "candidate C")
+        return wt, intermediate, git(wt, "rev-parse", "HEAD")
+
+    for endpoint in ("intermediate", "candidate"):
+        root = repo()
+        base = git(root, "rev-parse", "main")
+        wt, intermediate, tip = candidate(root, "coverage-" + endpoint)
+        marker = root / ".git/gate-ran"
+        result = attempt(root, wt, intermediate if endpoint == "intermediate" else tip,
+                         f"touch {shlex.quote(str(marker))}")
+        check(f"review baseline on candidate-only {endpoint} is refused before integration or gate",
+              result.returncode != 0 and git(root, "rev-parse", "main") == base
+              and not marker.exists() and not ancestor(root, tip, "main"), result.stdout + result.stderr)
+
+    root = repo()
+    older = git(root, "rev-parse", "main")
+    git(root, "commit", "-q", "--allow-empty", "-m", "target B")
+    wt, _, tip = candidate(root, "coverage-older")
+    result = attempt(root, wt, older)
+    check("an older common review baseline authorizes its reviewed superset", result.returncode == 0
+          and ancestor(root, tip, "main"), result.stdout + result.stderr)
+    marker = root / ".git/idempotent-gate"
+    result = attempt(root, wt, tip, f"touch {shlex.quote(str(marker))}")
+    check("already-reachable candidate accepts its own review baseline without a gate", result.returncode == 0
+          and not marker.exists() and "already landed" in result.stdout, result.stdout + result.stderr)
+
+    for retry in (False, True):
+        root = repo()
+        wt, intermediate, tip = candidate(root, "coverage-origin-retry" if retry else "coverage-origin")
+        origin = Path(tempfile.mkdtemp(prefix="harness-origin-coverage.")) / "origin"
+        git(root, "clone", "-q", str(root), str(origin))
+        git(origin, "merge", "-q", "--ff-only", intermediate)
+        git(root, "remote", "add", "origin", str(origin))
+        git(root, "fetch", "-q", "origin", "main")
+        gate = "true"
+        if retry:
+            counter = root / ".git/coverage-gates"
+            gate = (f"if [ ! -f {shlex.quote(str(counter))} ]; then "
+                    f"git -C {shlex.quote(str(root))} remote remove origin; "
+                    f"git -C {shlex.quote(str(root))} commit -q --allow-empty -m peer; fi; "
+                    f"printf x >> {shlex.quote(str(counter))}")
+        result = attempt(root, wt, intermediate, gate)
+        if retry:
+            check("retry rechecks coverage when peer advance loses origin reconciliation", result.returncode != 0
+                  and not ancestor(root, tip, "main") and git(root, "log", "-1", "--format=%s", "main") == "peer"
+                  and "attempt 2/" in result.stdout and "review baseline" in result.stderr
+                  and counter.read_text() == "x", result.stdout + result.stderr)
+        else:
+            check("origin reconciliation covers a review baseline absent from captured local main",
+                  result.returncode == 0 and ancestor(root, tip, "main")
+                  and "reconciling origin/main" in result.stdout, result.stdout + result.stderr)
+    return cases
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--coverage-only", action="store_true")
+parser.add_argument("--coverage-proof", type=Path)
+coverage_args = parser.parse_args()
+coverage_cases = baseline_coverage()
+if coverage_args.coverage_proof:
+    coverage_args.coverage_proof.write_text(json.dumps(dict(cases=coverage_cases, checks=PASS, failures=FAIL), indent=2) + "\n")
+if coverage_args.coverage_only:
+    print(f"{len(PASS)} passed, {len(FAIL)} failed")
+    raise SystemExit(bool(FAIL))
+
+
 # --- a clean land ------------------------------------------------------------
 d = repo()
 wt = agent(d, "alpha")
@@ -146,7 +237,7 @@ check("main advanced past the candidate (--no-ff kept a merge commit)",
       git(d, "rev-parse", "main") != cand)
 check("main's tip is a merge commit", len(git(d, "rev-list", "--parents", "-1", "main").split()) == 3)
 check("the agent's own branch is untouched", git(wt, "rev-parse", "HEAD") == cand)
-check("the lock is released", not (d / ".git" / "land.lock").exists())
+check("the stable integration lock remains", (d / ".git/harness/locks/integration.lock").exists())
 check("the lander worktree is kept for reuse",
       len(git(d, "worktree", "list").splitlines()) == worktrees_before + 1,
       git(d, "worktree", "list"))
@@ -212,8 +303,9 @@ with tempfile.TemporaryDirectory(prefix="land-refresh-tools.") as td:
     (refresh_repo / "scripts").mkdir()
     (refresh_repo / "scripts/codegraph_freshness.py").write_text('''
 import json, os, subprocess, sys
-root = sys.argv[sys.argv.index('--root') + 1]
-main = os.environ['REFRESH_MAIN']
+from pathlib import Path
+root = str(Path(sys.argv[sys.argv.index('--root') + 1]).resolve())
+main = str(Path(os.environ['REFRESH_MAIN']).resolve())
 integrated = subprocess.run(['git', '-C', main, 'merge-base', '--is-ancestor',
                             os.environ['REFRESH_CANDIDATE'], 'main']).returncode == 0
 failed = root == main and (integrated or os.environ.get('REFRESH_FAIL_EARLY') == '1')
@@ -328,10 +420,15 @@ d9 = repo()
 wt9a, wt9b = agent(d9, "india"), agent(d9, "juliett")
 c9a, c9b = git(wt9a, "rev-parse", "HEAD"), git(wt9b, "rev-parse", "HEAD")
 out = {}
+race_errors = {}
 
 
 def race(key, wt):
-    out[key] = land(wt, gate="sleep 2")
+    try:
+        out[key] = land(wt, gate="sleep 2")
+    except Exception:
+        import traceback
+        race_errors[key] = traceback.format_exc()
 
 
 ts = [threading.Thread(target=race, args=(k, w)) for k, w in (("a", wt9a), ("b", wt9b))]
@@ -339,6 +436,9 @@ for t in ts:
     t.start()
 for t in ts:
     t.join()
+
+if race_errors:
+    raise AssertionError("concurrent lander helper failed:\n" + "\n".join(f"{key}: {error}" for key, error in race_errors.items()))
 
 check("both concurrent landers exit 0", out["a"].returncode == 0 and out["b"].returncode == 0,
       f"a={out['a'].returncode} {out['a'].stderr} / b={out['b'].returncode} {out['b'].stderr}")
@@ -348,8 +448,8 @@ check("the two lands serialised into a chain, not a race",
       len(git(d9, "rev-list", "main").splitlines()) == 5,
       git(d9, "log", "--oneline", "main"))
 check("the lock is released after a race", not (d9 / ".git" / "land.lock").exists())
-check("a contended land retried rather than failing",
-      "moved" in (out["a"].stdout + out["b"].stdout),
+check("contended lands serialize verification before reading their bases",
+      "attempts=1" in out["a"].stdout and "attempts=1" in out["b"].stdout,
       out["a"].stdout + "\n---\n" + out["b"].stdout)
 
 # --- the hook enforces the lander, without blocking ordinary agent commits ----
@@ -428,7 +528,7 @@ if FAIL:
 COPY_CONFIG = (
     "[land]\n"
     'copy_untracked = ["fn/sources", "fn/generated.json", "fn/generated\u2013v1.1.json",'
-    ' "fn/absent.json", "fn/tracked.json"]\n'
+    ' "fn/tracked.json"]\n'
 )
 d14 = repo()
 (d14 / "fn" / "sources").mkdir(parents=True)
@@ -479,10 +579,10 @@ for relative in ("fn/sources/untracked.txt", "fn/sources/deep/tracked.txt",
           copied.exists() and not source.samefile(copied))
 check("an unlisted ignored file is NOT copied", not (lwt14 / "fn" / "unlisted.json").exists())
 check("another session's live state is NOT copied", not (lwt14 / ".omc").exists())
-check("a listed path absent from main is reported, not fatal",
-      "fn/absent.json" in r14.stdout and r14.returncode == 0, r14.stdout)
+check("successful provisioning retains an input manifest",
+      (d14 / ".git/harness/land-inputs-mike.json").is_file())
 check("a listed path the candidate tracks is reported and not copied",
-      "fn/tracked.json, which the candidate tracks" in r14.stdout, r14.stdout)
+      "tracked input excluded: fn/tracked.json" in r14.stderr, r14.stdout)
 check("gate writes leave the primary untracked input unchanged",
       (d14 / "fn/sources/untracked.txt").read_text() == "provision me\n")
 check("gate writes leave the primary ignored input unchanged",
@@ -505,7 +605,7 @@ check("with no harness.toml nothing is copied", r14b.returncode == 0
 
 # A failed transfer must stop before the gate or main can move. Shadow only
 # the transfer command; the real lander and its Git operations still execute.
-for command in ("rsync", "cp"):
+for command in ("missing", "symlink"):
     with tempfile.TemporaryDirectory() as td:
         fixture = repo()
         (fixture / "fn/sources").mkdir(parents=True)
@@ -518,9 +618,9 @@ for command in ("rsync", "cp"):
         (fixture / "fn/generated.json").write_text("generated\n")
         candidate = agent(fixture, f"failed-{command}")
         original_main = git(fixture, "rev-parse", "main")
-        stub = Path(td) / command
-        stub.write_text("#!/bin/sh\nexit 23\n")
-        stub.chmod(0o755)
+        (fixture / "fn/generated.json").unlink()
+        if command == "symlink":
+            (fixture / "fn/generated.json").symlink_to(fixture / "fn/sources/raw.txt")
         gate_marker = Path(td) / "gate-ran"
         result = land(candidate, gate=f"touch {shlex.quote(str(gate_marker))}",
                       PATH=f"{td}:{os.environ['PATH']}")
@@ -852,7 +952,8 @@ check("and main does not move", git(d, "rev-parse", "main") == main_before)
 r = subprocess.run(["bash", str(LAND), "--expect", git(wt, "rev-parse", "HEAD")], cwd=str(wt),
                    capture_output=True, text=True,
                    env={**scrubbed_env(), "LAND_GATE": "true", "LAND_WORKTREE_ROOT": LANDER_ROOT,
-                        "LAND_LOCK_WAIT_SECS": "10", "LAND_ALLOW_UNTRACKED": "0", "LAND_EXPECT": ""})
+                        "LAND_LOCK_WAIT_SECS": "10", "LAND_ALLOW_UNTRACKED": "0", "LAND_EXPECT": "",
+                        "LAND_RECEIPT": str(approval(wt, git(wt, "rev-parse", "HEAD")))})
 check("--expect naming the tip lands", r.returncode == 0 and "LANDED" in r.stdout, r.stdout + r.stderr)
 r = subprocess.run(["bash", str(LAND), "--bogus"], cwd=str(wt), capture_output=True, text=True, env=scrubbed_env())
 check("an unknown argument is refused", r.returncode != 0 and "unknown argument" in r.stderr, r.stderr)
@@ -865,7 +966,7 @@ import shutil  # noqa: E402
 d = repo()
 SRC = LAND.parents[1]
 (d / "scripts").mkdir()
-for name in ("adr.py", "harness_config.py"):
+for name in ("adr.py", "harness_config.py", "paths.py"):
     shutil.copy2(SRC / "scripts" / name, d / "scripts" / name)
 (d / "harness.toml").write_text('[adr]\nrequire_for = []\n')
 (d / "docs" / "adr").mkdir(parents=True)
@@ -880,6 +981,36 @@ r = land(wt)
 check("a land whose candidate changes an ADR's component exits 0", r.returncode == 0, r.stdout + r.stderr)
 check("after LANDED, the land lists the ADR whose component it changed, with main checked out nowhere",
       "ADR 0001 [accepted] Touch: touched.txt" in r.stdout, r.stdout)
+
+# Required launch evidence is checked before integration work starts.
+d_required = repo()
+w_required = agent(d_required, "required-proof")
+c_required = git(w_required, "rev-parse", "HEAD")
+r_required = approval(w_required, c_required)
+main_required = git(d_required, "rev-parse", "main")
+for extra, label in (([], "missing candidate"), (["--expect", c_required], "missing receipt")):
+    result = subprocess.run(["bash", str(LAND), *extra], cwd=w_required, capture_output=True, text=True,
+                            env=scrubbed_env(LAND_EXPECT="", LAND_RECEIPT="", LAND_GATE="true"))
+    check(f"land refuses {label} evidence", result.returncode != 0, result.stdout + result.stderr)
+    check(f"{label} leaves main unchanged", git(d_required, "rev-parse", "main") == main_required)
+for divergent in (False, True):
+    origin_root, origin_bare = with_origin()
+    peer = Path(tempfile.mkdtemp(prefix="origin-failure-peer."))
+    subprocess.run(["git", "clone", "-q", str(origin_bare), str(peer)], check=True, env=scrubbed_env())
+    git(peer, "config", "user.name", "peer"); git(peer, "config", "user.email", "p@p")
+    (peer / "origin-new.txt").write_text("origin\n")
+    git(peer, "add", "origin-new.txt"); git(peer, "commit", "-qm", "origin move")
+    git(peer, "push", "-q", "origin", "main")
+    if divergent:
+        (origin_root / "local-new.txt").write_text("local\n")
+        git(origin_root, "add", "local-new.txt"); git(origin_root, "commit", "-qm", "local move")
+    candidate = agent(origin_root, f"failed-reconcile-{divergent}")
+    before_ref = git(origin_root, "rev-parse", "main")
+    before_index = git(origin_root, "ls-files", "--stage")
+    result = land(candidate, gate="false")
+    check(f"failed {'divergent' if divergent else 'behind'} origin gate does not move main",
+          result.returncode != 0 and git(origin_root, "rev-parse", "main") == before_ref, result.stdout + result.stderr)
+    check("failed reconciliation preserves authoritative index", git(origin_root, "ls-files", "--stage") == before_index)
 
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

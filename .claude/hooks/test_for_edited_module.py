@@ -26,6 +26,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from paths import SCRIPTS, root_for
+
 TIMEOUT = 60
 
 # git exports these into hook processes and they override cwd for every git
@@ -49,9 +52,8 @@ def common_dir(path):
 def trusted(root):
     """Return whether root is this session's project or one of its worktrees.
 
-    The hook imports root's scripts/harness_config.py and runs a command from
-    root's harness.toml, so a session that has cd'd into another repository
-    must not execute that repository's code.
+    The owned reader runs a command from root's harness.toml, so a session
+    that has cd'd into another repository must not execute its commands.
     """
     project = os.environ.get("CLAUDE_PROJECT_DIR")
     mine = common_dir(project) if project else None
@@ -60,7 +62,7 @@ def trusted(root):
 
 def load_config(root):
     """Return (harness_config module, config) for one repository root."""
-    sys.path.insert(0, str(root / "scripts"))
+    sys.path.insert(0, str(SCRIPTS))
     import harness_config
     return harness_config, harness_config.load(root)
 
@@ -79,16 +81,16 @@ def main():
     if not raw:
         return 0
     root = Path(payload.get("cwd") or os.getcwd())
-    if not (root / "scripts" / "harness_config.py").is_file():
-        return 0
     if not trusted(root):
         return 0
     try:
+        edited = Path(raw) if Path(raw).is_absolute() else root / raw
+        root = root_for(root)
         harness_config, config = load_config(root)
     except Exception as exc:  # the reader's own error, or an import failure
         print(f"mapped test not run: harness.toml unreadable: {exc}", file=sys.stderr)
         return 2
-    found = harness_config.mapped_test(config, root, Path(raw))
+    found = harness_config.mapped_test(config, root, edited)
     if found is None:
         return 0
     test, command = found

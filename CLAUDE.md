@@ -41,19 +41,26 @@ The Agent-matcher hooks run `require_agent_model.py`, which denies an `Agent` ca
 These mechanisms select models only on the surfaces they control; neither routes the interactive parent session.
 
 Codex uses native project profiles in `.codex/agents/`: explorer selects `gpt-6-luna` with high effort, executor selects `gpt-6.1-sol` with medium effort, and reviewer and planner select `gpt-6-astra` with high effort.
-The project `.codex/hooks.json` calls `model_router.py --runtime codex` before native `spawn_agent` calls.
+The project `.codex/hooks.json` runs `scripts/native_hook_adapter.py`, which calls `model_router.py --runtime codex` before native `spawn_agent` calls.
 It requires an approved `agent_type` and refuses mismatched explicit model or effort overrides; a task name never substitutes for role selection.
 A host that omits native role selection receives a routing-unavailable denial.
 The project and the exact hook definition must be trusted through Codex before the hook runs.
 Codex 0.163.0 reads linked-worktree hook declarations from the primary checkout, so a registry added only on a linked branch needs a standalone clone for activation testing.
-These profiles do not route the interactive parent or register the remaining Claude hooks in Codex.
+These profiles do not route the interactive parent.
+The adapter expands native patches per file, including rename sources and destinations, then reuses ADR, mapped-test and blast-radius policy.
+Shell events use the actual tool workdir, and native lifecycle events preserve session, tool-call and agent IDs for existing guards.
 
 **Rule 11, the relocating-oracle rule.** A control must not derive its expectation from the thing it checks: such an oracle agrees by construction and passes hardest exactly when the artefact is wrong.
 `MODEL-03B` in `tests/test_workflow_routing.py` is the pattern to copy - it keeps its own expectation table and refuses to read it from the files it validates.
 Its model-shaped case is delegation: bounded implementation goes to Sonnet, mechanical discovery and complete counting to Haiku, review, planning and independent re-derivation to Opus, and an `Agent` call states `model` explicitly rather than inheriting.
 Authoring and approval occur in fresh contexts, with review depth set by consequence in root `AGENTS.md`.
 
-Every gate hook fails closed (a crash blocks) and every advisory fails open; `tests/test_harness_controls.py` pins the registrations and proves both. Gate decisions (allow and deny) are recorded, hash-chained, in `.git/harness/events.jsonl` by `scripts/harness_events.py`; `python3 scripts/harness_events.py verify` checks the chain. `scripts/harness_doctor.py` reports missing prerequisites and interfering user-level hooks at SessionStart.
+Claude gate registrations use `onFailure: "block"` on supported clients; crash wrappers preserve explicit denials.
+The Codex adapter bounds policy subprocesses and emits explicit denials for malformed input, crashes, missing gates, and inner timeouts; advisory failures continue.
+Codex 0.163.0 outer hook timeout or trust failure can still skip enforcement, so declarations alone are not an activation claim.
+`tests/test_harness_controls.py` and `tests/test_native_hook_adapter.py` pin those contracts.
+Gate decisions are recorded, hash-chained, in `.git/harness/events.jsonl`; `python3 scripts/harness_events.py verify` checks the chain.
+`scripts/harness_doctor.py --runtime both --probe-native` inspects prerequisites, additive hooks, effective native configuration and exact hook trust without starting a model turn.
 Claude hooks also report checkout-local CodeGraph freshness, run the test mapped to an edited module, verify that a `git commit` really landed, and print the blast radius of an edit to a shared control.
 CodeGraph preparation applies only when the current or primary checkout already has an index; Vulfpeck remains unindexed by default.
 Treat hook success as permission to continue, not proof that the candidate is correct.
@@ -61,7 +68,7 @@ Never edit marker-delimited or generated content by hand; change its owner and r
 
 The project `.codex/config.toml` permits only the audited native Smartsheet read tools and disables the duplicate Smartsheet app route.
 It carries the public endpoint and policy only; credentials and helpers remain in user configuration.
-This is a Codex tool policy, not a registration of the Claude hooks in Codex.
+This tool policy is separate from native hook registration.
 
 ## Agent skills
 

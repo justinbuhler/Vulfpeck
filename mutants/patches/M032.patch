@@ -1,0 +1,15 @@
+# mutant_id: M032
+# target: .claude/hooks/test_for_edited_module.py
+# operator: drop-control
+# behaviour: mapped edits run without a domain config reader
+--- a/.claude/hooks/test_for_edited_module.py
++++ b/.claude/hooks/test_for_edited_module.py
+@@ -83,6 +83,8 @@
+     root = Path(payload.get("cwd") or os.getcwd())
+     if not trusted(root):
+         return 0
++    if not (root / "scripts/harness_config.py").is_file():
++        return 0
+     try:
+         edited = Path(raw) if Path(raw).is_absolute() else root / raw
+         root = root_for(root)

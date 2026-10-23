@@ -1,0 +1,18 @@
+# mutant_id: M039
+# target: scripts/harness_install.py
+# operator: replace-foreign-config
+# behaviour: restore preserves foreign settings and later permission and hook additions
+--- a/scripts/harness_install.py
++++ b/scripts/harness_install.py
+@@ -411,7 +411,10 @@
+         if file_hash(path) == value["config_preimages"][relative]:
+             continue
+         text = merge_registrations(path.read_text(), entries, previous["registrations"][relative] if previous else [])
+-        document = json.loads(text)
++        document = {"hooks": {}}
++        for record in previous["registrations"][relative] if previous else []:
++            document["hooks"].setdefault(record["event"], []).append(record["entry"])
++        text = json.dumps(document, indent=2) + "\n"
+         if not value["config_had_hooks"][relative] and not document["hooks"]:
+             document.pop("hooks")
+             text = json.dumps(document, indent=2) + "\n"

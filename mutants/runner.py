@@ -27,8 +27,16 @@ import signal
 import subprocess
 import sys
 import time
+import tempfile
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+from paths import REPO
+from harness_inputs import copy_inputs
+from harness_config import load
+from harness_lock import repository_lock, git_environment
+from harness_receipts import corpus_digest, identity, write_json
+
+ROOT = REPO
 LEDGER = ROOT / "mutants" / "mutation_ledger.jsonl"
 # Two test idioms live in this tree and they report failure differently. Most
 # files are standalone scripts printing "  FAIL <name>"; two use unittest, which
@@ -48,7 +56,7 @@ SUMMARY_LINE = re.compile(r"^\s*(\d+) passed, (\d+) failed$", re.M)
 
 def git(*args, check=True):
     """Run one git command in the repository root and return its stdout."""
-    done = subprocess.run(("git", *args), cwd=ROOT, capture_output=True, text=True)
+    done = subprocess.run(("git", *args), cwd=ROOT, capture_output=True, text=True, env=git_environment())
     if check and done.returncode != 0:
         raise SystemExit(f"git {' '.join(args)} failed: {done.stderr.strip()}")
     return done.stdout
@@ -68,8 +76,6 @@ def tree_digest():
     """
     accumulator = hashlib.sha256()
     for name in sorted(git("ls-files").splitlines()):
-        if name == LEDGER.relative_to(ROOT).as_posix():
-            continue
         path = ROOT / name
         accumulator.update(name.encode())
         accumulator.update(path.read_bytes() if path.is_file() else b"<absent>")
@@ -79,7 +85,7 @@ def tree_digest():
 def dirty():
     """Return the modified tracked files, ignoring this runner's own ledger."""
     return [line for line in git("status", "--porcelain", "--untracked-files=no").splitlines()
-            if line.strip() and not line.endswith(LEDGER.name)]
+            if line.strip()]
 
 
 def interpreter():
@@ -113,17 +119,17 @@ def run_one(command, path, timeout):
     name = path.relative_to(ROOT).as_posix()
     # HARNESS_EVENTS_LOG: tests run real hooks; keep mutant runs out of the real
     # decision record (scripts/harness_events.py).
-    environment = dict(os.environ, PYTHONPATH=f"{ROOT}:{ROOT / 'scripts'}",
+    environment = dict(git_environment(), PYTHONPATH=f"{ROOT}:{ROOT / 'scripts'}",
                        HARNESS_EVENTS_LOG=os.devnull)
-    try:
-        done = subprocess.run([*command, str(path)], cwd=ROOT, capture_output=True,
-                              text=True, timeout=timeout, env=environment)
-        code, out, err = done.returncode, done.stdout, done.stderr
-    except subprocess.TimeoutExpired as expired:
-        code = -1
-        out = (expired.stdout or b"").decode("utf-8", "replace") if isinstance(
-            expired.stdout, bytes) else (expired.stdout or "")
-        err = f"TIMEOUT after {timeout}s"
+    with subprocess.Popen([*command, str(path)], cwd=ROOT, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True, env=environment, start_new_session=True) as child:
+        try:
+            out, err = child.communicate(timeout=timeout)
+            code = child.returncode
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid, signal.SIGKILL)
+            out, err = child.communicate()
+            code, err = -1, f"TIMEOUT after {timeout}s\n{err}"
     summary = SUMMARY_LINE.search(out)
     return name, {
         "returncode": code,
@@ -134,6 +140,7 @@ def run_one(command, path, timeout):
         "passed": int(summary.group(1)) if summary else 0,
         "counted": summary is not None,
         "stderr": err,
+        "stdout": out,
     }
 
 
@@ -265,126 +272,130 @@ def report(ledger_path, wanted_round=None):
 
 
 
-def main():
-    for received in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(received, lambda number, frame: (_ for _ in ()).throw(
-            KeyboardInterrupt(f"signal {number}")))
+def execute(args, receipt):
+    """Measure the isolated specimen with mandatory stable green baselines."""
+    command, paths = [sys.executable], suite_files()
+    if not paths:
+        raise ValueError("no test scripts in candidate")
+    receipt["suite_inventory_digest"] = hashlib.sha256("\n".join(
+        f"{p.relative_to(ROOT)}:{hashlib.sha256(p.read_bytes()).hexdigest()}" for p in paths).encode()).hexdigest()
+    receipt["command"] = command
+    receipt["baselines"] = [run_suite(command, paths, args.timeout, args.workers) for _ in range(2)]
+    if any(row["returncode"] != 0 for run in receipt["baselines"] for row in run.values()):
+        raise ValueError("baseline is not green; mutation evidence refused")
+    receipt["green_baseline"] = True
+    baseline = receipt["baselines"][0]
+    baseline_digest = tree_digest()
+    failures = False
+    ledger = pathlib.Path(args.ledger)
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    with ledger.open("a", encoding="utf-8") as handle:
+        for patch in mutants(args.only):
+            fields = metadata(patch)
+            applied = subprocess.run(["git", "apply", str(patch)], cwd=ROOT,
+                                     capture_output=True, text=True, env=git_environment())
+            row = {"mutant_id": patch.stem, "round": args.round, "target": fields.get("target"),
+                   "failing_spec_names": [], "killed": False, "status": "PATCH_ERROR", "stderr": applied.stderr}
+            if applied.returncode == 0:
+                try:
+                    if fields.get("target"):
+                        discard_bytecode(fields["target"])
+                    current = run_suite(command, paths, args.timeout, args.workers)
+                    killed, specs, crashes, tail = compare(baseline, current)
+                    row.update(killed=killed, failing_spec_names=specs, crash_only_scripts=crashes,
+                               stderr_tail=tail, results=current,
+                               status="TIMEOUT" if any(r["returncode"] == -1 for r in current.values()) else
+                                      "KILLED" if killed and specs else "UNMAPPED" if killed else "SURVIVED")
+                finally:
+                    git("reset", "--hard", receipt["candidate_sha"])
+                    git("clean", "-fdx")
+                    copy_inputs(args.source_root, ROOT, load(ROOT)["land"]["copy_untracked"])
+                    if fields.get("target"):
+                        discard_bytecode(fields["target"])
+                    if tree_digest() != baseline_digest:
+                        raise ValueError("specimen changed outside the applied mutation")
+            receipt["mutants"][patch.stem] = row
+            failures |= row["status"] != "KILLED"
+            handle.write(json.dumps(row) + "\n")
+            handle.flush()
+            print(f"{patch.stem} {row['status']}")
+    receipt["all_requested_completed"] = set(receipt["mutants"]) == set(receipt["requested_mutant_ids"])
+    return int(failures or not receipt["all_requested_completed"])
 
+
+def source_identity(root):
+    """Capture original source bytes, staged state and every ref."""
+    global ROOT
+    saved = ROOT
+    try:
+        ROOT = root
+        return {"tree": tree_digest(), "head": identity(root, "HEAD"),
+                "index": git("ls-files", "--stage", "-z"),
+                "refs": git("for-each-ref", "--format=%(refname) %(objectname)")}
+    finally:
+        ROOT = saved
+
+
+def main():
+    """Run candidate mutations in an independent clone under the common mutex."""
+    global ROOT
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=pathlib.Path, default=pathlib.Path.cwd())
+    parser.add_argument("--candidate", default="HEAD")
+    parser.add_argument("--receipt", type=pathlib.Path)
     parser.add_argument("--workers", type=int, default=12)
-    # Generous on purpose: the lander's end-to-end tests take minutes under
-    # parallel load, and a script that times out at baseline has no killing power.
-    parser.add_argument("--timeout", type=int, default=600,
-                        help="per test script, seconds")
+    parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--round", type=int, default=1)
     parser.add_argument("--only", nargs="*", default=None)
-    parser.add_argument("--ledger", default=str(LEDGER))
-    parser.add_argument("--report", action="store_true",
-                        help="print the mutant-to-spec table for a recorded round")
-    parser.add_argument("--require-green", action="store_true",
-                        help="refuse to run unless every test script passes")
+    parser.add_argument("--ledger")
+    parser.add_argument("--report", action="store_true")
+    parser.add_argument("--require-green", action="store_true", help="compatibility: green baseline is always required")
     args = parser.parse_args()
-
+    ROOT = pathlib.Path(subprocess.check_output(["git", "-C", str(args.root), "rev-parse", "--show-toplevel"],
+                                               env=git_environment(), text=True).strip()).resolve()
+    source = ROOT
+    args.source_root = source
     if args.report:
-        return report(args.ledger, args.round if "--round" in sys.argv else None)
-
-    if dirty():
-        raise SystemExit("tracked files are modified; refusing to run on a dirty tree")
-
-    # An empty corpus would run the baseline, kill nothing, and report a round.
-    # A run that tested no mutant is not a result, so it is refused up front.
-    if not mutants(args.only):
-        raise SystemExit("no mutants matched in mutants/patches/; nothing to run")
-
-    command = interpreter()
-    paths = suite_files()
-    print(f"interpreter: {' '.join(command)}\nsuite: {len(paths)} scripts")
-
-    started = time.monotonic()
-    baseline_digest = tree_digest()
-    baseline = run_suite(command, paths, args.timeout, args.workers)
-    red = sorted(name for name, r in baseline.items() if r["returncode"] != 0)
-    checks = sum(r["passed"] for r in baseline.values())
-    print(f"baseline: {checks} checks, {len(red)} failing scripts, "
-          f"{time.monotonic() - started:.0f}s")
-    timed_out = sorted(name for name, r in baseline.items() if r["returncode"] == -1)
-    if timed_out:
-        # Not a red test: the runner is misconfigured. Every mutant would then
-        # look like a survivor or a crash-only kill for these scripts.
-        raise SystemExit(f"baseline timed out after {args.timeout}s in {timed_out}; "
-                         "raise --timeout (or lower --workers) and run again")
-    if red and args.require_green:
-        raise SystemExit(f"baseline is not green: {red}")
-    if red:
-        # A kill is attributed differentially -- green-to-red, or a new named
-        # FAIL -- so a script already red here cannot manufacture one. The names
-        # are recorded so the ledger says what killing power was absent.
-        print(f"  {len(red)} scripts red at baseline: {red}; "
-              f"kills are attributed differentially")
-
-    ledger = pathlib.Path(args.ledger)
-    corpus = mutants(args.only)
-    killed_count = 0
-    with ledger.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps({
-            "record": "baseline", "round": args.round,
-            "scripts": len(paths), "checks": checks,
-            "red_at_baseline": red, "tree_digest": baseline_digest,
-            "corpus": len(corpus)}) + "\n")
-        for patch in corpus:
-            fields = metadata(patch)
-            mutant_id = fields.get("mutant_id", patch.stem)
-            applied = subprocess.run(("git", "apply", str(patch)), cwd=ROOT,
-                                     capture_output=True, text=True)
-            if applied.returncode != 0:
-                record = {"mutant_id": mutant_id, "round": args.round,
-                          "patch": patch.name, "error": "patch did not apply",
-                          "killed": None, "failing_spec_names": [],
-                          "stderr_tail": applied.stderr.strip()[-2000:]}
-                handle.write(json.dumps(record) + "\n")
-                handle.flush()
-                print(f"  {mutant_id} PATCH-FAILED")
-                continue
-
-            discard_bytecode(fields["target"])
-            began = time.monotonic()
-            try:
-                current = run_suite(command, paths, args.timeout, args.workers)
-                killed, specs, crashes, tail = compare(baseline, current)
-            finally:
-                # A runner killed mid-mutant leaves the mutation applied, and every
-                # later result is then measured against poisoned source. So the
-                # revert belongs to `finally`, not to the happy path, and SIGTERM
-                # is turned into an exception for the same reason: the default
-                # handler exits without unwinding and would skip this block.
-                git("apply", "-R", str(patch), check=False)
-                discard_bytecode(fields["target"])
-                after_digest = tree_digest()
-                if after_digest != baseline_digest:
-                    raise SystemExit(
-                        f"{mutant_id}: tree not byte-identical after revert "
-                        f"({after_digest} != {baseline_digest})")
-
-            record = {"mutant_id": mutant_id, "round": args.round,
-                      "patch": patch.name, "target": fields.get("target"),
-                      "operator": fields.get("operator"),
-                      "behaviour": fields.get("behaviour"),
-                      "killed": killed, "failing_spec_names": specs,
-                      "crash_only_scripts": crashes,
-                      "stderr_tail": tail,
-                      "seconds": round(time.monotonic() - began, 1),
-                      "tree_verified": True}
-            handle.write(json.dumps(record) + "\n")
-            handle.flush()
-            killed_count += bool(killed)
-            mark = "KILLED " if killed else "SURVIVED"
-            detail = specs[0] if specs else (f"crash-only: {crashes[0]}" if crashes else "")
-            print(f"  {mutant_id} {mark} {len(specs)} specs  {detail}")
-
-    total = len(corpus)
-    print(f"\nround {args.round}: {killed_count}/{total} killed "
-          f"({100 * killed_count / total:.0f}%), {time.monotonic() - started:.0f}s")
-    return 0
+        return report(args.ledger or str(LEDGER), args.round if "--round" in sys.argv else None)
+    output = (args.receipt or source / "tmp/json/mutation-receipt.json").resolve()
+    args.ledger = str(pathlib.Path(args.ledger or source / "tmp/json/mutation-ledger.jsonl").resolve())
+    value = dict(schema_version=1, kind="mutation", mode="full", exit_code=1, green_baseline=False,
+                 all_requested_completed=False, baselines=[], mutants={})
+    with repository_lock(source, "verification"):
+        value["source_before"] = source_identity(source)
+        try:
+            candidate = identity(source, args.candidate + "^{commit}")
+            if candidate != identity(source, "HEAD") or dirty():
+                raise ValueError("mutation requires the clean committed candidate at HEAD")
+            available = {p.stem for p in mutants(None)}
+            requested = sorted(set(args.only) if args.only is not None else available)
+            if not requested or not set(requested).issubset(available):
+                raise ValueError("no mutants matched or unknown requested mutant ids")
+            value.update(candidate_sha=candidate, candidate_tree=identity(source, candidate + "^{tree}"),
+                         requested_mutant_ids=requested, corpus_digest=corpus_digest(source, requested),
+                         source_before=source_identity(source))
+            scratch = source / "tmp/git"
+            scratch.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix="mutation-", dir=scratch) as directory:
+                specimen = pathlib.Path(directory) / "specimen"
+                subprocess.run(["git", "clone", "--no-hardlinks", "--quiet", str(source), str(specimen)],
+                               check=True, env=git_environment(), capture_output=True)
+                subprocess.run(["git", "-C", str(specimen), "checkout", "--quiet", "--detach", candidate],
+                               check=True, env=git_environment(), capture_output=True)
+                value["input_manifest"] = copy_inputs(source, specimen, load(specimen)["land"]["copy_untracked"])
+                ROOT = specimen
+                args.only = requested
+                value["exit_code"] = execute(args, value)
+        except (ValueError, OSError, subprocess.SubprocessError, KeyboardInterrupt) as exc:
+            value.update(exit_code=1, error=str(exc))
+            print(f"mutation: {exc}", file=sys.stderr)
+        finally:
+            ROOT = source
+            value["source_after"] = source_identity(source)
+            if value.get("source_before") != value["source_after"]:
+                value.update(exit_code=1, error="source identity changed during mutation verification")
+            write_json(output, value)
+    return value["exit_code"]
 
 
 if __name__ == "__main__":

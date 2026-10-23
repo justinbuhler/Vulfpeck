@@ -36,6 +36,12 @@ import signal
 import subprocess
 import sys
 import time
+
+# Shared policy code is loaded from this checkout, never another task.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
+from harness_config import load as load_config
+from harness_inputs import copy_inputs, safe_input
+from harness_lock import repository_lock
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -249,10 +255,7 @@ CACHE_NAMES = {"__pycache__", ".pytest_cache", ".ruff_cache", ".DS_Store",
 
 def clonable(rel):
     """Return whether one ignored path should be cloned into a worktree."""
-    parts = pathlib.PurePosixPath(rel).parts
-    if any(name in CACHE_NAMES for name in parts):
-        return False
-    return not any(rel == deny or rel.startswith(deny + "/") for deny in NEVER_CLONE)
+    return safe_input(rel)
 
 
 def ignored_inputs(source):
@@ -346,33 +349,58 @@ def clone_ignored_inputs(worktree):
         (list): repository-relative directories cloned in.
     """
     source = main_checkout()
-    cloned = []
-    for src in ignored_inputs(source):
-        rel = src.relative_to(source)
-        dst = worktree / rel
-        if src.is_dir():
-            dst.mkdir(parents=True, exist_ok=True)
-            subprocess.run([*clone_argv("-R", "-n"), f"{src}/.", f"{dst}/"],
-                           capture_output=True, text=True, timeout=900,
-                           env=clean_env())
-            missing = missing_after_clone(src, dst)
-            if missing:
-                die(f"cloning {rel} left {len(missing)} file(s) behind, "
-                    f"first: {missing[0]}")
-        elif src.is_file():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            if not os.path.lexists(dst):
-                subprocess.run([*clone_argv(), str(src), str(dst)],
-                               capture_output=True, text=True, timeout=900)
-            if not os.path.lexists(dst):
-                die(f"cloning {rel} into the worktree produced no file")
-        else:
+    return copy_inputs(source, worktree, load_config(source)["land"]["copy_untracked"])
+
+
+def lease_files(names, worktree):
+    """Validate literal write ownership before handing over a worktree."""
+    files = []
+    for name in names:
+        if (not isinstance(name, str) or not name or set("*?[") & set(name) or name.startswith(":")
+                or Path(name).is_absolute() or ".." in Path(name).parts):
+            die(f"lease path {name!r} is not a literal file")
+        target = (worktree / name).resolve()
+        if not target.is_relative_to(worktree) or target == worktree or target.is_dir():
+            die(f"lease path {name!r} is not a literal file inside the worktree")
+        files.append(target.relative_to(worktree).as_posix())
+    if not files:
+        die("writer provision requires at least one literal --file lease")
+    return sorted(set(files))
+
+
+def check_lease(root, manifest, files):
+    """Repeat manifest ownership and overlap checks at queue trust boundaries."""
+    mine = set(manifest.get("files", []))
+    if manifest.get("lease_state") != "ACTIVE" or not set(files).issubset(mine):
+        die("queued file is outside the active task write lease")
+    for path in (root / "tasks").glob("*.json"):
+        other = json.loads(path.read_text())
+        if not other.get("lease_state"):
+            die(f"task {other.get('task')} has no verified lease state; reconcile it first")
+        if other.get("task") == manifest["task"] or other.get("lease_state") != "ACTIVE":
             continue
-        cloned.append(str(rel))
-    return cloned
+        for ours in mine:
+            for theirs in other.get("files", []):
+                if ours == theirs or Path(ours).is_relative_to(theirs) or Path(theirs).is_relative_to(ours):
+                    die(f"write lease overlaps task {other['task']}: {ours}")
 
 
-def cmd_provision(args):
+def cmd_release(args):
+    """Release ownership only after explicit clean expected-tip verification."""
+    root = state_root()
+    with repository_lock(Path.cwd(), "task-state"):
+        manifest = load_manifest(root, args.task)
+        worktree = Path(manifest["worktree"])
+        if head_sha(worktree) != args.expect or porcelain(worktree):
+            die("lease release requires the expected clean worktree tip")
+        if any(json.loads(p.read_text()).get("task") == args.task for p in (root / "queue").glob("*.json")):
+            die("queued task cannot release its lease")
+        manifest.update(lease_state="VERIFIED_COMPLETE", verified_sha=args.expect, verified=now())
+        write_json(root / "tasks" / f"{args.task}.json", manifest)
+    return 0
+
+
+def _provision(args):
     """Create one task's worktree from an explicitly named baseline commit."""
     root = state_root()
     manifest_path = root / "tasks" / f"{args.task}.json"
@@ -387,12 +415,18 @@ def cmd_provision(args):
     path = Path(args.path).expanduser().resolve()
     refuse_if_dirty(path)
 
+    files = lease_files(args.file, path)
+    proposed = {"task": args.task, "files": files, "lease_state": "ACTIVE"}
+    check_lease(root, proposed, files)
     branch = args.branch or f"agent/{args.task}"
     proc = git("worktree", "add", "-b", branch, str(path), baseline_sha)
     if proc.returncode:
         die(f"git worktree add failed ({proc.returncode}): {proc.stderr.strip()}")
 
-    cloned = clone_ignored_inputs(path)
+    try:
+        cloned = clone_ignored_inputs(path)
+    except (ValueError, OSError) as exc:
+        die(str(exc))
 
     # Cloning ignored content can leave the worktree dirty, because some of the
     # rules that make it ignored live in untracked files. `.claude-flow/` is the
@@ -439,7 +473,10 @@ def cmd_provision(args):
         "gate": str(gate_hook) if gate_hook else None,
         "branch": branch,
         "worktree": str(path),
-        "cloned_inputs": cloned,
+        "cloned_inputs": [item["path"] for item in cloned],
+        "input_manifest": cloned,
+        "files": files,
+        "lease_state": "ACTIVE",
         "created": now(),
     }
     write_json(manifest_path, manifest)
@@ -461,9 +498,15 @@ def cmd_provision(args):
     return 0
 
 
+def cmd_provision(args):
+    """Freeze baseline, inputs and exclusive ownership before writer start."""
+    with repository_lock(Path.cwd(), "task-state"):
+        return _provision(args)
+
+
 # --- enqueue -----------------------------------------------------------------
 
-def cmd_enqueue(args):
+def _enqueue(args):
     """Record one commit request for the lander to consume."""
     root = state_root()
     manifest = load_manifest(root, args.task)
@@ -488,6 +531,8 @@ def cmd_enqueue(args):
     if not files:
         die("a commit request must name at least one --file")
 
+    check_lease(root, manifest, files)
+
     request = {
         "task": args.task,
         "message": args.message,
@@ -502,6 +547,12 @@ def cmd_enqueue(args):
     write_json(root / "queue" / name, request)
     print(f"queued {name}")
     return 0
+
+
+def cmd_enqueue(args):
+    """Queue only files held by one active manifest owner."""
+    with repository_lock(Path.cwd(), "task-state"):
+        return _enqueue(args)
 
 
 # --- land --------------------------------------------------------------------
@@ -673,29 +724,12 @@ def acquire_lander_lock(root):
     Returns:
         (Path): the lock file now held by this process.
     """
-    lock = root / "lander.lock"
-    # ponytail: three attempts, not a real mutex. Two landers that both find the
-    # same dead holder can race here; O_EXCL still means only one wins, and the
-    # loser retries. If landers ever run unattended in numbers, replace this
-    # with a lock whose holder is proven by an open file descriptor.
-    for _ in range(3):
-        try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            holder = ""
-            try:
-                holder = lock.read_text().strip()
-            except OSError:
-                pass
-            if alive(holder):
-                die(f"another lander already holds {lock} (pid {holder})")
-            print(f"taking over {lock} from dead pid {holder or 'unknown'}")
-            lock.unlink(missing_ok=True)
-            continue
-        os.write(fd, f"{os.getpid()}\n".encode())
-        os.close(fd)
-        return lock
-    die(f"could not take {lock}; another lander keeps reclaiming it")
+    holder = repository_lock(Path.cwd(), "queue", blocking=False)
+    try:
+        handle = holder.__enter__()
+    except BlockingIOError:
+        die("another lander already holds the common queue mutex")
+    return holder, handle
 
 
 def with_lock_backoff(argv, timeout, tries=LOCK_TRIES):
@@ -847,6 +881,11 @@ def land_one(root, request_path, timeout, lock_tries=LOCK_TRIES):
                 or target.is_dir()):
             return fail(f"queued path {name!r} is not one literal file inside the worktree")
 
+    try:
+        check_lease(root, manifest, request["files"])
+    except SystemExit as exc:
+        return fail(f"invalid task write lease: {exc}")
+
     # The agent's own index is not the queue. Anything staged there that the
     # request does not name would ride along in a pathspec-less commit.
     # --no-renames: a staged rename must show both its source and its target.
@@ -913,7 +952,7 @@ def land_one(root, request_path, timeout, lock_tries=LOCK_TRIES):
 def cmd_land(args):
     """Consume the queue as the single lander, one commit at a time."""
     root = state_root()
-    lock = acquire_lander_lock(root)
+    lock, lock_handle = acquire_lander_lock(root)
 
     def shutdown(signum, _frame):
         """Kill the running gate's tree, then let `finally` release the lock.
@@ -958,7 +997,7 @@ def cmd_land(args):
         kill_group(_child_pgid)
         for sig, handler in previous_handlers.items():
             signal.signal(sig, handler)
-        lock.unlink(missing_ok=True)
+        lock.__exit__(None, None, None)
 
     print(f"{landed} landed, {failed} failed")
     # The process exit code carries the outcome. Nothing is echoed after this.
@@ -1059,7 +1098,13 @@ def build_parser():
                    help="commit-ish to branch from; never defaulted to HEAD")
     p.add_argument("--path", required=True)
     p.add_argument("--branch")
+    p.add_argument("--file", action="append", required=True, help="literal repository-relative writer lease")
     p.set_defaults(func=cmd_provision)
+
+    p = sub.add_parser("release", help="verify a clean expected tip and release its lease")
+    p.add_argument("--task", required=True, type=task_name)
+    p.add_argument("--expect", required=True)
+    p.set_defaults(func=cmd_release)
 
     p = sub.add_parser("enqueue", help="queue one commit request")
     p.add_argument("--task", required=True, type=task_name)

@@ -1,0 +1,15 @@
+# mutant_id: M041
+# target: scripts/harness_install.py
+# operator: freeze-relative-hook
+# behaviour: relative prior hooks resolve separately in each invoking worktree
+--- a/scripts/harness_install.py
++++ b/scripts/harness_install.py
+@@ -297,7 +297,7 @@
+     config += "\n[tests]\ncount_pattern = " + json.dumps(commands["count_pattern"]) + "\n"
+     contents[".vulfpeck/harness.toml"] = config.encode()
+     for name in sorted(events):
+-        contents[f".vulfpeck/git-hooks/{name}"] = dispatcher(name, prior_path)
++        contents[f".vulfpeck/git-hooks/{name}"] = dispatcher(name, prior_directory)
+     if previous and set(previous["files"]) - set(contents):
+         raise ValueError("release removes owned components; restore the previous installation before adopting it")
+     for relative, content in contents.items():

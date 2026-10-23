@@ -4,12 +4,12 @@
 # behaviour: the doctor names user SubagentStart hooks
 --- a/scripts/harness_doctor.py
 +++ b/scripts/harness_doctor.py
-@@ -94,7 +94,7 @@
-             problems.append(f"harness.toml: {exc}")
+@@ -192,7 +192,7 @@
  
-     user = user_settings()
--    for command in hook_commands(user, "SubagentStart"):
-+    for command in hook_commands(user, "SubagentStartX"):
-         problems.append("user-level SubagentStart hook may inject context into reviewers: "
-                         + script_name(command))
-     bash_hooks = hook_commands(user, "PreToolUse", matcher_has="Bash")
+     if runtime in ("claude", "both"):
+         user = user_settings()
+-        for command in hook_commands(user, "SubagentStart"):
++        for command in hook_commands(user, "SubagentStartX"):
+             problems.append("user-level SubagentStart hook may inject context into reviewers: "
+                             + script_name(command))
+         bash_hooks = hook_commands(user, "PreToolUse", matcher_has="Bash")

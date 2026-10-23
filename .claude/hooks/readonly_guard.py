@@ -30,6 +30,7 @@ import hashlib
 import json
 import os
 import subprocess
+import stat
 import sys
 from pathlib import Path
 
@@ -55,6 +56,7 @@ def record(*args, **kwargs):
 
 def git(cwd, *args):
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["GIT_OPTIONAL_LOCKS"] = "0"
     try:
         done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
                               timeout=20, env=env)
@@ -126,6 +128,24 @@ def is_ancestor(top, old, new):
     return git(top, "merge-base", "--is-ancestor", old, new) is not None
 
 
+def content_state(top):
+    """Fingerprint bytes, link targets and modes even when status is unchanged."""
+    listed = git(top, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    staged = git(top, "ls-files", "--stage", "-z")
+    if listed is None or staged is None:
+        raise ValueError("cannot read checkout content/index identities")
+    contents = {}
+    for name in sorted(set(listed.split("\0")) - {""}):
+        path = Path(top) / name
+        if not path.exists() and not path.is_symlink():
+            contents[name] = "absent"
+            continue
+        mode = path.lstat().st_mode
+        raw = os.readlink(path).encode() if path.is_symlink() else path.read_bytes() if path.is_file() else b"<directory>"
+        contents[name] = hashlib.sha256(str(stat.S_IMODE(mode)).encode() + b"\0" + raw).hexdigest()
+    return contents, hashlib.sha256(staged.encode()).hexdigest()
+
+
 def snapshot(cwd):
     """Return the state of the checkout at cwd that a read-only agent must keep."""
     top = (git(cwd, "rev-parse", "--show-toplevel") or "").strip()
@@ -134,8 +154,11 @@ def snapshot(cwd):
     status = git(top, "status", "--porcelain=v1", "--untracked-files=all") or ""
     lines = sorted(status.splitlines())
     config = git(top, "config", "--local", "--list") or ""
+    contents, index_sha = content_state(top)
     return {
         "refs": refs(top),
+        "contents": contents,
+        "index_sha": index_sha,
         "writer_branches": sorted(writer_branches(top)),
         "gitdir_sha": gitdir_state(top),
         "config_sha": hashlib.sha256(config.encode()).hexdigest(),
@@ -177,6 +200,12 @@ def differences(before, after):
         out.append("git dir changed (info/exclude, hooks, or the worktree list)")
     if before.get("config_sha") != after.get("config_sha"):
         out.append("local git config changed (git config --local --list)")
+    if before.get("index_sha") != after.get("index_sha"):
+        out.append("index contents changed")
+    if before.get("contents") != after.get("contents"):
+        was, current = before.get("contents", {}), after.get("contents", {})
+        names = sorted(name for name in set(was) | set(current) if was.get(name) != current.get(name))
+        out.append("working-tree contents: " + ", ".join(names[:8]))
     if before.get("status_sha") != after.get("status_sha"):
         was, now = set(before.get("status", [])), set(after.get("status", []))
         changed = sorted((now - was) | (was - now))

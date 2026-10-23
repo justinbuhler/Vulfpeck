@@ -55,15 +55,16 @@ registry = ROOT / ".codex/hooks.json"
 hooks = json.loads(registry.read_text()).get("hooks", {}) if registry.is_file() else {}
 groups = hooks.get("PreToolUse", [])
 entries = [hook for group in groups for hook in group.get("hooks", [])]
-check("Codex registers only the native spawn routing hook",
-      set(hooks) == {"PreToolUse"} and len(groups) == 1
-      and groups[0].get("matcher") == "^spawn_agent$" and len(entries) == 1)
+check("Codex registers native governance with spawn routing included",
+      set(hooks) == {"PreToolUse", "PostToolUse", "SessionStart", "UserPromptSubmit",
+                     "SubagentStart", "SubagentStop", "Stop", "SessionEnd"}
+      and len(groups) == 1 and "spawn_agent" in groups[0].get("matcher", "") and len(entries) == 1)
 command = entries[0].get("command", "") if entries else ""
-check("the registration resolves the Git root and selects Codex mode",
+check("the registration resolves the Git root and selects the native policy adapter",
       "git rev-parse --show-toplevel" in command
-      and '/.claude/hooks/model_router.py" --runtime codex' in command)
+      and '/scripts/native_hook_adapter.py"' in command)
 check("the registration blocks script crashes before its native timeout",
-      bool(entries) and entries[0].get("timeout") == 5 and "exit 2" in command)
+      bool(entries) and entries[0].get("timeout") == 75 and "exit 2" in command)
 
 with tempfile.TemporaryDirectory(prefix="codex-routing-") as tmp:
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
@@ -100,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix="codex-routing-") as tmp:
                                  capture_output=True, text=True)
         assert created.returncode == 0, created.stderr
         for name, content in (("missing script", None), ("crashing script", "raise SystemExit(1)\n")):
-            script = project / ".claude/hooks/model_router.py"
+            script = project / "scripts/native_hook_adapter.py"
             if content is not None:
                 script.parent.mkdir(parents=True)
                 script.write_text(content)

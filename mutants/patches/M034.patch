@@ -1,0 +1,15 @@
+# mutant_id: M034
+# target: scripts/harness_install.py
+# operator: widen-policy
+# behaviour: existing narrower Smartsheet tools remain an intersection
+--- a/scripts/harness_install.py
++++ b/scripts/harness_install.py
+@@ -203,7 +203,7 @@
+     if "enabled_tools" in current:
+         if not isinstance(current["enabled_tools"], list) or not all(isinstance(value, str) for value in current["enabled_tools"]):
+             raise ValueError("existing Smartsheet enabled_tools is not a string list")
+-        allowed = [value for value in current["enabled_tools"] if value in allowed]
++        allowed = allowed
+     desired = [("mcp_servers.smartsheet", "enabled_tools", "enabled_tools = " + json.dumps(allowed) + "\n"),
+                (f"apps.{APP}", "enabled", "enabled = false\n")]
+     if "url" not in current:

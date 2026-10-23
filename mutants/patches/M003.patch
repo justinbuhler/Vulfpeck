@@ -4,10 +4,12 @@
 # behaviour: a lint failure fails the gate
 --- a/scripts/gate.sh
 +++ b/scripts/gate.sh
-@@ -21,5 +21,5 @@
+@@ -27,7 +27,7 @@
  fi
  
  if [ -n "$HARNESS_SETUP" ]; then bash -c "$HARNESS_SETUP" || exit; fi
 -if [ -n "$HARNESS_LINT" ]; then bash -c "$HARNESS_LINT" || exit; fi
 +if [ -n "$HARNESS_LINT" ]; then bash -c "$HARNESS_LINT"; fi
- HARNESS_SETUP_DONE=1 exec ./scripts/run.sh --tests
+ if [ "$(basename "$(dirname "$CONTROL")")" = .vulfpeck ]; then
+   HARNESS_SETUP_DONE=1 exec "$CONTROL/run.sh" --tests
+ fi

@@ -1,0 +1,17 @@
+# mutant_id: M038
+# target: scripts/harness_install.py
+# operator: journal-after-write
+# behaviour: write-ahead intent recovers an interruption after replacement
+--- a/scripts/harness_install.py
++++ b/scripts/harness_install.py
+@@ -537,9 +537,9 @@
+         content = base64.b64decode(item["content"], validate=True)
+         if digest(content) != item["after"]:
+             raise ValueError("payload digest does not match plan")
++        atomic_write(target, destination(target, item["path"]), content, item["mode"])
+         journal["completed"].append(item["path"])
+         save(directory / "journal.json", journal)
+-        atomic_write(target, destination(target, item["path"]), content, item["mode"])
+     previous = value["previous"]
+     for relative, wanted in value["registrations"].items():
+         path = destination(target, relative)

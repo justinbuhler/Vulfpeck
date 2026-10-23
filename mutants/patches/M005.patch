@@ -1,15 +1,15 @@
 # mutant_id: M005
-# target: scripts/land.sh
+# target: scripts/harness_inputs.py
 # operator: drop-guard
 # behaviour: land.copy_untracked never overwrites a tracked file
---- a/scripts/land.sh
-+++ b/scripts/land.sh
-@@ -138,7 +138,7 @@
-       rsync -a --exclude-from="$TRACKED" "$src/" "$LWT/$rel/" \
-         || die "could not copy $rel into the lander worktree"
-     else
--      if git -C "$LWT" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
-+      if false; then
-         say "⚠ land.copy_untracked lists $rel, which the candidate tracks; not copied"
-         continue
-       fi
+--- a/scripts/harness_inputs.py
++++ b/scripts/harness_inputs.py
+@@ -59,7 +59,7 @@
+                 continue
+             if not path.is_file():
+                 raise ValueError(f"nonregular provision input: {rel}")
+-            if rel in tracked:
++            if False:
+                 print(f"tracked input excluded: {rel}", file=sys.stderr)
+                 continue
+             destination = target / rel

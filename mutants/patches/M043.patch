@@ -1,0 +1,15 @@
+# mutant_id: M043
+# target: scripts/harness_install.py
+# operator: drop-legacy-fallback
+# behaviour: accepted old schema-1 journals remain restorable
+--- a/scripts/harness_install.py
++++ b/scripts/harness_install.py
+@@ -430,7 +430,7 @@
+                     raise ValueError("prior owned policy cannot be restored")
+         configs[relative] = text
+     hook_path = local_hook_path(target)
+-    if hook_path not in (value["before_hook_path"], value.get("owned_hook_path", ".vulfpeck/git-hooks")):
++    if hook_path not in (value["before_hook_path"], value["owned_hook_path"]):
+         raise ValueError("Git hook path edited during restore")
+     result = dict(operation="restore", target=str(target), generation=value["generation"],
+                   previous_generation=previous["generation"] if previous else None,

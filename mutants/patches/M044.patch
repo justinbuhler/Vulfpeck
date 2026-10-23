@@ -1,0 +1,15 @@
+# mutant_id: M044
+# target: scripts/harness_install.py
+# operator: omit-linked-inventory
+# behaviour: unique prior events in pre-existing linked checkouts survive adoption
+--- a/scripts/harness_install.py
++++ b/scripts/harness_install.py
+@@ -273,7 +273,7 @@
+     if previous:
+         events.update(Path(name).name for name in previous["files"] if name.startswith(".vulfpeck/git-hooks/"))
+     for line in git(target, "worktree", "list", "--porcelain").splitlines():
+-        if line.startswith("worktree "):
++        if line == "worktree " + str(target):
+             prior = Path(prior_path)
+             worktree = Path(line.removeprefix("worktree "))
+             directories = [prior] if prior.is_absolute() else [worktree / prior,

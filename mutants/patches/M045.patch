@@ -1,0 +1,16 @@
+# mutant_id: M045
+# target: scripts/harness_install.py
+# operator: omit-gitdir-inventory
+# behaviour: Gitdir-relative receive hook refusal survives adoption
+--- a/scripts/harness_install.py
++++ b/scripts/harness_install.py
+@@ -276,8 +276,7 @@
+         if line.startswith("worktree "):
+             prior = Path(prior_path)
+             worktree = Path(line.removeprefix("worktree "))
+-            directories = [prior] if prior.is_absolute() else [worktree / prior,
+-                           Path(git(worktree, "rev-parse", "--absolute-git-dir")) / prior]
++            directories = [prior] if prior.is_absolute() else [worktree / prior]
+             for directory in directories:
+                 if directory.is_dir():
+                     events.update(path.name for path in directory.iterdir() if path.is_file())
