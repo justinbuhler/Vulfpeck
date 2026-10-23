@@ -1,7 +1,7 @@
-"""scripts/test_plan.py: each consequence tier picks exactly its commands.
+"""scripts/plan_tests.py: each consequence tier picks exactly its commands.
 
 Plans are built against a throwaway tree, with every expected command a literal
-written here (Rule 11), never read back from test_plan.py.
+written here (Rule 11), never read back from plan_tests.py.
 """
 
 import subprocess
@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import harness_config  # noqa: E402
-import test_plan  # noqa: E402
+import plan_tests  # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -47,26 +47,26 @@ def cmds(result):
     return [c["command"] for c in result["commands"]]
 
 
-low = test_plan.plan(root, "Low", ["scripts/a.py"], CONFIG)
+low = plan_tests.plan(root, "Low", ["scripts/a.py"], CONFIG)
 check("Low: lint plus the mapped test of the changed file, nothing else", cmds(low) == [LINT, RUN_A], str(cmds(low)))
 check("Low names what it skipped", any("full suite" in s for s in low["skipped"]) and any("mutation" in s for s in low["skipped"]))
-check("Low docs only: lint alone", cmds(test_plan.plan(root, "Low", ["docs/x.md"], CONFIG)) == [LINT])
+check("Low docs only: lint alone", cmds(plan_tests.plan(root, "Low", ["docs/x.md"], CONFIG)) == [LINT])
 
-med = test_plan.plan(root, "Medium", ["scripts/a.py", "scripts/b.py"], CONFIG)
+med = plan_tests.plan(root, "Medium", ["scripts/a.py", "scripts/b.py"], CONFIG)
 check("Medium: lint, the mapped test, and the test that names a changed module",
       sorted(cmds(med)) == sorted([LINT, RUN_A, RUN_B]), str(cmds(med)))
 check("Medium does not run a test that names no changed module", "tests/test_other.py" not in " ".join(cmds(med)))
 check("Medium does not run the full suite or mutation", SUITE not in cmds(med) and not any("runner.py" in c for c in cmds(med)))
 
-high = test_plan.plan(root, "High", ["scripts/a.py"], CONFIG)
+high = plan_tests.plan(root, "High", ["scripts/a.py"], CONFIG)
 check("High: lint, the full suite, and exactly the mutants that touch a changed file",
       cmds(high) == [LINT, SUITE, "python3 mutants/runner.py --only M001 M003"], str(cmds(high)))
 check("High does not run M002, whose patch touches an unchanged file", "M002" not in " ".join(cmds(high)))
-high_b = test_plan.plan(root, "High", ["scripts/b.py"], CONFIG)
+high_b = plan_tests.plan(root, "High", ["scripts/b.py"], CONFIG)
 check("High with no matching mutant runs no mutation and says so",
       cmds(high_b) == [LINT, SUITE] and any("no mutant" in s for s in high_b["skipped"]), str(high_b))
 
-crit = test_plan.plan(root, "Critical", ["scripts/a.py"], CONFIG)
+crit = plan_tests.plan(root, "Critical", ["scripts/a.py"], CONFIG)
 check("Critical runs what High runs", cmds(crit) == cmds(high))
 check("Critical adds the independent re-derivation requirement", any("re-derivation" in n for n in crit["notes"]))
 check("High does not carry the re-derivation note", not any("re-derivation" in n for n in high["notes"]))
@@ -74,9 +74,9 @@ check("every plan says the land gate is unchanged", all(any("land gate is unchan
 
 # --- run: stop at the first failure -------------------------------------------------
 marker = root / "ran-after-failure"
-status = test_plan.run(root, [{"command": "exit 3", "why": "w"}, {"command": f"touch {marker}", "why": "w"}])
+status = plan_tests.run(root, [{"command": "exit 3", "why": "w"}, {"command": f"touch {marker}", "why": "w"}])
 check("--run exits with the failing command's status and runs nothing after it", status == 3 and not marker.exists())
-status = test_plan.run(root, [{"command": "true", "why": "w"}, {"command": f"touch {marker}", "why": "w"}])
+status = plan_tests.run(root, [{"command": "true", "why": "w"}, {"command": f"touch {marker}", "why": "w"}])
 check("--run runs every command when all pass", status == 0 and marker.exists())
 
 # --- change(): a real git range ---------------------------------------------------------
@@ -101,7 +101,7 @@ git("checkout", "-q", "-b", "work")
 (repo / "n.md").write_text("new\n")
 git("add", "-A")
 git("commit", "-qm", "edit alpha")
-files, stats, symbols, subjects = test_plan.change(repo, "main")
+files, stats, symbols, subjects = plan_tests.change(repo, "main")
 check("change lists live files only, not the deleted one", files == ["m.py", "n.md"], str(files))
 check("change reports diff stats, deleted files included", stats == ["gone.txt +0 -1", "m.py +1 -1", "n.md +1 -0"], str(stats))
 check("change names the enclosing symbol, never the changed line", symbols == ["alpha"], str(symbols))

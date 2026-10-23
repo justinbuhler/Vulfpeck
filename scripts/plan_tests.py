@@ -10,9 +10,9 @@ reports. The land gate is unchanged and stays the full suite (scripts/gate.sh).
               in mutants/patches whose patch touches a changed file
     Critical  High, plus a note: independent re-derivation is required
 
-    python3 scripts/test_plan.py                     # origin/main...HEAD
-    python3 scripts/test_plan.py --base integration/phases-0-1
-    python3 scripts/test_plan.py --tier High --run   # run, stop at the first failure
+    python3 scripts/plan_tests.py                     # origin/main...HEAD
+    python3 scripts/plan_tests.py --base integration/phases-0-1
+    python3 scripts/plan_tests.py --tier High --run   # run, stop at the first failure
 
 Without --tier the tier comes from scripts/jev.py `consequence`: a code floor
 from the harness.toml [tiers] globs, raised (never lowered) by Jev when it can be

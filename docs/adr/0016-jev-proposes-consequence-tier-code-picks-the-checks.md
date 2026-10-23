@@ -2,7 +2,7 @@
 
 Status: proposed
 Date: 2026-10-23
-Components: scripts/jev.py, scripts/test_plan.py
+Components: scripts/jev.py, scripts/plan_tests.py
 
 ## Context
 
@@ -14,7 +14,7 @@ Components: scripts/jev.py, scripts/test_plan.py
 
 `consequence` takes a floor from the `[tiers]` globs in `harness.toml`; Jev may raise the tier above the floor, never lower it. The `docs/mutation-testing.md` acceptance rule applies: High or Critical at probability 0.6 or more is accepted; Low or Medium at 0.8 or more is accepted only with the alters-values Noul at 0.35 or less; anything else is a referral to the owner. Thresholds live in code.
 
-`scripts/test_plan.py` maps a tier to the exact commands: Low is lint plus mapped tests, Medium adds test files that name a changed module, High is the full suite plus mutants whose patch touches a changed file, Critical adds a note requiring independent re-derivation. It prints the tier and what it skipped. The land gate stays the full suite; `gate.sh` and `land.sh` do not call Jev.
+`scripts/plan_tests.py` maps a tier to the exact commands: Low is lint plus mapped tests, Medium adds test files that name a changed module, High is the full suite plus mutants whose patch touches a changed file, Critical adds a note requiring independent re-derivation. It prints the tier and what it skipped. The land gate stays the full suite; `gate.sh` and `land.sh` do not call Jev.
 
 ## Consequences
 
