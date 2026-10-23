@@ -13,6 +13,7 @@ that names a blocker never match.
 
 Registered as a gate: a crash exits 2 (harness.toml [[hook]]).
 """
+
 import hashlib
 import json
 import re
@@ -41,12 +42,19 @@ WAITING = re.compile(
     re.I,
 )
 NUMBERED = re.compile(r"(?m)^\s*\d+[.)]\s")
-NEGATED = re.compile(r"\b(?:will not|won't|'ll not|not going to|isn't going to|aren't going to)\b|n't going to", re.I)
+NEGATED = re.compile(
+    r"\b(?:will not|won't|'ll not|not going to|isn't going to|aren't going to)\b|n't going to",
+    re.I,
+)
 BLOCKER = re.compile(r"\bblock(?:er|ed|ing)\b", re.I)
 FENCE = re.compile(r"```.*?```", re.S)
 QUOTED = re.compile(r"`[^`\n]*`|\"[^\"\n]*\"|“[^”\n]*”")
-REASON = ("turn_guard: AGENTS.md: " + g.RULE_TURN + " Your last message announces work you have not started "
-          "({phrase!r}). Do it now, or say what blocks you.")
+REASON = (
+    "turn_guard: AGENTS.md: "
+    + g.RULE_TURN
+    + " Your last message announces work you have not started "
+    "({phrase!r}). Do it now, or say what blocks you."
+)
 
 
 def last_message(payload):
@@ -60,7 +68,11 @@ def last_message(payload):
             entry = json.loads(line)
             content = (entry.get("message") or {}).get("content")
             if entry.get("type") == "assistant" and isinstance(content, list):
-                parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+                parts = [
+                    b.get("text", "")
+                    for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                ]
                 if any(parts):
                     return "\n".join(parts)
     except (OSError, ValueError, TypeError):
@@ -82,7 +94,11 @@ def announced(text):
     if BLOCKER.search(paragraph) or NUMBERED.search(paragraph):
         return None
     for sentence in re.split(r"(?<=[.!?:])\s+|\n", QUOTED.sub("", paragraph)):
-        if sentence.rstrip().endswith("?") or NEGATED.search(sentence) or WAITING.search(sentence):
+        if (
+            sentence.rstrip().endswith("?")
+            or NEGATED.search(sentence)
+            or WAITING.search(sentence)
+        ):
             continue
         for pattern in ANNOUNCE:
             found = re.search(pattern, sentence, re.I)
@@ -93,7 +109,11 @@ def announced(text):
 
 def main():
     payload = g.read_payload()
-    if not payload or payload.get("hook_event_name") != "Stop" or payload.get("stop_hook_active"):
+    if (
+        not payload
+        or payload.get("hook_event_name") != "Stop"
+        or payload.get("stop_hook_active")
+    ):
         return 0
     message = last_message(payload)
     phrase = announced(message)

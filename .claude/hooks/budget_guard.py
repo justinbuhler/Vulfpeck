@@ -13,6 +13,7 @@ passes, so the agent can leave its status. State:
 
 Registered as a gate: a crash exits 2 (harness.toml [[hook]]).
 """
+
 import os
 import sys
 import time
@@ -35,15 +36,25 @@ def fresh():
 
 def status_write(payload, globs):
     """Return whether this call writes a file that matches [budget] status_glob."""
-    tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    tool_input = (
+        payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    )
     target = tool_input.get("file_path")
-    if payload.get("tool_name") not in ("Edit", "Write") or not isinstance(target, str) or not target:
+    if (
+        payload.get("tool_name") not in ("Edit", "Write")
+        or not isinstance(target, str)
+        or not target
+    ):
         return False
     cwd = g.cwd_of(payload)
     path = Path(os.path.realpath(Path(cwd) / target))
     top = g.git(cwd, "rev-parse", "--show-toplevel")
     try:
-        rel = path.relative_to(Path(top).resolve()).as_posix() if top else path.as_posix().lstrip("/")
+        rel = (
+            path.relative_to(Path(top).resolve()).as_posix()
+            if top
+            else path.as_posix().lstrip("/")
+        )
     except ValueError:
         rel = path.as_posix().lstrip("/")
     return any(adr.glob_match(pattern, rel) for pattern in globs)
@@ -63,24 +74,34 @@ def main():
     if state["last"] is not None and 0 < now - state["last"] <= IDLE_GAP:
         state["active"] += now - state["last"]
     state["last"] = now
-    used = [(state["calls"], max_calls, "tool calls"), (state["active"] / 60, max_minutes, "minutes")]
+    used = [
+        (state["calls"], max_calls, "tool calls"),
+        (state["active"] / 60, max_minutes, "minutes"),
+    ]
     share = max((have / cap for have, cap, _ in used if cap > 0), default=0.0)
-    detail = ", ".join(f"{have:.0f}/{cap} {unit}" for have, cap, unit in used if cap > 0)
+    detail = ", ".join(
+        f"{have:.0f}/{cap} {unit}" for have, cap, unit in used if cap > 0
+    )
     if share >= 1:
         g.save_state(path, state)
         if status_write(payload, limits["status_glob"]):
             return 0
         g.record("budget_guard", "deny", "exhausted", detail, payload)
-        g.pre_deny(f"budget exhausted: write status (done, left, blockers) and stop. Used {detail} "
-                   "(harness.toml [budget]). Only the owner extends it.")
+        g.pre_deny(
+            f"budget exhausted: write status (done, left, blockers) and stop. Used {detail} "
+            "(harness.toml [budget]). Only the owner extends it."
+        )
         return 0
     state["calls"] += 1
     warn = share >= WARN_AT and not state["warned"]
     state["warned"] = state["warned"] or warn
     g.save_state(path, state)
     if warn:
-        g.context("PreToolUse", f"budget_guard: {share:.0%} of this session's budget used ({detail}). "
-                                "Wrap up: finish the task or write status (done, left, blockers).")
+        g.context(
+            "PreToolUse",
+            f"budget_guard: {share:.0%} of this session's budget used ({detail}). "
+            "Wrap up: finish the task or write status (done, left, blockers).",
+        )
     elif notice:
         g.context("PreToolUse", "budget_guard: " + notice)
     return 0

@@ -9,6 +9,7 @@
 The lease lives at <git common dir>/harness/scope/<branch>.json: local, never tracked.
 `set` replaces the lease, so widening it is one explicit call. `check` changes nothing.
 """
+
 import argparse
 import json
 import sys
@@ -42,7 +43,9 @@ def resolve_base(top, base):
         sha = g.git(top, "merge-base", "HEAD", ref)
         if sha:
             return sha
-    sys.exit(f"scope: cannot find a merge base with {' or '.join(refs)}; pass --base <ref>")
+    sys.exit(
+        f"scope: cannot find a merge base with {' or '.join(refs)}; pass --base <ref>"
+    )
 
 
 def summary(top, base):
@@ -56,11 +59,20 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("set", help="write or replace this branch's lease")
-    s.add_argument("--glob", action="append", required=True, help="repository-relative glob; repeat")
+    s.add_argument(
+        "--glob",
+        action="append",
+        required=True,
+        help="repository-relative glob; repeat",
+    )
     s.add_argument("--max-files", type=int, required=True)
     s.add_argument("--max-lines", type=int, required=True)
     s.add_argument("--task", required=True)
-    s.add_argument("--base", default="", help="ref whose merge base with HEAD anchors the diff (default origin/main, main)")
+    s.add_argument(
+        "--base",
+        default="",
+        help="ref whose merge base with HEAD anchors the diff (default origin/main, main)",
+    )
     for name in ("show", "clear", "check"):
         sub.add_parser(name)
     args = parser.parse_args(argv)
@@ -71,8 +83,14 @@ def main(argv=None):
     if args.cmd == "set":
         if args.max_files < 1 or args.max_lines < 1:
             sys.exit("scope: --max-files and --max-lines must be at least 1")
-        lease = {"v": 1, "globs": args.glob, "max_files": args.max_files, "max_lines": args.max_lines,
-                 "task": args.task, "base": resolve_base(top, args.base)}
+        lease = {
+            "v": 1,
+            "globs": args.glob,
+            "max_files": args.max_files,
+            "max_lines": args.max_lines,
+            "task": args.task,
+            "base": resolve_base(top, args.base),
+        }
         g.save_state(path, lease)
         g.record("scope", "set", f"{args.max_files}f/{args.max_lines}l", branch)
         print(f"lease set for {branch}: {json.dumps(lease)}")
@@ -89,8 +107,10 @@ def main(argv=None):
 
         out = jev.intent_alignment(lease["task"], summary(top, lease["base"]))
         if out["source"] != "jev":
-            print(f"scope check: Jev unavailable ({out['reason']}); compare the diff with the task by hand:\n"
-                  f"task: {lease['task']}")
+            print(
+                f"scope check: Jev unavailable ({out['reason']}); compare the diff with the task by hand:\n"
+                f"task: {lease['task']}"
+            )
             return 0
         print(f"scope check: drift={out['drift']}")
         for issue in out["issues"]:

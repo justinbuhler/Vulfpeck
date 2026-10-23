@@ -11,6 +11,7 @@
 Registered as a gate: a crash exits 2 (harness.toml [[hook]]). Codex apply_patch reaches
 this as Edit or Write through scripts/hook_adapter.py.
 """
+
 import json
 import os
 import sys
@@ -34,11 +35,19 @@ def diff_totals(top, base):
     for row in (g.git(top, "diff", "--numstat", base) or "").splitlines():
         added, deleted, name = row.split("\t", 2)
         files.add(name)
-        lines += (int(added) if added.isdigit() else 0) + (int(deleted) if deleted.isdigit() else 0)
-    for name in (g.git(top, "ls-files", "--others", "--exclude-standard") or "").splitlines():
+        lines += (int(added) if added.isdigit() else 0) + (
+            int(deleted) if deleted.isdigit() else 0
+        )
+    for name in (
+        g.git(top, "ls-files", "--others", "--exclude-standard") or ""
+    ).splitlines():
         files.add(name)
         try:
-            lines += len((Path(top) / name).read_text(encoding="utf-8", errors="replace").splitlines())
+            lines += len(
+                (Path(top) / name)
+                .read_text(encoding="utf-8", errors="replace")
+                .splitlines()
+            )
         except OSError:
             pass
     return files, lines
@@ -46,12 +55,20 @@ def diff_totals(top, base):
 
 def estimate(tool_input):
     """Return the lines an edit adds, read from its new text."""
-    return len(str(tool_input.get("new_string") or tool_input.get("content") or "").splitlines())
+    return len(
+        str(
+            tool_input.get("new_string") or tool_input.get("content") or ""
+        ).splitlines()
+    )
 
 
 def main():
     payload = g.read_payload()
-    if not payload or payload.get("hook_event_name") != "PreToolUse" or payload.get("tool_name") not in ("Edit", "Write"):
+    if (
+        not payload
+        or payload.get("hook_event_name") != "PreToolUse"
+        or payload.get("tool_name") not in ("Edit", "Write")
+    ):
         return 0
     tool_input = payload.get("tool_input") or {}
     raw = tool_input.get("file_path")
@@ -68,16 +85,25 @@ def main():
         return 0
     try:
         lease = json.loads(lease_file.read_text(encoding="utf-8"))
-        globs, max_files, max_lines, base = lease["globs"], lease["max_files"], lease["max_lines"], lease["base"]
+        globs, max_files, max_lines, base = (
+            lease["globs"],
+            lease["max_files"],
+            lease["max_lines"],
+            lease["base"],
+        )
     except (OSError, ValueError, KeyError) as exc:
         g.record("scope_guard", "deny", "lease-unreadable", rel, payload)
-        g.pre_deny(f"scope_guard: the lease {lease_file} is unreadable ({type(exc).__name__}). "
-                   "Fix it with `python3 scripts/scope.py set ...` or remove it with `scope.py clear`.")
+        g.pre_deny(
+            f"scope_guard: the lease {lease_file} is unreadable ({type(exc).__name__}). "
+            "Fix it with `python3 scripts/scope.py set ...` or remove it with `scope.py clear`."
+        )
         return 0
     if not any(adr.glob_match(pattern, rel) for pattern in globs):
         g.record("scope_guard", "deny", "out-of-scope", rel, payload)
-        g.pre_deny(f"out of scope: {rel}; file an issue or report it, do not edit. "
-                   f"This branch's lease allows only {', '.join(globs)} for: {lease.get('task', '')}")
+        g.pre_deny(
+            f"out of scope: {rel}; file an issue or report it, do not edit. "
+            f"This branch's lease allows only {', '.join(globs)} for: {lease.get('task', '')}"
+        )
         return 0
     files, lines = diff_totals(top, base)
     new_files = len(files | {rel})
@@ -88,7 +114,8 @@ def main():
             f"scope exceeded: this edit takes {branch} to {new_files} files and {new_lines} lines against its "
             f"merge base; the lease allows {max_files} files and {max_lines} lines. Re-check intent with "
             "`python3 scripts/scope.py check` (asks Jev whether the diff still serves the task; advisory). "
-            "Only an explicit `python3 scripts/scope.py set` with a wider lease unblocks this branch.")
+            "Only an explicit `python3 scripts/scope.py set` with a wider lease unblocks this branch."
+        )
         return 0
     g.record("scope_guard", "allow", "in-scope", rel, payload)
     return 0

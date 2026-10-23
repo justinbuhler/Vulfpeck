@@ -68,7 +68,11 @@ def runs_reset(cmd):
                     words = []
                     break
                 words.pop(0)
-        if words and os.path.basename(words[0]) == "loop_reset.py" and not {"-h", "--help"} & set(words):
+        if (
+            words
+            and os.path.basename(words[0]) == "loop_reset.py"
+            and not {"-h", "--help"} & set(words)
+        ):
             return True
     return False
 
@@ -212,7 +216,9 @@ def after_command(state, payload, cmd):
 
 def before_command(state, cmd):
     """Return (reason code, message) to deny this Bash command, or None to allow it."""
-    if runs_reset(cmd) or (STATE_TOUCH.search(cmd) and STATE_MUTATION.search(NOT_A_WRITE.sub("", cmd))):
+    if runs_reset(cmd) or (
+        STATE_TOUCH.search(cmd) and STATE_MUTATION.search(NOT_A_WRITE.sub("", cmd))
+    ):
         return "loop-state-touch", (
             "loop_guard: denied. The loop state is reset by the owner or the task runner, never by the "
             "agent: do not run scripts/loop_reset.py or edit, move or remove the loop state."
