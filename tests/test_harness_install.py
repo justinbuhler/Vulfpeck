@@ -20,6 +20,7 @@ def main():
     """Run real local installations without modifying any global client state."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--proof", type=Path)
+    parser.add_argument("--authority-only", action="store_true")
     args = parser.parse_args()
     passed, failed, commands = [], [], []
     directory = Path(tempfile.mkdtemp(prefix="owned-install-")).resolve()
@@ -76,6 +77,116 @@ def main():
     git(source, "add", "--all")
     git(source, "commit", "-qm", "release fixture")
     release_a = git(source, "rev-parse", "HEAD")
+    authority_commands = dict(setup="", lint="true", test="true", count_pattern="")
+    cli = [sys.executable, str(REPO / "scripts/harness_install.py")]
+    legacy_revision = "a2b1ac7bbf07708e0c410ea3ec309b08f25cbf65"
+    legacy_code = directory / "legacy-code"
+    legacy_code.mkdir()
+    for name in ("harness_install.py", "harness_lock.py"):
+        (legacy_code / name).write_bytes(install.blob(REPO, legacy_revision, "scripts/" + name))
+    legacy_cli = [sys.executable, str(legacy_code / "harness_install.py")]
+    for operation in ("restore", "upgrade", "rollback"):
+        legacy = repo("legacy-" + operation)
+        write(legacy, "domain.txt", "legacy domain\n")
+        git(legacy, "add", "domain.txt")
+        git(legacy, "commit", "-qm", "legacy domain")
+        legacy_plan = directory / ("legacy-" + operation + ".json")
+        planned = run(legacy, [*legacy_cli, "plan", "--source", str(REPO), "--revision", legacy_revision,
+                               "--target", str(legacy), "--test", "true", "--output", str(legacy_plan)])
+        applied = run(legacy, [*legacy_cli, "apply", "--plan", str(legacy_plan)])
+        if planned.returncode or applied.returncode:
+            raise AssertionError(planned.stderr + applied.stderr)
+        old_manifest = install.current_manifest(legacy)
+        old_journal = json.loads((common_dir(legacy) / "harness/install" / old_manifest["generation"] / "journal.json").read_text())
+        check(f"actual old release produces an accepted old-shaped {operation} journal",
+              "owned_hook_path" not in old_journal["plan"] and "owned_hook_path" not in old_manifest
+              and install.verify(legacy)["generation"] == old_manifest["generation"])
+        if operation == "upgrade":
+            upgraded_plan = install.plan(source, release_a, legacy, authority_commands)
+            install.apply(upgraded_plan)
+            restore_upgrade = install.restore(legacy)
+            install.restore(legacy, apply_changes=True, expected_plan=restore_upgrade)
+            check("upgrade restoration retains the exact registered old generation",
+                  install.current_manifest(legacy) == old_manifest and install.local_hook_path(legacy) == ".vulfpeck/git-hooks"
+                  and install.verify(legacy)["generation"] == old_manifest["generation"])
+        elif operation == "rollback":
+            upgraded_plan = install.plan(source, release_a, legacy, authority_commands)
+            original_write = install.atomic_write
+            writes = []
+
+            def interrupt_upgrade(root, path, content, mode=0o644):
+                writes.append(str(path))
+                result = original_write(root, path, content, mode)
+                if len(writes) == 4:
+                    raise OSError("controlled legacy upgrade interruption")
+                return result
+
+            install.atomic_write = interrupt_upgrade
+            try:
+                interrupted = refused(lambda: install.apply(upgraded_plan), "legacy upgrade interruption")
+            finally:
+                install.atomic_write = original_write
+            check("failed upgrade rolls back to verified old bytes modes and registration",
+                  interrupted and install.current_manifest(legacy) == old_manifest
+                  and install.verify(legacy)["generation"] == old_manifest["generation"]
+                  and install.local_hook_path(legacy) == ".vulfpeck/git-hooks")
+        restore_plan = directory / ("legacy-" + operation + "-restore.json")
+        planned = run(legacy, [*cli, "restore", "--target", str(legacy), "--output", str(restore_plan)])
+        restored = run(legacy, [*cli, "restore", "--target", str(legacy), "--apply", "--plan", str(restore_plan)]) if planned.returncode == 0 else planned
+        check(f"current CLI restores actual old-shaped {operation} journal",
+              planned.returncode == restored.returncode == 0 and install.current_manifest(legacy) is None
+              and install.local_hook_path(legacy) == ".prior-hooks", planned.stderr + restored.stderr)
+
+    discovery = repo("hook-discovery")
+    write(discovery, "domain.txt", "domain\n")
+    git(discovery, "add", "domain.txt")
+    git(discovery, "commit", "-qm", "domain base")
+    existing_linked = directory / "existing-linked"
+    git(discovery, "worktree", "add", "-q", "-b", "existing-linked", str(existing_linked))
+    write(existing_linked, ".prior-hooks/post-rewrite",
+          '#!/bin/sh\nprintf "%s %s\\n" "$PWD" "$1" >> rewrite-events\ncat >> rewrite-events\nexit 31\n', 0o755)
+    gitdir = Path(git(discovery, "rev-parse", "--absolute-git-dir"))
+    write(gitdir, ".prior-hooks/pre-receive",
+          '#!/bin/sh\nprintf "%s\\n" "$PWD" >> receive-events\ncat >> receive-events\nexit 41\n', 0o755)
+    sender = directory / "sender"
+    git(discovery, "clone", "-q", str(discovery), str(sender))
+    git(sender, "config", "user.name", "sender")
+    git(sender, "config", "user.email", "sender@example.invalid")
+    git(sender, "config", "commit.gpgsign", "false")
+    write(sender, "incoming.txt", "incoming\n")
+    git(sender, "add", "incoming.txt")
+    git(sender, "commit", "-qm", "incoming")
+
+    def receive(name):
+        return run(sender, ["git", "-C", str(sender), "send-pack", str(discovery), f"HEAD:refs/heads/{name}"])
+
+    before_receive = receive("before-install")
+    check("actual Git receive invokes and refuses the relative prior Gitdir hook before adoption",
+          before_receive.returncode != 0 and "pre-receive hook declined" in before_receive.stderr
+          and str(gitdir) in (gitdir / "receive-events").read_text(), before_receive.stdout + before_receive.stderr)
+    install.apply(install.plan(source, release_a, discovery, authority_commands))
+    rewrite_input = directory / "rewrite-input"
+    rewrite_input.write_text("old new\n")
+    rewrite = run(existing_linked, ["git", "-C", str(existing_linked), "hook", "run", f"--to-stdin={rewrite_input}",
+                                    "post-rewrite", "--", "rebase"])
+    check("adoption inventories a pre-existing linked-only event and preserves cwd stdin args and refusal",
+          rewrite.returncode == 31 and not (discovery / ".prior-hooks/post-rewrite").exists()
+          and (existing_linked / "rewrite-events").read_text() == f"{existing_linked} rebase\nold new\n",
+          rewrite.stdout + rewrite.stderr)
+    (gitdir / "receive-events").write_text("")
+    after_receive = receive("after-install")
+    check("adoption preserves actual Gitdir-relative receive refusal and stdin",
+          after_receive.returncode != 0 and "pre-receive hook declined" in after_receive.stderr
+          and (gitdir / "receive-events").read_text().startswith(str(gitdir) + "\n")
+          and "refs/heads/after-install" in (gitdir / "receive-events").read_text()
+          and not git(discovery, "for-each-ref", "--format=%(refname)", "refs/heads/after-install"),
+          after_receive.stdout + after_receive.stderr)
+    if args.authority_only:
+        if args.proof:
+            install.save(args.proof, dict(fixture=str(directory), candidate=candidate, release_a=release_a,
+                                         legacy_revision=legacy_revision, checks=passed, failures=failed, commands=commands))
+        print(f"{len(passed)} passed, {len(failed)} failed")
+        return bool(failed)
     target = repo("domain")
     protected = {
         "AGENTS.md": "Domain policy stays here.\n", "CLAUDE.md": "Domain instructions stay here.\n",

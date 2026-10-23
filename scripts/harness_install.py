@@ -275,9 +275,12 @@ def plan(source: Path, revision: str, target: Path, commands: dict) -> dict:
     for line in git(target, "worktree", "list", "--porcelain").splitlines():
         if line.startswith("worktree "):
             prior = Path(prior_path)
-            directory = prior if prior.is_absolute() else Path(line.removeprefix("worktree ")) / prior
-            if directory.is_dir():
-                events.update(path.name for path in directory.iterdir() if path.is_file())
+            worktree = Path(line.removeprefix("worktree "))
+            directories = [prior] if prior.is_absolute() else [worktree / prior,
+                           Path(git(worktree, "rev-parse", "--absolute-git-dir")) / prior]
+            for directory in directories:
+                if directory.is_dir():
+                    events.update(path.name for path in directory.iterdir() if path.is_file())
     value = dict(schema_version=1, operation="install", source=str(source), revision=revision,
                  target=str(target), common=str(common_dir(target)), previous=previous,
                  generation=secrets.token_hex(16), files=[], conflicts=[], commands=commands,
@@ -427,7 +430,7 @@ def undo(target: Path, journal: dict, *, apply_changes: bool = True) -> dict:
                     raise ValueError("prior owned policy cannot be restored")
         configs[relative] = text
     hook_path = local_hook_path(target)
-    if hook_path not in (value["before_hook_path"], value["owned_hook_path"]):
+    if hook_path not in (value["before_hook_path"], value.get("owned_hook_path", ".vulfpeck/git-hooks")):
         raise ValueError("Git hook path edited during restore")
     result = dict(operation="restore", target=str(target), generation=value["generation"],
                   previous_generation=previous["generation"] if previous else None,

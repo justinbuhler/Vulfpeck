@@ -133,8 +133,10 @@ if [ -n "$EXPECT" ]; then
        land the reviewed commit, or have the new commits reviewed"
 fi
 
-python3 "$CONTROL/harness_receipts.py" validate --root "$CALLER" --candidate "$CANDIDATE" --receipt "$RECEIPT" \
+REVIEW=$(python3 "$CONTROL/harness_receipts.py" validate --root "$CALLER" --candidate "$CANDIDATE" --receipt "$RECEIPT") \
   || die "independent candidate evidence was refused"
+REVIEW_BASE=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["review_base_sha"])' "$REVIEW") \
+  || die "registered review baseline could not be read"
 
 # The candidate's harness.toml, read by the reader beside this script.
 . "$(dirname "$0")/harness_env.sh"
@@ -279,6 +281,9 @@ while :; do
     git -C "$LWT" -c user.name=land -c user.email=land@local merge --no-edit "$ORIGIN" \
       || die "origin reconciliation conflicts; main is unchanged"
   fi
+
+  git -C "$LWT" merge-base --is-ancestor "$REVIEW_BASE" HEAD \
+    || die "review baseline $REVIEW_BASE is not covered by the integration target; main is unchanged"
 
   if ! git -C "$LWT" -c user.name=land -c user.email=land@local \
        merge --no-ff --no-edit -m "land: $BRANCH" "$CANDIDATE" >/dev/null 2>&1; then

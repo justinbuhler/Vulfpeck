@@ -108,3 +108,19 @@ The documented worktree_capacity.py helper was absent from both ~/.claude/script
 Work continued in the existing isolated candidate checkout; no checkout was allocated.
 Explicit git -C addresses the intended checkout when global home-cwd hook detection otherwise reports not-a-repo.
 No global toolkit script was changed.
+
+## 2026-10-22 - review range and accepted installer journal corrections
+
+Independent review identified a registered review baseline that could omit candidate-only ancestors from the reviewed diff.
+Real B -> A -> C fixtures registered approvals from A and C, then the old lander integrated both commits onto B and ran the gate.
+A retry fixture also integrated after origin reconciliation disappeared and a peer advanced the target without A.
+The lander now checks the registered baseline against each reconciled scratch target before its candidate merge.
+Older common baselines and already-reachable candidates remain valid.
+
+The actual a2b1ac7 installer produced schema-1 journals accepted by current verification but rejected by current restore with `KeyError('owned_hook_path')`.
+Restore now uses the same relative-path fallback as verification.
+Real old-release adoption, upgrade restoration and interrupted-upgrade rollback cases exercise the current CLI against those retained journals; this is an unreleased accepted-state correction, not a deployed incident.
+
+An actual local `git send-pack` was refused by a relative pre-receive hook in the target Git directory before adoption, then accepted after adoption because event discovery inspected only checkout directories.
+Discovery now includes each registered checkout's actual Git directory.
+A linked checkout created before adoption carries a unique prior post-rewrite event and verifies its working directory, input, argument and refusal through Git.

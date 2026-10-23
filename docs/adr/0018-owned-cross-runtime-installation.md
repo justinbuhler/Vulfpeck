@@ -20,6 +20,8 @@ Apply only unchanged preimages under a common Git mutex, retaining owned hashes,
 Restore only owned changes and refuse edited owned files or registrations.
 Never redirect an installation from a linked checkout to its primary checkout.
 Git discovers the primary owned dispatcher directory by absolute path, while pass-through dispatchers preserve prior relative hook paths in the invoking checkout.
+Inventory existing linked checkout and Git-directory hook paths, retaining Git's event-specific working directory and input.
+Accepted schema-1 journals without an owned hook path retain the original relative-path fallback during restoration.
 Mapped edits import the payload's config reader and resolve the governed checkout separately.
 
 ## Consequences

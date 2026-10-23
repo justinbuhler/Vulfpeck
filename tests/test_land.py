@@ -9,6 +9,7 @@ session's branch ref. Every subprocess.run below must pass env=scrubbed_env().
 The gate is overridden via LAND_GATE so these run in seconds; the real gate is
 the verify spine and is exercised by landing for real, not here.
 """
+import argparse
 import json
 import os
 import shlex
@@ -73,7 +74,7 @@ def git(cwd, *args, check_rc=True):
 LANDER_ROOT = tempfile.mkdtemp(prefix="harness-land-wt.")
 
 
-def land(cwd, gate="true", **env):
+def land(cwd, gate="true", review_base=None, **env):
     # Pin every knob land.sh reads. Inheriting os.environ is right for PATH and
     # HOME, and wrong for the lander's own switches: running the suite from a
     # shell that exported LAND_ALLOW_UNTRACKED=1 silently turned the "refused by
@@ -85,7 +86,7 @@ def land(cwd, gate="true", **env):
     e.update(env)
     candidate = git(cwd, "rev-parse", "HEAD")
     e["LAND_EXPECT"] = e.get("LAND_EXPECT") or candidate
-    e["LAND_RECEIPT"] = str(approval(Path(cwd), candidate))
+    e["LAND_RECEIPT"] = str(approval(Path(cwd), candidate, base=review_base))
     if gate is None:
         e.pop("LAND_GATE")
     e.pop("VERIFY_LINT_ONLY", None)
@@ -136,6 +137,90 @@ def agent(d, name, filename=None, body="work\n"):
 def ancestor(d, a, b):
     return subprocess.run(["git", "merge-base", "--is-ancestor", a, b], cwd=str(d),
                           env=scrubbed_env()).returncode == 0
+
+
+def baseline_coverage():
+    """Exercise registered review ranges against real per-attempt Git targets."""
+    cases = []
+
+    def attempt(root, wt, baseline, gate="true"):
+        before = git(root, "rev-parse", "main")
+        result = land(wt, gate=gate, review_base=baseline)
+        cases.append(dict(root=str(root), candidate=git(wt, "rev-parse", "HEAD"),
+                          review_base=baseline, main_before=before,
+                          main_after=git(root, "rev-parse", "main"),
+                          returncode=result.returncode, stdout=result.stdout, stderr=result.stderr))
+        return result
+
+    def candidate(root, name):
+        wt = agent(root, name, "a.txt")
+        intermediate = git(wt, "rev-parse", "HEAD")
+        (wt / "c.txt").write_text("candidate\n")
+        git(wt, "add", "c.txt")
+        git(wt, "commit", "-qm", "candidate C")
+        return wt, intermediate, git(wt, "rev-parse", "HEAD")
+
+    for endpoint in ("intermediate", "candidate"):
+        root = repo()
+        base = git(root, "rev-parse", "main")
+        wt, intermediate, tip = candidate(root, "coverage-" + endpoint)
+        marker = root / ".git/gate-ran"
+        result = attempt(root, wt, intermediate if endpoint == "intermediate" else tip,
+                         f"touch {shlex.quote(str(marker))}")
+        check(f"review baseline on candidate-only {endpoint} is refused before integration or gate",
+              result.returncode != 0 and git(root, "rev-parse", "main") == base
+              and not marker.exists() and not ancestor(root, tip, "main"), result.stdout + result.stderr)
+
+    root = repo()
+    older = git(root, "rev-parse", "main")
+    git(root, "commit", "-q", "--allow-empty", "-m", "target B")
+    wt, _, tip = candidate(root, "coverage-older")
+    result = attempt(root, wt, older)
+    check("an older common review baseline authorizes its reviewed superset", result.returncode == 0
+          and ancestor(root, tip, "main"), result.stdout + result.stderr)
+    marker = root / ".git/idempotent-gate"
+    result = attempt(root, wt, tip, f"touch {shlex.quote(str(marker))}")
+    check("already-reachable candidate accepts its own review baseline without a gate", result.returncode == 0
+          and not marker.exists() and "already landed" in result.stdout, result.stdout + result.stderr)
+
+    for retry in (False, True):
+        root = repo()
+        wt, intermediate, tip = candidate(root, "coverage-origin-retry" if retry else "coverage-origin")
+        origin = Path(tempfile.mkdtemp(prefix="harness-origin-coverage.")) / "origin"
+        git(root, "clone", "-q", str(root), str(origin))
+        git(origin, "merge", "-q", "--ff-only", intermediate)
+        git(root, "remote", "add", "origin", str(origin))
+        git(root, "fetch", "-q", "origin", "main")
+        gate = "true"
+        if retry:
+            counter = root / ".git/coverage-gates"
+            gate = (f"if [ ! -f {shlex.quote(str(counter))} ]; then "
+                    f"git -C {shlex.quote(str(root))} remote remove origin; "
+                    f"git -C {shlex.quote(str(root))} commit -q --allow-empty -m peer; fi; "
+                    f"printf x >> {shlex.quote(str(counter))}")
+        result = attempt(root, wt, intermediate, gate)
+        if retry:
+            check("retry rechecks coverage when peer advance loses origin reconciliation", result.returncode != 0
+                  and not ancestor(root, tip, "main") and git(root, "log", "-1", "--format=%s", "main") == "peer"
+                  and "attempt 2/" in result.stdout and "review baseline" in result.stderr
+                  and counter.read_text() == "x", result.stdout + result.stderr)
+        else:
+            check("origin reconciliation covers a review baseline absent from captured local main",
+                  result.returncode == 0 and ancestor(root, tip, "main")
+                  and "reconciling origin/main" in result.stdout, result.stdout + result.stderr)
+    return cases
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--coverage-only", action="store_true")
+parser.add_argument("--coverage-proof", type=Path)
+coverage_args = parser.parse_args()
+coverage_cases = baseline_coverage()
+if coverage_args.coverage_proof:
+    coverage_args.coverage_proof.write_text(json.dumps(dict(cases=coverage_cases, checks=PASS, failures=FAIL), indent=2) + "\n")
+if coverage_args.coverage_only:
+    print(f"{len(PASS)} passed, {len(FAIL)} failed")
+    raise SystemExit(bool(FAIL))
 
 
 # --- a clean land ------------------------------------------------------------

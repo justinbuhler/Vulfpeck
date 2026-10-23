@@ -102,6 +102,7 @@ An existing domain `harness.toml`, unowned destination or ambiguous native polic
 Linked installation targets are refused; installed primary-discovered hooks retain the event's checkout as their governed root.
 Git uses the absolute owned primary dispatcher directory across worktrees.
 Pass-through dispatchers retain prior hook events and their relative paths in each invoking checkout, preserving arguments, input and refusal status.
+Discovery includes existing linked checkout directories and Git-directory paths used by receive hooks.
 Mapped edit hooks import the owned reader and resolve their governed checkout independently of domain scripts.
 Native project trust and exact hook approval remain separate from installation.
 
@@ -157,7 +158,7 @@ The common Git directory retains public payload journals and nonsecret touched s
 
 ### For auditability
 
-10. **Land evidence is local.** `land.sh --expect <sha> --receipt <registered receipt>` requires completed independent review evidence and writes outcomes under the common Git directory `harness/lands/`. Gate logs and registered launches remain local until explicitly published. Origin reconciliation and candidate merge run together in scratch before the single successful main update.
+10. **Land evidence is local.** `land.sh --expect <sha> --receipt <registered receipt>` requires completed independent review evidence and writes outcomes under the common Git directory `harness/lands/`. Gate logs and registered launches remain local until explicitly published. Each scratch attempt requires its reconciled target to include the registered review baseline before merging the candidate. Origin reconciliation and candidate merge run together in scratch before the single successful main update.
 11. **The decision log stays on the machine.** It is recorded (see Decision log) but nothing publishes it; the publish step should summarise a branch's records into its pull request.
 12. **`review-changes.js` returns findings but persists nothing**, against ORCH-09. Write its result to a named artifact.
 14. **Consequence is review-bound.** The registered reviewer records consequence and required mutant IDs. High and Critical land receipts require candidate/corpus-bound full-suite mutation results. Critical receipts also require independently produced candidate-bound derivation and population artifacts. Same-user local records remain forgeable; runtime launch proof and independent LEAD verification remain required.
