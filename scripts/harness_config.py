@@ -115,6 +115,21 @@ DEFAULTS = {
         ],
         "critical": [],
     },
+    "loop": {
+        # scripts/task_loop.py. `label` marks the open issues the loop may take; `priority`
+        # lists the labels from most to least urgent (an issue with none ranks last);
+        # `base` is the branch tasks start from and their pull requests target.
+        "label": "ready-for-agent",
+        "runtime": "claude",
+        "base": "main",
+        "priority": ["priority:high", "priority:medium", "priority:low"],
+        # Headless worker command per runtime; the brief is appended as the last argument.
+        "workers": {
+            "claude": "claude -p",
+            "codex": "codex exec",
+            "gemini": "gemini -p",
+        },
+    },
     "budget": {
         # Per session, checked by .claude/hooks/budget_guard.py: warn at 80%, deny at 100%. 0 turns a limit off.
         "max_tool_calls": 400,
@@ -169,6 +184,7 @@ STRING_LISTS = {
     ("tiers", "medium"),
     ("tiers", "high"),
     ("tiers", "critical"),
+    ("loop", "priority"),
 }
 RULE_KEYS = {"match": str, "self": str, "tests": list, "command": str}
 HOOK_KEYS = {
@@ -282,6 +298,13 @@ def merge(raw):
             elif (section, key) == ("jev", "enabled"):
                 if not isinstance(value, bool):
                     raise ConfigError("jev.enabled must be true or false")
+            elif (section, key) == ("loop", "workers"):
+                if not isinstance(value, dict) or not all(
+                    isinstance(k, str) and isinstance(v, str) and v.strip()
+                    for k, v in value.items()
+                ):
+                    raise ConfigError("loop.workers must map runtime names to commands")
+                value = {**DEFAULTS["loop"]["workers"], **value}
             elif section == "budget":
                 if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                     raise ConfigError(
@@ -297,6 +320,18 @@ def merge(raw):
             elif not isinstance(value, str):
                 raise ConfigError(f"{section}.{key} must be a string")
             config[section][key] = value
+    loop = config["loop"]
+    if loop["runtime"] not in loop["workers"]:
+        raise ConfigError(
+            f"loop.runtime {loop['runtime']!r} has no loop.workers command"
+        )
+    if not loop["priority"]:
+        raise ConfigError("loop.priority needs at least one label")
+    for runtime, command in loop["workers"].items():
+        if "--dangerously" in command:
+            raise ConfigError(
+                f"loop.workers.{runtime}: a --dangerously-* flag is never allowed"
+            )
     for rel in config["land"]["copy_untracked"]:
         safe_relative(rel, "land.copy_untracked")
     adr_dir = safe_relative(config["adr"]["dir"], "adr.dir").strip("/")

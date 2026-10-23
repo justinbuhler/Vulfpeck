@@ -43,8 +43,19 @@ high = [".claude/**", ".agents/**", ".codex/**", ".gemini/**", ".github/**", ".g
         "scripts/paths.py", "scripts/harness_config.py", "scripts/jev.py", "scripts/plan_tests.py",
         "scripts/standalone_tests.sh", "scripts/land.sh", "scripts/gate.sh", "scripts/run.sh",
         "mutants/**", "tests/**", "scripts/harness_env.sh", "scripts/adr.py",
-        "docs/agents/**", "docs/mutation-testing.md"]
+        "docs/agents/**", "docs/mutation-testing.md", "scripts/task_loop.py"]
 critical = []
+
+[loop]
+label = "ready-for-agent"               # open issues with this label are the queue
+runtime = "claude"                      # key of [loop.workers] used for dispatch
+base = "main"                           # tasks branch from origin/<base>; their PRs target it
+priority = ["priority:high", "priority:medium", "priority:low"]   # most to least urgent; none = last
+
+[loop.workers]                          # the brief is appended as the last argument
+claude = "claude -p"
+codex = "codex exec"
+gemini = "gemini -p"
 
 [budget]
 max_tool_calls = 400                     # per session; warn at 80%, deny at 100%; 0 is off
