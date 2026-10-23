@@ -214,5 +214,33 @@ with tempfile.TemporaryDirectory() as raw:
         and (home / ".gemini" / "trustedFolders.json").read_text() == "{not json",
     )
 
+
+# --- Codex reads hooks.json from the main checkout for every linked worktree ----------
+with tempfile.TemporaryDirectory() as raw:
+    base = Path(raw).resolve()
+    main, wt = base / "main", base / "wt"
+    main.mkdir()
+    for args in (["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                                                 "commit", "-q", "--allow-empty", "-m", "base"],
+                 ["worktree", "add", "-q", "-b", "side", str(wt)]):
+        subprocess.run(["git", *args], cwd=main, env=ENV, check=True, capture_output=True)
+    (wt / ".codex").mkdir()
+    (wt / ".codex" / "hooks.json").write_text('{"hooks": {"a": 1}}\n')
+    check("a worktree whose main has no hooks.json is reported missing",
+          harness_doctor.codex_main_hooks(wt) == "missing")
+    (main / ".codex").mkdir()
+    (main / ".codex" / "hooks.json").write_text('{"hooks": {"a": 2}}\n')
+    check("a worktree whose main has a different hooks.json is reported stale",
+          harness_doctor.codex_main_hooks(wt) == "stale")
+    (main / ".codex" / "hooks.json").write_text('{"hooks": {"a": 1}}\n')
+    check("a worktree whose main has the same hooks.json passes", harness_doctor.codex_main_hooks(wt) == "")
+    (wt / ".codex" / "hooks.json").unlink()
+    check("a worktree with no hooks.json of its own is stale even if main has one",
+          harness_doctor.codex_main_hooks(wt) == "stale")
+    check("a standalone checkout is its own main and passes", harness_doctor.codex_main_hooks(main) == "")
+    problems, _ = harness_doctor.runtime_findings(wt, base)
+    check("the doctor words the finding plainly",
+          any(p.startswith("Codex in this worktree runs main's hooks: stale") for p in problems), str(problems))
+
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

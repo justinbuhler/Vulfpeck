@@ -121,6 +121,29 @@ def gemini_trusted(root, home):
     return level in ("TRUST_FOLDER", "TRUST_PARENT")
 
 
+def codex_main_hooks(root):
+    """Return "" when Codex in `root` runs this tree's hooks, else "missing" or "stale".
+
+    Codex reads `.codex/hooks.json` from the main checkout for every linked
+    worktree, so a worktree's own file is never loaded (it loads none when main
+    has none). A standalone checkout is its own main and always passes.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        done = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=root,
+                              capture_output=True, text=True, timeout=5, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    common = Path(done.stdout.strip()) if done.returncode == 0 and done.stdout.strip() else None
+    if common is None or common.name != ".git" or common.parent.resolve() == Path(root).resolve():
+        return ""
+    theirs = common.parent / ".codex" / "hooks.json"
+    if not theirs.is_file():
+        return "missing"
+    mine = Path(root) / ".codex" / "hooks.json"
+    return "" if mine.is_file() and mine.read_bytes() == theirs.read_bytes() else "stale"
+
+
 def codex_auth():
     """Return whether `codex login status` succeeds (no model call)."""
     try:
@@ -159,6 +182,10 @@ def runtime_findings(root=ROOT, home=None):
     if stale is not None:
         need(not stale, "rendered hook files are fresh",
              f"stale hook files {stale}; run: python3 scripts/render_hooks.py")
+    drift = codex_main_hooks(root)
+    need(not drift, "codex hooks come from this tree",
+         f"Codex in this worktree runs main's hooks: {drift} (main's .codex/hooks.json is not this tree's); "
+         "a hook change is only exercised under Codex from a standalone clone or after it lands on main")
     need(codex_trusted(root, home), "codex trusts this folder",
          f"codex does not trust {root}; run: python3 scripts/harness_install.py --apply --trust")
     need(gemini_trusted(root, home), "gemini trusts this folder",
