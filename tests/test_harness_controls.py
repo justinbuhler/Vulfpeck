@@ -111,6 +111,93 @@ for event, matcher, script, kind in sorted(EXPECTED):
     check(f"{event} {script} declares a timeout", isinstance(timeout, int) and timeout > 0)
 
 
+
+# --- Codex and Gemini registrations: hand-written, never read from harness.toml ----
+# Rendered by scripts/render_hooks.py. Codex hosts every hook (tool matchers renamed);
+# Gemini has no Agent tool matcher and no subagent events, so three guards are absent
+# there (recorded gap, ADR 0015).
+CODEX_EXPECTED = {
+    ("PreToolUse", "spawn_agent", "require_agent_model.py", "gate"),
+    ("PreToolUse", "spawn_agent", "model_router.py", "gate"),
+    ("PreToolUse", "apply_patch", "blast_radius_advisory.py", "advisory"),
+    ("PostToolUse", "Bash", "verify_commit_landed.py", "gate"),
+    ("PostToolUse", "apply_patch", "test_for_edited_module.py", "gate"),
+    ("UserPromptSubmit", "", "codegraph_freshness.py", "advisory"),
+    ("SessionStart", "startup", "codegraph_freshness.py", "advisory"),
+    ("SessionStart", "startup", "harness_doctor.py", "advisory"),
+    ("PreToolUse", "Bash", "queue_guard.py", "advisory"),
+    ("SubagentStart", "", "readonly_guard.py", "advisory"),
+    ("SubagentStop", "", "readonly_guard.py", "advisory"),
+    ("Stop", "", "session_guard.py", "advisory"),
+    ("PreToolUse", "apply_patch", "adr_gate.py", "gate"),
+    ("PostToolUse", "apply_patch", "adr_gate.py", "gate"),
+    ("SessionEnd", "", "session_guard.py", "advisory"),
+}
+GEMINI_EXPECTED = {
+    ("BeforeTool", "replace|write_file", "blast_radius_advisory.py", "advisory"),
+    ("AfterTool", "run_shell_command", "verify_commit_landed.py", "gate"),
+    ("AfterTool", "replace|write_file", "test_for_edited_module.py", "gate"),
+    ("BeforeAgent", "", "codegraph_freshness.py", "advisory"),
+    ("SessionStart", "startup", "codegraph_freshness.py", "advisory"),
+    ("SessionStart", "startup", "harness_doctor.py", "advisory"),
+    ("BeforeTool", "run_shell_command", "queue_guard.py", "advisory"),
+    ("AfterAgent", "", "session_guard.py", "advisory"),
+    ("BeforeTool", "replace|write_file", "adr_gate.py", "gate"),
+    ("AfterTool", "replace|write_file", "adr_gate.py", "gate"),
+    ("SessionEnd", "", "session_guard.py", "advisory"),
+}
+# Expected timeouts are the Claude ones: seconds for Codex, milliseconds for Gemini.
+CLAUDE_TIMEOUT = {(e, m, s_): t for (e, m, s_), (_, t) in registered().items()}
+
+
+def adapted_registrations(path, runtime):
+    """Return {(event, matcher, script): (command, timeout)} for a rendered adapter file."""
+    out = {}
+    for event, groups in json.loads(path.read_text())["hooks"].items():
+        for group in groups:
+            for hook in group["hooks"]:
+                scripts = [x for x in re.findall(r"[\w.-]+\.py\b", hook["command"]) if x != "hook_adapter.py"]
+                out[(event, group.get("matcher", ""), scripts[0])] = (hook["command"], hook["timeout"])
+    return out
+
+
+for runtime, path, expected in (("codex", ROOT / ".codex" / "hooks.json", CODEX_EXPECTED),
+                                ("gemini", ROOT / ".gemini" / "settings.json", GEMINI_EXPECTED)):
+    reg = adapted_registrations(path, runtime)
+    want = {(e, m, s_) for e, m, s_, _ in expected}
+    check(f"{path.name} registers exactly the expected {runtime} hooks", set(reg) == want,
+          f"unexpected: {sorted(set(reg) - want)}; missing: {sorted(want - set(reg))}")
+    for event, matcher, script, kind in sorted(expected):
+        if (event, matcher, script) not in reg:
+            continue
+        cmd, timeout = reg[(event, matcher, script)]
+        check(f"{runtime} {event} {script} runs through hook_adapter for {runtime}",
+              f"hook_adapter.py\" --runtime {runtime} --event {event} -- " in cmd, cmd)
+        tail = cmd.rsplit("' ", 1)[-1]
+        if kind == "gate":
+            check(f"{runtime} {event} gate {script} fails closed", tail.endswith("exit 2; }") and "|| true" not in tail, tail)
+        else:
+            check(f"{runtime} {event} advisory {script} fails open", tail == "|| true", tail)
+    hosted = [t for (_, _, s_), t in CLAUDE_TIMEOUT.items()
+              if runtime == "codex" or s_ not in ("require_agent_model.py", "model_router.py", "readonly_guard.py")]
+    scale = 1 if runtime == "codex" else 1000
+    check(f"{runtime} timeouts are the Claude timeouts x {scale}",
+          sorted(t for _, t in reg.values()) == sorted(t * scale for t in hosted))
+
+sys.path.insert(0, str(ROOT / "scripts"))
+import render_hooks  # noqa: E402
+
+check("the rendered hook files are fresh (python3 scripts/render_hooks.py)", render_hooks.stale() == [],
+      str(render_hooks.stale()))
+check("Gemini leaves out exactly the Agent gates and the subagent guard",
+      sorted(name for name, _ in render_hooks.gaps(__import__("harness_config").load(ROOT)["hook"]))
+      == ["model_router_PreToolUse", "readonly_guard_SubagentStart", "readonly_guard_SubagentStop",
+          "require_agent_model_PreToolUse"])
+check("settings.json keeps its non-hook keys", "permissions" in json.loads(SETTINGS.read_text()))
+check(".gemini/settings.json keeps its context.fileName", json.loads((ROOT / ".gemini" / "settings.json").read_text())
+      .get("context") == {"fileName": ["AGENTS.md"]})
+
+
 def command(event, matcher, script):
     return REG[(event, matcher, script)]
 

@@ -1,3 +1,124 @@
 {
-  "context": { "fileName": ["AGENTS.md"] }
+  "context": {
+    "fileName": [
+      "AGENTS.md"
+    ]
+  },
+  "hooks": {
+    "BeforeTool": [
+      {
+        "matcher": "replace|write_file",
+        "hooks": [
+          {
+            "type": "command",
+            "name": "blast_radius_advisory_PreToolUse",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --runtime gemini --event BeforeTool -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/blast_radius_advisory.py\" || true' || true",
+            "timeout": 30000
+          },
+          {
+            "type": "command",
+            "name": "adr_gate_PreToolUse",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --runtime gemini --event BeforeTool -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }' || { rc=$?; [ \"$rc\" = 2 ] || echo \"hook_adapter crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 10000
+          }
+        ]
+      },
+      {
+        "matcher": "run_shell_command",
+        "hooks": [
+          {
+            "type": "command",
+            "name": "queue_guard_PreToolUse",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --runtime gemini --event BeforeTool -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/queue_guard.py\" || true' || true",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "run_shell_command",
+        "hooks": [
+          {
+            "type": "command",
+            "name": "verify_commit_landed_PostToolUse",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --runtime gemini --event AfterTool -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_commit_landed.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"verify_commit_landed.py crashed (rc=$rc); failing closed\" >&2; exit 2; }' || { rc=$?; [ \"$rc\" = 2 ] || echo \"hook_adapter crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 10000
+          }
+        ]
+      },
+      {
+        "matcher": "replace|write_file",
+        "hooks": [
+          {
+            "type": "command",
+            "name": "test_for_edited_module_PostToolUse",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --runtime gemini --event AfterTool -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/test_for_edited_module.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"test_for_edited_module.py crashed (rc=$rc); failing closed\" >&2; exit 2; }' || { rc=$?; [ \"$rc\" = 2 ] || echo \"hook_adapter crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 70000
+          },
+          {
+            "type": "command",
+            "name": "adr_gate_PostToolUse",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --runtime gemini --event AfterTool -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }' || { rc=$?; [ \"$rc\" = 2 ] || echo \"hook_adapter crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "codegraph_freshness_UserPromptSubmit",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --runtime gemini --event BeforeAgent -- 'out=$(cd \"${CLAUDE_PROJECT_DIR}\" && uv run python3 scripts/codegraph_freshness.py) || printf \"%s\\n\" \"$out\"' || true",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "name": "codegraph_freshness_SessionStart",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --runtime gemini --event SessionStart -- 'cd \"${CLAUDE_PROJECT_DIR}\" && uv run python3 scripts/codegraph_freshness.py --sync-if-stale || true' || true",
+            "timeout": 120000
+          },
+          {
+            "type": "command",
+            "name": "harness_doctor_SessionStart",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --runtime gemini --event SessionStart -- 'python3 \"${CLAUDE_PROJECT_DIR}/scripts/harness_doctor.py\" || true' || true",
+            "timeout": 15000
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "session_guard_Stop",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --runtime gemini --event AfterAgent -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/session_guard.py\" || true' || true",
+            "timeout": 60000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "session_guard_SessionEnd",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --runtime gemini --event SessionEnd -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/session_guard.py\" || true' || true",
+            "timeout": 20000
+          }
+        ]
+      }
+    ]
+  }
 }
