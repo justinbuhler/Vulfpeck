@@ -18,7 +18,8 @@
 # `uv sync` it would otherwise repeat every time.
 #
 # Exits 0 only after re-reading main and proving the reviewed candidate is
-# reachable from it. Anything else exits non-zero and writes nothing.
+# reachable from it. Anything else exits non-zero without landing; it may already
+# have pruned landers and synced with origin, which happen before the gate.
 set -uo pipefail
 
 # git reads these from the environment and ignores the directory it is run from.
@@ -235,8 +236,9 @@ sync_with_origin(){
     # lander - the one path ORCH-12 sanctions to move it.
     merr=$(git -C "$mw" -c user.name=land -c user.email=land@local \
            merge --no-verify --no-edit origin/main 2>&1) \
-      || die "merging origin/main into main conflicts; main is unchanged:
-$(printf '%s\n' "$merr" | sed 's/^/       /')"
+      || { git -C "$mw" merge --abort >/dev/null 2>&1
+           die "merging origin/main into main conflicts; main is unchanged:
+$(printf '%s\n' "$merr" | sed 's/^/       /')"; }
     merged_main=$(git rev-parse main)
   else
     mtmp=$(mktemp -d)/wt

@@ -718,6 +718,11 @@ r23 = land(wt23)
 check("a conflicting divergence fails the land", r23.returncode != 0, r23.stdout + r23.stderr)
 check("main is untouched after a conflicting divergence",
       git(d23, "rev-parse", "main") == before23)
+check("a conflicting divergence leaves no merge in progress in the main checkout",
+      not (d23 / ".git" / "MERGE_HEAD").exists())
+check("a conflicting divergence leaves the main checkout clean",
+      git(d23, "status", "--porcelain", "--untracked-files=no") == "",
+      git(d23, "status", "--porcelain"))
 
 # --- a merge commit on main is a hole the pre-commit hook cannot see -------
 # pre-commit does not run for merges; git runs pre-merge-commit instead. So
