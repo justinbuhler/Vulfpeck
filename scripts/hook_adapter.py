@@ -30,6 +30,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -184,20 +185,110 @@ def _absolute(tool_input, cwd):
     return tool_input
 
 
-def shell_patch(command):
-    """Return the patch text inside a shell command that runs apply_patch, else None.
+HEREDOC = re.compile(r"(?<!<)<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2(?!<)")
+PATCH_BLOCK = re.compile(r"\*\*\* Begin Patch.*?\*\*\* End Patch", re.S)
+SHELLS = ("bash", "sh", "zsh", "dash")
+
+
+def quoted_flags(text):
+    """Return (flags, open): a boolean per character, True inside quotes, and whether a quote is left open."""
+    flags, quote, escaped = [], "", False
+    for ch in text:
+        flags.append(bool(quote))
+        if escaped:
+            escaped = False
+        elif ch == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            if ch == quote:
+                quote = ""
+        elif ch in "'\"":
+            quote = ch
+            flags[-1] = True
+    return flags, bool(quote)
+
+
+def split_simple(line):
+    """Split one logical line into simple-command segments at unquoted ; | & ( )."""
+    (flags, _), out, last = quoted_flags(line), [], 0
+    for i, ch in enumerate(line):
+        if ch in ";|&()" and not flags[i]:
+            out.append(line[last:i])
+            last = i + 1
+    out.append(line[last:])
+    return out
+
+
+def patch_blocks(text):
+    """Return every Begin..End block in `text`; a Begin with no End raises."""
+    if text.count("*** Begin Patch") != len(PATCH_BLOCK.findall(text)):
+        raise AdapterError("an apply_patch command has a Begin Patch marker with no End Patch marker")
+    return PATCH_BLOCK.findall(text)
+
+
+def scan_script(script):
+    """Return the patch blocks of every apply_patch invocation in a shell script.
+
+    apply_patch counts only as the command word of a simple command (start of a line,
+    or after && ; | ( ), also inside `bash -c`. Its patch is its heredoc body or an
+    argument. Text elsewhere (echo, rg, cat > f <<EOF, a commit message) is not a
+    patch. `apply_patch < file` and `cat p | apply_patch` carry no patch here and are
+    left alone. An invocation that carries a heredoc or argument with no valid patch raises.
+    """
+    lines, blocks, i = script.split("\n"), [], 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
+        while quoted_flags(line)[1] and i < len(lines):  # a quoted argument spans lines
+            line += "\n" + lines[i]
+            i += 1
+        flags = quoted_flags(line)[0]
+        bodies = []
+        for match in HEREDOC.finditer(line):
+            if flags[match.start()]:
+                continue
+            body = []
+            while i < len(lines) and (lines[i].strip() if match.group(1) else lines[i]) != match.group(3):
+                body.append(lines[i])
+                i += 1
+            i += 1
+            bodies.append("\n".join(body))
+        used = 0
+        for segment in split_simple(line):
+            seg_flags = quoted_flags(segment)[0]
+            mine = [m for m in HEREDOC.finditer(segment) if not seg_flags[m.start()]]
+            texts, used = bodies[used:used + len(mine)], used + len(mine)
+            try:
+                words = shlex.split(segment, comments=True)
+            except ValueError:
+                continue
+            while words and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[0]):
+                words.pop(0)
+            if not words:
+                continue
+            command = os.path.basename(words[0])
+            if command in ("apply_patch", "applypatch"):
+                texts = texts + [w for w in words[1:] if "*** Begin Patch" in w]
+                for text in texts:
+                    found = patch_blocks(text)
+                    if not found:
+                        raise AdapterError("an apply_patch command carries no valid patch")
+                    blocks += found
+            elif command in SHELLS:
+                for k, word in enumerate(words[1:-1], 1):
+                    if re.fullmatch(r"-[A-Za-z]*c", word):
+                        blocks += scan_script(words[k + 1])
+                        break
+    return blocks
+
+
+def shell_patches(command):
+    """Return the patch blocks a shell command applies through apply_patch ([] when none).
 
     Codex reports `apply_patch <<'EOF' ... EOF` sent through the shell as a Bash call
-    (observed on 0.164), not as an apply_patch call. A command that names apply_patch
-    and holds a patch is treated as one; a Begin marker with no End marker raises.
+    (observed on 0.164), not as an apply_patch call.
     """
-    if not isinstance(command, str) or not re.search(r"\bapply_patch\b", command) or "*** Begin Patch" not in command:
-        return None
-    start = command.index("*** Begin Patch")
-    end = command.find("*** End Patch", start)
-    if end < 0:
-        raise AdapterError("a shell apply_patch command has no End Patch marker")
-    return command[start:end + len("*** End Patch")]
+    return scan_script(command) if isinstance(command, str) else []
 
 
 def to_claude(runtime, event, native, edits=False):
@@ -252,15 +343,13 @@ def to_claude(runtime, event, native, edits=False):
             return out
         payload["tool_name"] = CODEX_TOOLS.get(name, name)
         if edits and payload["tool_name"] == "Bash":
-            patch = shell_patch(tool_input.get("command"))
-            if patch is None:
-                return []
             out = []
-            for tool, edit_input in parse_apply_patch(patch):
-                child = dict(payload)
-                child["tool_name"] = tool
-                child["tool_input"] = _absolute(edit_input, cwd)
-                out.append(child)
+            for patch in shell_patches(tool_input.get("command")):
+                for tool, edit_input in parse_apply_patch(patch):
+                    child = dict(payload)
+                    child["tool_name"] = tool
+                    child["tool_input"] = _absolute(edit_input, cwd)
+                    out.append(child)
             return out
     if "tool_input" in payload or name is not None:
         payload["tool_input"] = _absolute(dict(payload.get("tool_input") or {}), cwd)
@@ -386,6 +475,17 @@ def emit(runtime, event, result):
 
 
 # --- run -------------------------------------------------------------------------
+# Documented runtime limits that are shorter than the registered timeout (Codex clamps
+# SessionEnd to 3s), so the adapter answers inside what the runtime will really allow.
+RUNTIME_LIMITS = {("codex", "SessionEnd"): 3.0}
+
+
+def effective_timeout(runtime, event, timeout):
+    """Return the registered timeout, capped at the runtime's own limit for that event."""
+    cap = RUNTIME_LIMITS.get((runtime, event))
+    return timeout if timeout is None or cap is None else min(timeout, cap)
+
+
 def budget(timeout):
     """Return the seconds the adapter may use of a registered timeout: about 1s under it.
 
@@ -408,6 +508,25 @@ def read_stdin(deadline):
     return box[0]
 
 
+CHILDREN = []
+
+
+def kill_children(signum=None, frame=None):
+    """Kill every guard process group still running; as a signal handler, then exit non-zero.
+
+    The guard has its own session, so the runtime killing the adapter would not reach
+    it. Exit status 128+signal is non-zero: a gate's registration turns it into a block.
+    """
+    for proc in CHILDREN:
+        if proc.poll() is None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+    if signum is not None:
+        sys.exit(128 + signum)
+
+
 def run_guard(command, payload, deadline=None):
     """Run the guard command on one Claude-shaped payload; return a Result.
 
@@ -418,6 +537,7 @@ def run_guard(command, payload, deadline=None):
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(REPO)}
     proc = subprocess.Popen(["bash", "-c", command], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, cwd=cwd, env=env, start_new_session=True)
+    CHILDREN.append(proc)
     try:
         stdout, stderr = proc.communicate(json.dumps(payload),
                                           timeout=None if deadline is None else max(deadline - time.monotonic(), 0.01))
@@ -463,8 +583,10 @@ def main(argv=None):
     if not guard:
         print("hook_adapter: no guard command after --", file=sys.stderr)
         return 1
+    signal.signal(signal.SIGTERM, kill_children)
+    signal.signal(signal.SIGINT, kill_children)
     started = time.monotonic()
-    limit = budget(args.timeout)
+    limit = budget(effective_timeout(args.runtime, args.event, args.timeout))
     try:
         raw = read_stdin(limit)
         deadline = None if limit is None else started + limit

@@ -677,5 +677,92 @@ rc, out, err = run("codex", "PreToolUse", "apply_patch|Bash", "adr_gate.py",
                    {"tool_name": "Bash", "cwd": str(ROOT), "tool_input": {"command": "git status"}})
 check("codex: adr_gate stays silent on an ordinary Bash call", rc == 0 and out.strip() == "{}", out + err)
 
+
+# --- which shell commands are patches (scope reset) ---------------------------------------
+def files_of(command):
+    """Return the file names the edit guards would see for a Bash command, in order."""
+    events = ha.to_claude("codex", "PreToolUse", {"tool_name": "Bash", "cwd": "/w", "tool_input": {"command": command}},
+                          edits=True)
+    return [Path(e["tool_input"]["file_path"]).name for e in events]
+
+
+one = lambda name: patch(f"*** Add File: {name}", "+x")  # noqa: E731
+two_patches = f"apply_patch <<'EOF'\n{one('first.py')}\nEOF\napply_patch <<'EOF'\n{one('second.py')}\nEOF"
+check("two apply_patch heredocs in one command are both gated", files_of(two_patches) == ["first.py", "second.py"],
+      str(files_of(two_patches)))
+check("two patch blocks in one heredoc are both gated",
+      files_of(f"apply_patch <<'EOF'\n{one('a.py')}\n{one('b.py')}\nEOF") == ["a.py", "b.py"])
+decoy = f"echo '{one('decoy.py')}' >/dev/null; apply_patch <<'EOF'\n{one('real.py')}\nEOF"
+check("a decoy patch in an echo does not hide the real one: only the real file is gated",
+      files_of(decoy) == ["real.py"], str(files_of(decoy)))
+check("rg -F with both markers is not a patch and does not raise",
+      files_of("rg -F '*** Begin Patch' x # apply_patch") == [])
+check("a commit message naming apply_patch and holding both markers is not a patch",
+      files_of(f"git commit -m \"fix apply_patch: {one('m.py')}\"") == [])
+check("an unclosed Begin marker in an rg command does not raise", files_of("rg 'apply_patch|*** Begin Patch' .") == [])
+check("a cat heredoc holding a patch example is not an edit of the example's path",
+      files_of(f"cat > notes.md <<'EOF'\nexample:\n{one('example.py')}\nEOF") == [])
+check("text after a cat heredoc is still scanned, so a real patch there is gated",
+      files_of(f"cat > notes.md <<'EOF'\n{one('example.py')}\nEOF\napply_patch <<'EOF'\n{one('real.py')}\nEOF")
+      == ["real.py"])
+check("bash -c with an apply_patch heredoc is gated",
+      files_of("bash -c \"apply_patch <<'EOF'\n" + one("viabash.py") + "\nEOF\"") == ["viabash.py"])
+check("apply_patch after && or ; or a pipe's left side is a command word and is gated",
+      files_of(f"cd x && apply_patch <<'EOF'\n{one('c.py')}\nEOF") == ["c.py"])
+check("apply_patch given the patch as an argument is gated",
+      files_of("apply_patch \"" + one("arg.py") + "\"") == ["arg.py"])
+check("an env assignment before apply_patch does not hide it",
+      files_of(f"FOO=1 apply_patch <<'EOF'\n{one('env.py')}\nEOF") == ["env.py"])
+check("a malformed patch to a real apply_patch invocation still raises",
+      raises(lambda: files_of("apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: a\n+x\nEOF")))
+check("a heredoc to apply_patch with no patch at all raises",
+      raises(lambda: files_of("apply_patch <<'EOF'\nhello\nEOF")))
+check("apply_patch < file and cat p | apply_patch are left alone (no patch text in the command)",
+      files_of("apply_patch < p.txt") == [] and files_of("cat p.txt | apply_patch") == [])
+check("a quoted << in an echo does not swallow the next lines",
+      files_of(f"echo '<<X'\napply_patch <<'EOF'\n{one('after.py')}\nEOF") == ["after.py"])
+
+# --- the adapter takes its guard down with it ---------------------------------------------
+import signal  # noqa: E402
+
+check("Codex SessionEnd is capped at its 3s limit", ha.effective_timeout("codex", "SessionEnd", 20) == 3.0)
+check("other events keep the registered timeout",
+      ha.effective_timeout("codex", "PreToolUse", 10) == 10 and ha.effective_timeout("gemini", "SessionEnd", 20) == 20)
+check("a capped SessionEnd budget is 2s", ha.budget(ha.effective_timeout("codex", "SessionEnd", 20)) == 2.0)
+with tempfile.TemporaryDirectory() as raw:
+    pidfile = Path(raw) / "guard.pid"
+    entry = {"command": f"echo $$ > {pidfile}; exec sleep 60", "kind": "gate", "timeout": 120}
+    proc = subprocess.Popen(["bash", "-c", render_hooks.adapted(entry, "codex", "PreToolUse")], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=str(ROOT),
+                            start_new_session=True)
+    proc.stdin.write("{}")
+    proc.stdin.flush()
+    proc.stdin.close()
+    for _ in range(100):
+        if pidfile.is_file() and pidfile.read_text().strip():
+            break
+        time.sleep(0.1)
+    guard_pid = int(pidfile.read_text().strip())
+    # signal the adapter itself (the python child of the registration shell), as the runtime would
+    adapter_pid = None
+    for _ in range(50):  # the adapter is the registration shell's child
+        kids = subprocess.run(["pgrep", "-P", str(proc.pid)], capture_output=True, text=True).stdout.split()
+        if kids:
+            adapter_pid = int(kids[0])
+            break
+        time.sleep(0.1)
+    os.kill(adapter_pid, signal.SIGTERM)
+    proc.wait(timeout=10)
+    time.sleep(0.3)
+    try:
+        os.kill(guard_pid, 0)
+        alive = True
+    except OSError:
+        alive = False
+    check("SIGTERM to the adapter leaves no live guard", not alive and proc.returncode == 2,
+          f"alive={alive} rc={proc.returncode}")
+    if alive:
+        os.kill(guard_pid, signal.SIGKILL)
+
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)
