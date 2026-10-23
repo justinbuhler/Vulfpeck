@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 import harness_config
+from hook_adapter import CODEX_EVENTS
 from paths import REPO
 
 CLAUDE_FILE = ".claude/settings.json"
@@ -95,6 +96,8 @@ def build(entries, runtime):
             )
             hook = {"type": "command", "command": command, "timeout": timeout}
         elif runtime == "codex":
+            if entry["event"] not in CODEX_EVENTS:
+                continue
             event = entry["event"]
             matcher = translate_matcher(event, entry["matcher"], CODEX_MATCH)
             if matcher and watches_edits(entry) and event in ("PreToolUse", "PostToolUse"):
@@ -132,6 +135,8 @@ def gaps(entries):
     """Return (entry name, reason) for every entry a runtime leaves out."""
     out = []
     for entry in entries:
+        if entry["event"] not in CODEX_EVENTS:
+            out.append((entry["name"], f"codex has no {entry['event']} event"))
         if entry["event"] not in GEMINI_EVENT:
             out.append((entry["name"], f"gemini has no {entry['event']} event"))
         elif translate_matcher(entry["event"], entry["matcher"], GEMINI_MATCH) is None:

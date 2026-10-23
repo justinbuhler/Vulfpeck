@@ -86,15 +86,15 @@ Each phase gets one review and one corrective round. A third round requires an e
 ## Scope
 
 - Before editing, state Modifying / Not touching / Out-of-scope observations. (prose; enforcement planned)
-- An out-of-scope finding becomes an issue or a report line, never an edit. (prose; enforcement planned)
+- An out-of-scope finding becomes an issue or a report line, never an edit. (enforced: scope_guard, once a lease is set with `scripts/scope.py`)
 - Build no unrequested feature, option or abstraction; make the simplest change that solves the task and touch only what it needs. (prose; enforcement planned)
 - A task is defined by read_first, action, acceptance criteria and a verification command. (prose; enforcement planned)
 
 ## Stop and reassess
 
-- A failure fingerprint (same failing check or error) seen 3 times, meaning the original failure plus two failed repairs: stop, write what was tried and why it failed, then change approach or escalate. (prose; enforcement planned)
-- Two consecutive edit-and-run cycles with no new passing check: stop. (prose; enforcement planned)
-- Never re-run an unchanged failing command expecting a different result. (prose; enforcement planned)
+- A failure fingerprint (same failing check or error) seen 3 times, meaning the original failure plus two failed repairs: stop, write what was tried and why it failed, then change approach or escalate. (enforced: loop_guard)
+- Two consecutive edit-and-run cycles with no new passing check: stop. (enforced: loop_guard)
+- Never re-run an unchanged failing command expecting a different result. (enforced: loop_guard)
 - One corrective round per phase (see Delegation and review); a further round needs an explicit scope reset. (prose; enforcement planned)
 - A missing worktree or broken environment is reported once, not looped on. (prose; enforcement planned)
 
@@ -114,7 +114,7 @@ Each phase gets one review and one corrective round. A third round requires an e
 
 ## Turn completion
 
-- Do not end a turn announcing work you have not done; do it or name the blocker. (prose; enforcement planned)
+- Do not end a turn announcing work you have not done; do it or name the blocker. (enforced: turn_guard)
 
 ## Working rules
 

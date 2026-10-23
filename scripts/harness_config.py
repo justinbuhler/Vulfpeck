@@ -87,6 +87,14 @@ DEFAULTS = {
                  "docs/agents/**", "docs/mutation-testing.md"],
         "critical": [],
     },
+    "budget": {
+        # Per session, checked by .claude/hooks/budget_guard.py: warn at 80%, deny at 100%. 0 turns a limit off.
+        "max_tool_calls": 400,
+        # Minutes of active time: a gap over 30 minutes between tool calls is not counted.
+        "max_minutes": 180,
+        # Files an agent may still Write or Edit once the budget is exhausted, to leave its status.
+        "status_glob": ["**/STATUS.md", "**/status.md", "tmp/**/status*.md"],
+    },
     "hooks": {
         "watched_files": [
             "harness.toml", "scripts/paths.py", "scripts/harness_config.py",
@@ -116,12 +124,12 @@ DEFAULTS = {
     ],
 }
 
-STRING_LISTS = {("land", "copy_untracked"), ("roles", "read_only"), ("adr", "require_for"), ("adr", "exempt"), ("hooks", "watched_files"),
+STRING_LISTS = {("budget", "status_glob"), ("land", "copy_untracked"), ("roles", "read_only"), ("adr", "require_for"), ("adr", "exempt"), ("hooks", "watched_files"),
                 ("hooks", "watched_dirs"), ("hooks", "skip_dirs"),
                 ("tiers", "low"), ("tiers", "medium"), ("tiers", "high"), ("tiers", "critical")}
 RULE_KEYS = {"match": str, "self": str, "tests": list, "command": str}
 HOOK_KEYS = {"name": str, "event": str, "matcher": str, "kind": str, "timeout": int, "command": str}
-HOOK_EVENTS = ("PreToolUse", "PostToolUse", "UserPromptSubmit", "SessionStart", "SessionEnd",
+HOOK_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "SessionStart", "SessionEnd",
                "SubagentStart", "SubagentStop", "Stop")
 
 
@@ -205,6 +213,9 @@ def merge(raw):
             elif (section, key) == ("jev", "enabled"):
                 if not isinstance(value, bool):
                     raise ConfigError("jev.enabled must be true or false")
+            elif section == "budget":
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                    raise ConfigError(f"budget.{key} must be an integer >= 0 (0 is off)")
             elif (section, key) == ("jev", "timeout"):
                 if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
                     raise ConfigError("jev.timeout must be a number of seconds above 0")

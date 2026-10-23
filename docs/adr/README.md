@@ -34,4 +34,5 @@ To change a decision, write a new ADR with `Supersedes: NNNN` and mark the old o
 - 2026-10-23 — [0014. Skills live once in .agents/skills for every runtime](0014-skills-live-once-in-agents-skills-for-every-runtime.md) — proposed
 - 2026-10-23 — [0015. One hook table, rendered for Claude, Codex and Gemini](0015-one-hook-table-rendered-for-claude-codex-and-gemini.md) — proposed
 - 2026-10-23 — [0016. Jev proposes consequence tier, code picks the checks](0016-jev-proposes-consequence-tier-code-picks-the-checks.md) — proposed
+- 2026-10-23 — [0017. Loop, scope and budget limits are hooks, not prose](0017-loop-scope-and-budget-limits-are-hooks-not-prose.md) — proposed
 <!-- adr-index:end -->
