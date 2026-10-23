@@ -417,6 +417,7 @@ for text, want in (
     check(f"announcing message blocks: {text!r}", tg.announced(text) == want, str(tg.announced(text)))
 for text in (
         "I will not touch the adapter.",
+        "Next I will not run the suite; it is out of scope.",
         "This is not going to work, so I stopped.",
         "He said \"next I will run it\" in the notes.",
         "The log line `I'll now retry` is from the old script.",
