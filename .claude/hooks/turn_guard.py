@@ -29,9 +29,18 @@ ANNOUNCE = (
     rf"\b{SUBJECT}(?:'ll| will) now\b",
     rf"\bnow,? {SUBJECT}(?:'ll| will)\b",
     r"\blet me now\b",
+    r"\blet me (?:run|check|do|start|try|fix|update|write|look|add|create|implement|verify|read|test|go)\b",
     rf"\b(?:{SUBJECT} am|{SUBJECT}'m|we are|we're) going to\b",
     rf"\b{SUBJECT}(?:'ll| will) (?:start|begin|proceed)\b",
+    rf"\b{SUBJECT}(?:'ll| will)\b[^.!?]{{0,60}}\bnext[.!]?\s*$",
 )
+# Conditional or waiting phrasings and plans: the work is deliberately not started.
+WAITING = re.compile(
+    r"\b(?:after|if|once|when|until|unless|before) you\b|\bwait(?:ing)? for (?:your|you)\b"
+    r"|\b(?:i|we)(?:'ll| will) now stop\b|\b(?:i|we)'?m going to need\b|\bgoing to need\b",
+    re.I,
+)
+NUMBERED = re.compile(r"(?m)^\s*\d+[.)]\s")
 NEGATED = re.compile(r"\b(?:will not|won't|'ll not|not going to|isn't going to|aren't going to)\b|n't going to", re.I)
 BLOCKER = re.compile(r"\bblock(?:er|ed|ing)\b", re.I)
 FENCE = re.compile(r"```.*?```", re.S)
@@ -70,10 +79,10 @@ def last_paragraph(text):
 def announced(text):
     """Return the announcing phrase found in the last paragraph of text, or None."""
     paragraph = last_paragraph(text)
-    if BLOCKER.search(paragraph):
+    if BLOCKER.search(paragraph) or NUMBERED.search(paragraph):
         return None
     for sentence in re.split(r"(?<=[.!?:])\s+|\n", QUOTED.sub("", paragraph)):
-        if sentence.rstrip().endswith("?") or NEGATED.search(sentence):
+        if sentence.rstrip().endswith("?") or NEGATED.search(sentence) or WAITING.search(sentence):
             continue
         for pattern in ANNOUNCE:
             found = re.search(pattern, sentence, re.I)

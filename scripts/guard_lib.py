@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -41,10 +42,11 @@ TRANSCRIPT_TAIL = 200_000
 def way_out(session):
     """Return the recovery text a block message ends with."""
     return (
-        "Way out: write what was tried and why it failed to the task's status, then change approach or escalate "
-        "to the owner. Only the owner clears this trip: "
-        f"`python3 scripts/loop_reset.py --session {session} --reason \"...\"`. Never reset it yourself to keep going."
+        "Way out: write what was tried and why it failed to the task's status, then change approach or "
+        f"escalate to the owner. The owner or the task runner resets this (session {session}); do not "
+        "edit, remove or reset the loop state yourself."
     )
+
 
 # The one list of commands that count as a test or lint run, besides harness.toml
 # commands.lint and commands.test.
@@ -53,6 +55,9 @@ TEST_PATTERNS = (
     r"\bpython3?\s+(?:\S+/)?tests/",
     r"\buv\s+run\b.*\btests/",
     r"\bscripts/plan_tests\.py\b.*--run\b",
+    r"(?:^|[\s;&|])pytest(?![\w.-])",
+    r"\bpython3?\s+-m\s+pytest\b",
+    r"\buv\s+run\b.*\bpytest(?![\w.-])",
 )
 EXIT_KEYS = ("exit_code", "exitCode", "returncode", "exit_status")
 EXIT_LINE = re.compile(
@@ -60,7 +65,18 @@ EXIT_LINE = re.compile(
     re.I | re.M,
 )
 ERROR_LINE = re.compile(r"error|fail|traceback|exception|not found|no such", re.I)
-FILTER_TAIL = re.compile(r"\s*\|\s*(?:tail|head)\b[^|]*$")
+FILTER_TAIL = re.compile(r"\s*\|\s*(?:cat|tail|head|grep|tee)\b[^|]*$")
+ENV_PREFIX = re.compile(r"^(?:[A-Za-z_]\w*=\S*\s+)+")
+CD_PREFIX = re.compile(r"^cd\s+\S+\s*&&\s*")
+REDIRECT = re.compile(r"\s+\d*>>?&?\s*[^\s|;&]*")
+VOLATILE = (
+    (re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?Z?"), "<ts>"),
+    (re.compile(r"\b\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\b"), "<ts>"),
+    (re.compile(r"\b0x[0-9a-fA-F]+\b|\b[0-9a-f]{7,}\b"), "<hex>"),
+    (re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|secs?|seconds|min|s)\b"), "<dur>"),
+)
+FAILED_ITEM = re.compile(r"^\s*(?:FAIL|FAILED)\s+(?!\()(\S.*?)(?:\s+-\s.*)?\s*$")
+FAILED_COUNT = re.compile(r"(\d+) failed")
 
 ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 
@@ -119,15 +135,21 @@ def save_state(path, state):
     os.replace(tmp, path)
 
 
+def session_key(payload):
+    """Return the state key: the session id, plus the agent id inside a subagent."""
+    agent = payload.get("agent_id")
+    return session_of(payload) + (f".{agent}" if isinstance(agent, str) and agent else "")
+
+
 def loop_path(payload):
-    """Return the loop state path for this payload's session, or None outside git."""
-    return state_file("loop", cwd_of(payload), session_of(payload))
+    """Return the loop state path for this payload's session (and subagent), or None outside git."""
+    return state_file("loop", cwd_of(payload), session_key(payload))
 
 
 def fresh_loop():
     """Return the empty loop state: the only counters loop_guard and turn_guard keep."""
-    return {"v": 1, "fp": {}, "failing": {}, "last_failed": None, "edited": False, "pending_edits": 0,
-            "prev_len": None, "stalled": 0, "tripped": None, "turn_blocked": ""}
+    return {"v": 1, "fp": {}, "runs": {}, "last_failed": None, "pending_edits": 0,
+            "stalled": 0, "strikes": 0, "tripped": None, "turn_blocked": ""}
 
 
 def read_payload():
@@ -189,8 +211,17 @@ def text_of(value):
 
 
 def normalise(command):
-    """Return a command in fingerprint form: no rtk prefix, collapsed whitespace, no trailing tail/head filter."""
-    command = re.sub(r"^\s*rtk\s+", "", command)
+    """Return a command in fingerprint form.
+
+    Dropped: the rtk prefix, leading env assignments and `cd <dir> &&`, redirections, trailing
+    pipes to cat, tail, head, grep and tee; whitespace is collapsed.
+    """
+    command = re.sub(r"^\s*rtk\s+", "", command).strip()
+    command = ENV_PREFIX.sub("", command)
+    while CD_PREFIX.match(command):
+        command = CD_PREFIX.sub("", command, count=1)
+    command = ENV_PREFIX.sub("", command)
+    command = REDIRECT.sub("", command)
     command = " ".join(command.split())
     while FILTER_TAIL.search(command):
         command = FILTER_TAIL.sub("", command)
@@ -231,7 +262,7 @@ def transcript_exit_code(payload):
 
 
 def exit_status(payload):
-    """Return a Bash result's exit status, or 0 when the response shows none.
+    """Return a Bash result's exit status, or None when a text-only (Codex) response leaves it unknown.
 
     Claude Code sends a failed command as PostToolUseFailure with `error` "Exit code N\\n...";
     PostToolUse is only ever a success there. Codex and Gemini send PostToolUse for both, so a
@@ -256,12 +287,18 @@ def exit_status(payload):
                     return holder[key]
         if "stdout" in response and "llmContent" not in response:
             return 0
-    if isinstance(response, str):
-        logged = transcript_exit_code(payload)
-        if logged is not None:
-            return logged
     found = EXIT_LINE.findall(text_of(response))
-    return int(found[-1]) if found else 0
+    if found:
+        return int(found[-1])
+    if isinstance(response, str):
+        # Codex sends the output text alone; its rollout may lag the hook, so wait briefly.
+        deadline = time.monotonic() + float(os.environ.get("GUARD_ROLLOUT_WAIT", "2.0"))
+        while True:
+            logged = transcript_exit_code(payload)
+            if logged is not None or time.monotonic() >= deadline:
+                return logged
+            time.sleep(0.2)
+    return 0
 
 
 def first_error_line(payload):
@@ -282,9 +319,33 @@ def first_error_line(payload):
     )[:200]
 
 
+def volatile_free(line):
+    """Return an error line with timestamps, hex ids and durations replaced by placeholders."""
+    for pattern, placeholder in VOLATILE:
+        line = pattern.sub(placeholder, line)
+    return line
+
+
 def fingerprint(command, error_line):
-    """Return the sha1 of the normalised command plus the first error line."""
-    return hashlib.sha1(f"{normalise(command)}\0{error_line}".encode()).hexdigest()
+    """Return the sha1 of the normalised command plus the error line without its volatile parts."""
+    return hashlib.sha1(f"{normalise(command)}\0{volatile_free(error_line)}".encode()).hexdigest()
+
+
+def failure_items(payload):
+    """Return the failing test names (or "?" placeholders) a Bash result reports, or None when unparseable.
+
+    Reads standalone `FAIL  <name>` lines, pytest `FAILED <id>` lines and `N failed` counts; the
+    larger of the named and counted failures wins.
+    """
+    if payload.get("hook_event_name") == "PostToolUseFailure":
+        text = str(payload.get("error") or "")
+    else:
+        text = text_of(payload.get("tool_response"))
+    names = list(dict.fromkeys(m.group(1) for m in map(FAILED_ITEM.match, text.splitlines()) if m))
+    counted = max((int(n) for n in FAILED_COUNT.findall(text)), default=0)
+    if not names and not counted:
+        return None
+    return names + ["?"] * max(counted - len(names), 0)
 
 
 def is_test_command(command, root=ROOT):

@@ -90,7 +90,10 @@ DEFAULTS = {
     "budget": {
         # Per session, checked by .claude/hooks/budget_guard.py: warn at 80%, deny at 100%. 0 turns a limit off.
         "max_tool_calls": 400,
+        # Minutes of active time: a gap over 30 minutes between tool calls is not counted.
         "max_minutes": 180,
+        # Files an agent may still Write or Edit once the budget is exhausted, to leave its status.
+        "status_glob": ["**/STATUS.md", "**/status.md", "tmp/**/status*.md"],
     },
     "hooks": {
         "watched_files": [
@@ -121,7 +124,7 @@ DEFAULTS = {
     ],
 }
 
-STRING_LISTS = {("land", "copy_untracked"), ("roles", "read_only"), ("adr", "require_for"), ("adr", "exempt"), ("hooks", "watched_files"),
+STRING_LISTS = {("budget", "status_glob"), ("land", "copy_untracked"), ("roles", "read_only"), ("adr", "require_for"), ("adr", "exempt"), ("hooks", "watched_files"),
                 ("hooks", "watched_dirs"), ("hooks", "skip_dirs"),
                 ("tiers", "low"), ("tiers", "medium"), ("tiers", "high"), ("tiers", "critical")}
 RULE_KEYS = {"match": str, "self": str, "tests": list, "command": str}

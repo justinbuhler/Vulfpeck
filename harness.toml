@@ -49,7 +49,8 @@ critical = []
 
 [budget]
 max_tool_calls = 400                     # per session; warn at 80%, deny at 100%; 0 is off
-max_minutes = 180
+max_minutes = 180                       # active minutes: a gap over 30 minutes between calls is not counted
+status_glob = ["**/STATUS.md", "**/status.md", "tmp/**/status*.md"]   # still writable at 100%
 
 [hooks]
 watched_files = ["harness.toml", "scripts/paths.py", "scripts/harness_config.py",
@@ -211,6 +212,14 @@ command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc
 [[hook]]
 name = "loop_guard_edits_PostToolUse"
 event = "PostToolUse"
+matcher = "Edit|Write"
+kind = "gate"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "loop_guard_edits_PreToolUse"
+event = "PreToolUse"
 matcher = "Edit|Write"
 kind = "gate"
 timeout = 10
