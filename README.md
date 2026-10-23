@@ -25,6 +25,7 @@ git config core.hooksPath .githooks     # lint at commit, no commits or merge co
 |---|---|
 | `AGENTS.md` | Normative contract: invariants, delegation rules ORCH-01..12, consequence-to-review table |
 | `CLAUDE.md` | Commands, hooks and model routing for Claude Code sessions |
+| `.agents/skills/`, `.codex/` | Skills for every runtime (`.claude/skills` is a symlink to them); Codex role declarations |
 | `harness.toml` | Setup, lint and test commands, untracked inputs, watched controls, mapped tests |
 | `HARNESS.md` | What each control enforces, adopting it in another repository, open gaps |
 | `tests/AGENTS.md` | Test conventions (standalone scripts, not pytest) |

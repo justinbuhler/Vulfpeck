@@ -1,3 +1,4 @@
+name = "reviewer-code"
 sandbox_mode = "read-only"
 developer_instructions = """
 Your role definition is .claude/agents/reviewer-code.md in this repository. Read it now and follow it as your instructions; ignore its YAML frontmatter fields (tools, model), which are Claude Code settings. Skills it names are in .agents/skills/.

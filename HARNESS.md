@@ -11,7 +11,7 @@ It is project-agnostic. A repository describes how it builds in `harness.toml`; 
 | Project config | `harness.toml`, `scripts/harness_config.py`, `scripts/harness_env.sh` | One definition of setup, lint, test, untracked inputs, watched controls and mapped tests; unknown keys are errors |
 | Gate and landing | `scripts/gate.sh`, `scripts/run.sh`, `scripts/land.sh`, `.githooks/*`, `.github/workflows/tests.yml` | No commits or merge commits on `main`; lint at commit; the same gate at land and in CI; compare-and-swap of local `main` |
 | Claude Code hooks | `.claude/settings.json`, `.claude/hooks/*.py` | Model routing on `Agent` calls, commit-landed verification, mapped test on edit, blast-radius advisory, CodeGraph freshness |
-| Agent and review tooling | `.claude/agents/*`, `.claude/skills/land`, `.claude/workflows/*`, `.claude/harness/agent_harness.py`, `mutants/` | Independent re-derivation, live-API proof, per-task worktrees with a serialized commit queue, mutation testing |
+| Agent and review tooling | `.claude/agents/*`, `.agents/skills/*`, `.claude/workflows/*`, `.claude/harness/agent_harness.py`, `mutants/` | Independent re-derivation, live-API proof, per-task worktrees with a serialized commit queue, mutation testing |
 
 ### One gate, three callers
 
@@ -57,7 +57,7 @@ None of the three spells a command, so they cannot drift apart.
 
 Requirements: git, bash, Python 3.11+ and uv for the harness's own scripts, `rsync`, and `flock` or `lockf`. macOS or Linux.
 
-1. Copy `AGENTS.md`, `CLAUDE.md`, `HARNESS.md`, `harness.toml`, `.claude/`, `.githooks/`, `.github/`, `scripts/`, `tests/` and `mutants/` into the repository.
+1. Copy `AGENTS.md`, `CLAUDE.md`, `HARNESS.md`, `harness.toml`, `.claude/`, `.agents/`, `.codex/`, `.githooks/`, `.github/`, `scripts/`, `tests/` and `mutants/` into the repository.
 2. Edit `harness.toml`. For example, a Node project:
 
    ```toml

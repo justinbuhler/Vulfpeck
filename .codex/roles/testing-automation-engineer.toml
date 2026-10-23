@@ -1,3 +1,4 @@
+name = "testing-automation-engineer"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 Your role definition is .claude/agents/testing-automation-engineer.md in this repository. Read it now and follow it as your instructions; ignore its YAML frontmatter fields (tools, model), which are Claude Code settings. Skills it names are in .agents/skills/.

@@ -1,17 +1,17 @@
-# Codex role declarations. Each role file wraps the Claude definition in .claude/agents/.
+# Codex role declarations (the config_file mechanism). Role files live in .codex/roles/, not the auto-discovered .codex/agents/, so no role is declared twice. Each wraps the definition in .claude/agents/.
 
 [agents.reviewer-code]
 description = "Independent code-quality review of a committed candidate - conventions, naming, dead code, performance, type and test quality. Read-only; ends with a verdict. Use after an implementation lands on a branch and before it is merged."
-config_file = "agents/reviewer-code.toml"
+config_file = "roles/reviewer-code.toml"
 
 [agents.reviewer-system]
 description = "Independent system-level review of a committed candidate - security, concurrency, error handling, observability, API and data contracts, migration safety. Read-only; ends with a verdict. Use for any change touching trust boundaries, subprocesses, files, network, hooks or persistence."
-config_file = "agents/reviewer-system.toml"
+config_file = "roles/reviewer-system.toml"
 
 [agents.python-general-engineer]
 description = "Bounded Python implementation - a feature, bug fix or refactor in one declared file set, with tests, in this repository's conventions. Use for one task with a named outcome; not for review or open-ended design."
-config_file = "agents/python-general-engineer.toml"
+config_file = "roles/python-general-engineer.toml"
 
 [agents.testing-automation-engineer]
 description = "Bounded test work - add, repair, deduplicate or prune tests for one declared module, and prove them with the repository's own runner. Use for one named test outcome; not for production changes or review."
-config_file = "agents/testing-automation-engineer.toml"
+config_file = "roles/testing-automation-engineer.toml"
