@@ -29,6 +29,18 @@ require_for = [".claude/hooks/**", ".claude/agents/**", ".claude/skills/**",
                "scripts/**", "mutants/*.py"]
 exempt = []
 
+[jev]
+enabled = true                          # JEV_DISABLE=1 also turns it off
+timeout = 8.0                           # seconds per request
+
+[tiers]
+# Floor globs for scripts/jev.py consequence; a path matching none is Medium and
+# a change's floor is its highest path. Jev may raise the tier, never lower it.
+low = ["**/*.md", "docs/**"]
+high = [".claude/hooks/**", ".githooks/**", "scripts/land.sh", "scripts/gate.sh",
+        "scripts/run.sh", "mutants/runner.py"]
+critical = []
+
 [hooks]
 watched_files = ["harness.toml", "scripts/paths.py", "scripts/harness_config.py",
                  "scripts/gate.sh", "scripts/land.sh", "scripts/run.sh", ".claude/settings.json"]

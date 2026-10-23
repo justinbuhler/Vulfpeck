@@ -68,6 +68,19 @@ DEFAULTS = {
                         ".agents/skills/**", ".claude/workflows/**", ".claude/harness/**", ".githooks/**"],
         "exempt": [],           # literal paths, each one named
     },
+    "jev": {
+        # scripts/jev.py: JEV_DISABLE=1 also turns it off. timeout is seconds per request.
+        "enabled": True,
+        "timeout": 8.0,
+    },
+    "tiers": {
+        # Floor globs per consequence tier (scripts/jev.py consequence). A changed
+        # path matching none is Medium; a change's floor is its highest path.
+        "low": ["**/*.md", "docs/**"],
+        "high": [".claude/hooks/**", ".githooks/**", "scripts/land.sh", "scripts/gate.sh",
+                 "scripts/run.sh", "mutants/runner.py"],
+        "critical": [],
+    },
     "hooks": {
         "watched_files": [
             "harness.toml", "scripts/paths.py", "scripts/harness_config.py",
@@ -91,7 +104,8 @@ DEFAULTS = {
 }
 
 STRING_LISTS = {("land", "copy_untracked"), ("roles", "read_only"), ("adr", "require_for"), ("adr", "exempt"), ("hooks", "watched_files"),
-                ("hooks", "watched_dirs"), ("hooks", "skip_dirs")}
+                ("hooks", "watched_dirs"), ("hooks", "skip_dirs"),
+                ("tiers", "low"), ("tiers", "high"), ("tiers", "critical")}
 RULE_KEYS = {"match": str, "self": str, "tests": list, "command": str}
 
 
@@ -140,6 +154,12 @@ def merge(raw):
             if (section, key) in STRING_LISTS:
                 if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
                     raise ConfigError(f"{section}.{key} must be a list of strings")
+            elif (section, key) == ("jev", "enabled"):
+                if not isinstance(value, bool):
+                    raise ConfigError("jev.enabled must be true or false")
+            elif (section, key) == ("jev", "timeout"):
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+                    raise ConfigError("jev.timeout must be a number of seconds above 0")
             elif not isinstance(value, str):
                 raise ConfigError(f"{section}.{key} must be a string")
             config[section][key] = value
@@ -153,6 +173,9 @@ def merge(raw):
         if set("*?[") & set(entry.strip("/").split("/")[0]):
             raise ConfigError(f"adr.require_for: {entry!r} must start with a fixed directory or "
                               "file name, not a glob")
+    for tier, globs in ((k, config["tiers"][k]) for k in ("low", "high", "critical")):
+        for entry in globs:
+            safe_relative(entry, f"tiers.{tier}")
     for entry in config["adr"]["exempt"]:
         safe_relative(entry, "adr.exempt")
         if set("*?[") & set(entry):

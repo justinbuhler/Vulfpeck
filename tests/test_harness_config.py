@@ -115,6 +115,29 @@ for toml, expect in (
     got = config_error(toml) or ""
     check(f"[adr] refuses {toml.splitlines()[1]!r}", expect in got, got)
 
+# --- [jev] and [tiers] ----------------------------------------------------------
+check("no harness.toml: Jev is enabled with an 8 second timeout",
+      d0["jev"]["enabled"] is True and d0["jev"]["timeout"] == 8.0)
+check("no harness.toml: docs are the Low floor, the land scripts the High floor",
+      "docs/**" in d0["tiers"]["low"] and "scripts/land.sh" in d0["tiers"]["high"]
+      and ".claude/hooks/**" in d0["tiers"]["high"] and d0["tiers"]["critical"] == [])
+jv = Path(tempfile.mkdtemp(prefix="harness-config-jev."))
+(jv / "harness.toml").write_text('[jev]\nenabled = false\ntimeout = 2\n[tiers]\ncritical = ["scripts/x.py"]\n')
+j = harness_config.load(jv)
+check("[jev] and [tiers] overrides are read",
+      j["jev"] == {"enabled": False, "timeout": 2} and j["tiers"]["critical"] == ["scripts/x.py"]
+      and "docs/**" in j["tiers"]["low"])
+for toml, expect in (
+        ('[jev]\nenabled = "yes"\n', "jev.enabled must be true or false"),
+        ('[jev]\ntimeout = 0\n', "jev.timeout must be a number of seconds above 0"),
+        ('[jev]\ntimeout = true\n', "jev.timeout must be a number of seconds above 0"),
+        ('[jev]\nretries = 3\n', "unknown key jev.retries"),
+        ('[tiers]\nmedium = ["a"]\n', "unknown key tiers.medium"),
+        ('[tiers]\nhigh = "scripts/x.py"\n', "tiers.high must be a list of strings"),
+        ('[tiers]\nhigh = ["../x"]\n', "tiers.high: '../x' must be a relative path")):
+    got = config_error(toml) or ""
+    check(f"{toml.splitlines()[1]!r} is refused", expect in got, got)
+
 # --- count: last match wins, zero and absence both fail -----------------------
 cfg = harness_config.merge({"tests": {"count_pattern": r"(\d+) passed"}})
 check("count takes the last match", harness_config.count(cfg, "1 passed\n9 passed\n") == 9)
