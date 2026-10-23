@@ -58,3 +58,124 @@ match = "*.py"
 self = "*tests/test_*.py"
 tests = ["{dir}/tests/test_{name}", "tests/test_{name}"]
 command = "uv run --no-sync python3 {test}"
+
+# The hook registration table. scripts/render_hooks.py writes the hooks of
+# .claude/settings.json, .codex/hooks.json and .gemini/settings.json from it.
+# `command` is the Claude Code command; Codex and Gemini run it through
+# scripts/hook_adapter.py. A gate's command ends in `|| {...; exit 2; }` so a crash
+# blocks; an advisory's ends in `|| true`. timeout is in seconds.
+
+[[hook]]
+name = "require_agent_model_PreToolUse"
+event = "PreToolUse"
+matcher = "Agent"
+kind = "gate"
+timeout = 5
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/require_agent_model.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"require_agent_model.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "model_router_PreToolUse"
+event = "PreToolUse"
+matcher = "Agent"
+kind = "gate"
+timeout = 5
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/model_router.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"model_router.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "blast_radius_advisory_PreToolUse"
+event = "PreToolUse"
+matcher = "Edit|Write"
+kind = "advisory"
+timeout = 30
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/blast_radius_advisory.py\" || true"
+
+[[hook]]
+name = "adr_gate_PreToolUse"
+event = "PreToolUse"
+matcher = "Edit|Write"
+kind = "gate"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "queue_guard_PreToolUse"
+event = "PreToolUse"
+matcher = "Bash"
+kind = "advisory"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/queue_guard.py\" || true"
+
+[[hook]]
+name = "verify_commit_landed_PostToolUse"
+event = "PostToolUse"
+matcher = "Bash"
+kind = "gate"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_commit_landed.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"verify_commit_landed.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "test_for_edited_module_PostToolUse"
+event = "PostToolUse"
+matcher = "Edit|Write"
+kind = "gate"
+timeout = 70
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/test_for_edited_module.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"test_for_edited_module.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "adr_gate_PostToolUse"
+event = "PostToolUse"
+matcher = "Edit|Write"
+kind = "gate"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "codegraph_freshness_UserPromptSubmit"
+event = "UserPromptSubmit"
+kind = "advisory"
+timeout = 30
+command = "out=$(cd \"${CLAUDE_PROJECT_DIR}\" && uv run python3 scripts/codegraph_freshness.py) || printf \"%s\\n\" \"$out\""
+
+[[hook]]
+name = "codegraph_freshness_SessionStart"
+event = "SessionStart"
+matcher = "startup"
+kind = "advisory"
+timeout = 120
+command = "cd \"${CLAUDE_PROJECT_DIR}\" && uv run python3 scripts/codegraph_freshness.py --sync-if-stale || true"
+
+[[hook]]
+name = "harness_doctor_SessionStart"
+event = "SessionStart"
+matcher = "startup"
+kind = "advisory"
+timeout = 15
+command = "python3 \"${CLAUDE_PROJECT_DIR}/scripts/harness_doctor.py\" || true"
+
+[[hook]]
+name = "readonly_guard_SubagentStart"
+event = "SubagentStart"
+kind = "advisory"
+timeout = 30
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/readonly_guard.py\" || true"
+
+[[hook]]
+name = "readonly_guard_SubagentStop"
+event = "SubagentStop"
+kind = "advisory"
+timeout = 30
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/readonly_guard.py\" || true"
+
+[[hook]]
+name = "session_guard_Stop"
+event = "Stop"
+kind = "advisory"
+timeout = 60
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/session_guard.py\" || true"
+
+[[hook]]
+name = "session_guard_SessionEnd"
+event = "SessionEnd"
+kind = "advisory"
+timeout = 20
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/session_guard.py\" || true"

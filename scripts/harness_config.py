@@ -96,6 +96,13 @@ DEFAULTS = {
         "watched_dirs": [".githooks/"],
         "skip_dirs": [".venv", "__pycache__", "node_modules", ".git"],
     },
+    # The one hook registration table (scripts/render_hooks.py renders it into
+    # .claude/settings.json, .codex/hooks.json and .gemini/settings.json). Each
+    # entry: name, event (Claude Code's name), matcher, kind (gate|advisory),
+    # timeout (seconds), command (the Claude command; Codex and Gemini run it
+    # through scripts/hook_adapter.py). Named `hook`, not `hooks`: TOML cannot
+    # hold the [hooks] table above and an array of the same name.
+    "hook": [],
     # First rule whose `match` fits the edited file's name wins. `self` marks a
     # file that is itself a test. `tests` are candidate paths, first existing one
     # runs. Placeholders: {dir} {name} {stem} {ext}; `command` also gets {test}.
@@ -113,6 +120,9 @@ STRING_LISTS = {("land", "copy_untracked"), ("roles", "read_only"), ("adr", "req
                 ("hooks", "watched_dirs"), ("hooks", "skip_dirs"),
                 ("tiers", "low"), ("tiers", "medium"), ("tiers", "high"), ("tiers", "critical")}
 RULE_KEYS = {"match": str, "self": str, "tests": list, "command": str}
+HOOK_KEYS = {"name": str, "event": str, "matcher": str, "kind": str, "timeout": int, "command": str}
+HOOK_EVENTS = ("PreToolUse", "PostToolUse", "UserPromptSubmit", "SessionStart", "SessionEnd",
+               "SubagentStart", "SubagentStop", "Stop")
 
 
 class ConfigError(Exception):
@@ -124,6 +134,35 @@ def safe_relative(value, where):
     if not value or value.startswith("/") or ".." in Path(value).parts:
         raise ConfigError(f"{where}: {value!r} must be a relative path inside the repository")
     return value
+
+
+def merge_hooks(body):
+    """Validate the [[hook]] registration table and return it as a list of dicts."""
+    if not isinstance(body, list):
+        raise ConfigError("hook must be an array of tables ([[hook]])")
+    hooks, names = [], set()
+    for i, entry in enumerate(body):
+        where = f"hook[{i}]"
+        unknown = set(entry) - set(HOOK_KEYS)
+        if unknown:
+            raise ConfigError(f"{where}: unknown key(s) {sorted(unknown)}")
+        missing = {"name", "event", "kind", "timeout", "command"} - set(entry)
+        if missing:
+            raise ConfigError(f"{where}: missing key(s) {sorted(missing)}")
+        for key, kind in HOOK_KEYS.items():
+            if key in entry and (not isinstance(entry[key], kind) or isinstance(entry[key], bool)):
+                raise ConfigError(f"{where}.{key} must be a {kind.__name__}")
+        if entry["event"] not in HOOK_EVENTS:
+            raise ConfigError(f"{where}.event {entry['event']!r} must be one of {list(HOOK_EVENTS)}")
+        if entry["kind"] not in ("gate", "advisory"):
+            raise ConfigError(f"{where}.kind must be 'gate' or 'advisory'")
+        if entry["timeout"] <= 0:
+            raise ConfigError(f"{where}.timeout must be positive")
+        if entry["name"] in names:
+            raise ConfigError(f"{where}.name {entry['name']!r} is used twice")
+        names.add(entry["name"])
+        hooks.append({"matcher": "", **entry})
+    return hooks
 
 
 def merge(raw):
@@ -151,6 +190,9 @@ def merge(raw):
                     raise ConfigError(f"{where}.tests must be a list of strings")
                 rules.append({"self": "", **rule})
             config["mapped_tests"] = rules
+            continue
+        if section == "hook":
+            config["hook"] = merge_hooks(body)
             continue
         if not isinstance(body, dict):
             raise ConfigError(f"[{section}] must be a table")

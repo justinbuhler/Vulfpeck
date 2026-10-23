@@ -269,5 +269,40 @@ r = sh(["git", "commit", "-qm", "x"], d5)
 check("pre-commit runs the configured lint and refuses on its failure",
       r.returncode != 0 and "config-lint-ran" in r.stdout + r.stderr, r.stdout + r.stderr)
 
+# --- the [[hook]] registration table ----------------------------------------------
+GOOD = {"name": "a", "event": "PreToolUse", "kind": "gate", "timeout": 5, "command": "true"}
+
+
+def hook_table(*entries):
+    """Return (config or None, error text) for a harness.toml holding these [[hook]] entries."""
+    try:
+        return harness_config.merge({"hook": list(entries)}), ""
+    except harness_config.ConfigError as exc:
+        return None, str(exc)
+
+
+cfg, err = hook_table(GOOD)
+check("a complete [[hook]] entry loads, with an empty matcher by default",
+      cfg is not None and cfg["hook"] == [{**GOOD, "matcher": ""}], err)
+check("no [[hook]] table means no hooks", harness_config.merge({})["hook"] == [])
+for label, entry, want in (
+        ("an unknown key", {**GOOD, "colour": "red"}, "unknown key"),
+        ("a missing command", {k: v for k, v in GOOD.items() if k != "command"}, "missing key"),
+        ("an unknown event", {**GOOD, "event": "BeforeTool"}, "must be one of"),
+        ("a kind that is not gate or advisory", {**GOOD, "kind": "block"}, "gate' or 'advisory"),
+        ("a zero timeout", {**GOOD, "timeout": 0}, "positive"),
+        ("a string timeout", {**GOOD, "timeout": "5"}, "must be a int"),
+        ("a boolean timeout", {**GOOD, "timeout": True}, "must be a int")):
+    cfg, err = hook_table(entry)
+    check(f"[[hook]] with {label} is an error", cfg is None and want in err, err)
+cfg, err = hook_table(GOOD, GOOD)
+check("a repeated [[hook]] name is an error", cfg is None and "used twice" in err, err)
+try:
+    harness_config.merge({"hook": {"name": "a"}})
+    table_error = False
+except harness_config.ConfigError:
+    table_error = True
+check("[hook] as a plain table (not [[hook]]) is an error", table_error)
+
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

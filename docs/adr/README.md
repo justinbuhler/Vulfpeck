@@ -32,5 +32,6 @@ To change a decision, write a new ADR with `Supersedes: NNNN` and mark the old o
 - 2026-10-22 — [0012. GitHub setup is a dry-run-by-default script](0012-github-setup-is-a-dry-run-by-default-script.md) — proposed
 - 2026-10-23 — [0013. AGENTS.md is the one rules source for every runtime](0013-agents-md-is-the-one-rules-source-for-every-runtime.md) — proposed
 - 2026-10-23 — [0014. Skills live once in .agents/skills for every runtime](0014-skills-live-once-in-agents-skills-for-every-runtime.md) — proposed
+- 2026-10-23 — [0015. One hook table, rendered for Claude, Codex and Gemini](0015-one-hook-table-rendered-for-claude-codex-and-gemini.md) — proposed
 - 2026-10-23 — [0016. Jev proposes consequence tier, code picks the checks](0016-jev-proposes-consequence-tier-code-picks-the-checks.md) — proposed
 <!-- adr-index:end -->

@@ -10,7 +10,7 @@ It is project-agnostic. A repository describes how it builds in `harness.toml`; 
 | Governance contract | `AGENTS.md` (shared by Claude Code, Codex, Gemini via `CLAUDE.md` and `.gemini/settings.json`), `tests/AGENTS.md` | ORCH-01..12 delegation rules, the consequence-to-review table, Rule 11 (relocating oracle), test conventions |
 | Project config | `harness.toml`, `scripts/harness_config.py`, `scripts/harness_env.sh` | One definition of setup, lint, test, untracked inputs, watched controls and mapped tests; unknown keys are errors |
 | Gate and landing | `scripts/gate.sh`, `scripts/run.sh`, `scripts/land.sh`, `.githooks/*`, `.github/workflows/tests.yml` | No commits or merge commits on `main`; lint at commit; the same gate at land and in CI; compare-and-swap of local `main` |
-| Claude Code hooks | `.claude/settings.json`, `.claude/hooks/*.py` | Model routing on `Agent` calls, commit-landed verification, mapped test on edit, blast-radius advisory, CodeGraph freshness |
+| Hooks (all runtimes) | `harness.toml` `[[hook]]`, `scripts/render_hooks.py`, `scripts/hook_adapter.py`, `.claude/settings.json`, `.codex/hooks.json`, `.gemini/settings.json`, `.claude/hooks/*.py` | One registration table rendered for Claude Code, Codex and Gemini; model routing on `Agent` calls, commit-landed verification, mapped test on edit, blast-radius advisory, CodeGraph freshness |
 | Agent and review tooling | `.claude/agents/*`, `.agents/skills/*`, `.claude/workflows/*`, `.claude/harness/agent_harness.py`, `mutants/` | Independent re-derivation, live-API proof, per-task worktrees with a serialized commit queue, mutation testing |
 
 ### One gate, three callers
@@ -38,6 +38,31 @@ None of the three spells a command, so they cannot drift apart.
 | `harness_doctor.py` | SessionStart | Advisory. Reports missing prerequisites (Python 3.11+, uv, rsync, flock/lockf, `core.hooksPath`) and user-level hooks that can undercut the harness: SubagentStart context injection, PreToolUse Bash hooks that can deny `git push` or `gh pr` |
 
 **Failure direction.** Claude Code lets a tool call proceed when a hook exits with anything other than 0 or 2, so a crashing gate looks like a gate with nothing to deny. Every gate's registered command therefore ends in `|| { ...; exit 2; }`, turning a crash or a missing file into a block; advisory hooks end in `|| true` so they never block. `tests/test_harness_controls.py` keeps its own inventory of every registration, runs each command exactly as registered, gives each gate a deny and an allow canary, and proves both failure directions by swapping in a crashing script. A hook that exceeds its timeout still fails open; keep gates fast (the canaries assert under half the timeout).
+
+### One table, three runtimes
+
+Hooks are registered once, in `harness.toml` `[[hook]]` entries (`hook`, not `hooks`: `[hooks]` is already a table). `python3 scripts/render_hooks.py` writes the `hooks` key of `.claude/settings.json` and `.gemini/settings.json` (other keys are kept) and all of `.codex/hooks.json`; `--check` exits 1 when a file is stale and `tests/test_harness_controls.py` fails on it. Never edit the rendered hook sections by hand.
+
+Every guard speaks Claude Code's payload and output schema. Under Codex and Gemini the registered command is `scripts/hook_adapter.py --runtime <codex|gemini> --event <native event> -- <the same guard command>`: it converts the native payload to the Claude shape (one event per file for a Codex `apply_patch`), runs the guard, and converts exit code 2, `permissionDecision: deny`, `decision: block` and `additionalContext` back to what that runtime acts on. A result the runtime cannot express (a deny on SessionStart, `updatedInput`, `continue: false`) raises; the registration then blocks for a gate and is ignored for an advisory, as under Claude Code.
+
+| Claude Code event | Codex 0.164 | Gemini 0.55.1 |
+|---|---|---|
+| SessionStart `startup` | SessionStart | SessionStart |
+| UserPromptSubmit | UserPromptSubmit | BeforeAgent |
+| PreToolUse, PostToolUse | same names | BeforeTool, AfterTool |
+| Stop | Stop | AfterAgent |
+| SessionEnd | SessionEnd (Codex clamps its timeout to 3s) | SessionEnd |
+| SubagentStart, SubagentStop | same names | none |
+
+| Claude Code tool | Codex | Gemini |
+|---|---|---|
+| Bash | Bash | `run_shell_command` |
+| Edit, Write | `apply_patch` (one synthetic Edit or Write per file) | `replace`, `write_file` |
+| Agent | `spawn_agent` (`agent_type` becomes `subagent_type`) | none |
+
+Known gaps: Gemini has no subagent events and no Agent tool matcher, so `readonly_guard.py`, `require_agent_model.py` and `model_router.py` do not run there (`render_hooks.gaps()` lists them, and a test pins the list). Codex loads a project's `.codex/hooks.json` only from a trusted folder, and runs a hook only after that hook's hash is trusted inside Codex (`/hooks`); `--dangerously-bypass-hook-trust` skips that and is not used here. Codex 0.164 reads `.codex/hooks.json` from the main checkout for every linked worktree (nested or sibling) and loads no hook, silently, when main has none. A branch that changes hook registration is therefore only exercised under Codex from a standalone clone or after it lands on main; `harness_doctor.py --runtimes` fails with "Codex in this worktree runs main's hooks: missing|stale" when main's file differs from this tree's rendering. Codex `write_stdin` (typing into an open `exec_command` session) does not reach PreToolUse (probed live: one event for the `cat` that opened the session, none for the typed text), so a shell opened with `exec_command` can run commands no gate sees; this is an open gap. A patch sent through the shell (`apply_patch <<'EOF'`) is reported as Bash, so the edit guards are also registered on Bash under Codex and the adapter (`--edits`) turns such a command into one Edit or Write event per file. Every adapter run has a deadline about 1s under the hook's registered timeout (`--timeout`) on both the guard and reading stdin; past it the adapter exits non-zero, which blocks a gate and fails open for an advisory. Gemini BeforeTool deny is proven by tests only; live proof is pending owner auth (the account fails with IneligibleTierError). Gemini loads project settings only from a trusted folder (`~/.gemini/trustedFolders.json`, matched by ancestor path).
+
+`python3 scripts/harness_doctor.py --runtimes` reports each CLI's presence and version, whether the rendered files are fresh, whether this folder is trusted, and whether credentials exist (Codex: `codex login status`; Gemini: credentials only, eligibility is not checked). `python3 scripts/harness_install.py` is a dry run; `--apply` renders, sets `core.hooksPath` and runs `uv sync`; `--apply --trust` also writes the Codex and Gemini folder trust. It prints, never runs, the CLI install commands and never touches `~/.claude`.
 
 ### Architecture decisions
 
