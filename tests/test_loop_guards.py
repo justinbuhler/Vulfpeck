@@ -391,7 +391,7 @@ state = json.loads(bfile.read_text())
 state["start"] = time.time() - 50
 bfile.write_text(json.dumps(state))
 rc, out, _ = tool_call(p)
-check("elapsed minutes count: 50s of a 1-minute budget warns", "83%" in reason_of(out), str(out))
+check("elapsed minutes count: 50s of a 1-minute budget warns", "(1/1 minutes)" in reason_of(out) and "% of this session's budget" in reason_of(out), str(out))
 state["start"] = time.time() - 120
 bfile.write_text(json.dumps(state))
 rc, out, _ = tool_call(p)
