@@ -13,6 +13,7 @@ the output text that lied.
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -21,16 +22,30 @@ from pathlib import Path
 LANDED = re.compile(r"^\[[^\]\n]* ([0-9a-f]{7,40})\]", re.M)
 
 
-def ran_commit(command):
-    """True when a segment of the shell command really invokes `git commit`."""
+def commit_dir(command, cwd):
+    """Directory a real `git [-C x] [-c k=v] commit` runs in, or None when none does.
+
+    Follows a plain `cd <path>` segment and `git -C <path>`, nothing more.
+    """
+    here = cwd
     for segment in re.split(r"[;&|\n]+", command):
-        words = segment.split()
-        # ponytail: `-C` commits into another repository, which HEAD here cannot
-        # speak for, so it is skipped rather than checked against the wrong tree.
-        if (words[:1] == ["git"] and "commit" in words
-                and "--dry-run" not in words and "-C" not in words):
-            return True
-    return False
+        try:
+            words = shlex.split(segment)
+        except ValueError:  # the split cut inside a quoted `;`/`|`; fail toward checking
+            words = segment.split()
+        if len(words) == 2 and words[0] == "cd":
+            here = os.path.join(here, os.path.expanduser(words[1]))
+            continue
+        if words[:1] != ["git"] or "--dry-run" in words:
+            continue
+        where, i = here, 1
+        while i < len(words) and words[i].startswith("-"):
+            if words[i] == "-C" and i + 1 < len(words):
+                where = os.path.join(where, os.path.expanduser(words[i + 1]))
+            i += 2 if words[i] in ("-C", "-c") else 1
+        if words[i:i + 1] == ["commit"]:
+            return where
+    return None
 
 
 def text_of(value):
@@ -62,21 +77,19 @@ def record(*args, **kwargs):
         pass
 
 
-def git(*args):
-    """Run git in the session's repository; empty string if it cannot answer."""
+def git(cwd, *args):
+    """Run git in `cwd`; empty string if it cannot answer."""
     try:
         done = subprocess.run(("git",) + args, capture_output=True, text=True,
-                              timeout=5, env=ENV)
+                              timeout=5, env=ENV, cwd=cwd)
     except (OSError, subprocess.SubprocessError):
         return ""
     return done.stdout.strip() if done.returncode == 0 else ""
 
 
-def verdict(command, response):
-    """Return the reason this commit is unverified, or None when HEAD confirms it."""
-    if not isinstance(command, str) or not ran_commit(command):
-        return None
-    head = git("rev-parse", "HEAD")
+def verdict(response, where):
+    """Return the reason the commit run in `where` is unverified, or None when HEAD confirms it."""
+    head = git(where, "rev-parse", "HEAD")
     if not head:
         return None  # not a repository, or no commits yet - nothing to verify against
     reported = LANDED.findall(text_of(response))
@@ -92,10 +105,10 @@ def verdict(command, response):
     # Asked for as a standing warning; it earns its place only here. A lock is
     # held during a git operation and gone after, so its presence after the call
     # explains a commit that did not land - and says nothing after an `ls`.
-    lock = git("rev-parse", "--git-path", "index.lock")
-    if lock and os.path.exists(lock):
+    lock = git(where, "rev-parse", "--git-path", "index.lock")
+    if lock and os.path.exists(os.path.join(where, lock)):
         why += f" {lock} is still present, so a peer worktree likely held the index."
-    return (f"Commit not verified. {why} HEAD is now: {git('log', '-1', '--format=%h %s') or '(unknown)'}. "
+    return (f"Commit not verified. {why} HEAD is now: {git(where, 'log', '-1', '--format=%h %s') or '(unknown)'}. "
             "Re-run `git log -1` and `git status --short` and correct the record "
             "before reporting this commit as landed.")
 
@@ -110,9 +123,11 @@ def main():
               file=sys.stderr)
         return
     command = (event.get("tool_input") or {}).get("command", "")
-    reason = verdict(command, event.get("tool_response") or {})
-    if isinstance(command, str) and ran_commit(command):
-        head = git("rev-parse", "--short", "HEAD") or "-"
+    cwd = event.get("cwd") or os.getcwd()
+    where = commit_dir(command, cwd) if isinstance(command, str) else None
+    reason = verdict(event.get("tool_response") or {}, where) if where is not None else None
+    if where is not None:
+        head = git(where, "rev-parse", "--short", "HEAD") or "-"
         record("verify_commit_landed", "block" if reason else "pass",
                "not-landed" if reason else "landed", head, event)
     if reason:
