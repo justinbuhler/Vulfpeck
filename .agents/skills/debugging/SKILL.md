@@ -18,7 +18,7 @@ Find the cause before changing code. A fix without a reproduced cause is a guess
 
 ## Guardrails
 
-- Two failed fixes on the same failure: stop and use `stop-and-reassess`.
+- When a failure repeats, apply AGENTS.md "Stop and reassess" and the `stop-and-reassess` skill.
 - Label an unreproduced root cause as an unverified hypothesis, never as a finding.
 - Never suppress or widen an error to make a check pass.
 

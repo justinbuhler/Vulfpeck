@@ -1,22 +1,20 @@
 ---
 name: stop-and-reassess
-description: Use when a check or fix has failed twice, the same error keeps returning, edits keep touching the same lines, a retry would repeat the last attempt unchanged, or the repair budget is spent - decides retry, decompose, prune or escalate and stops loops.
+description: Use when a check or fix has failed and a retry is coming, the same error keeps returning, edits keep touching the same lines, or a retry would repeat the last attempt unchanged - decides retry, decompose, prune or escalate and stops loops.
 ---
 
 # Stop and reassess
 
-A loop costs more than the task. After any failed verification, pick one strategy, spend from a fixed budget, and escalate when it runs out.
+A loop costs more than the task. The stop rule is owned by AGENTS.md "Stop and reassess": a failure fingerprint seen 3 times, meaning the original plus two failed repairs, means stop; two consecutive edit-and-run cycles with no new passing check means stop. Cite that rule elsewhere; do not restate it.
 
-## Budget
+Below the stop line, pick one strategy per failed verification:
 
-Two repair attempts per task. Three identical failures in a row (same error text or same failing test) is a loop regardless of budget: stop on the third.
-
-| Strategy | Costs | Use when |
-|---|---|---|
-| Retry | 1 | The error is specific and actionable (typo, missing import, wrong argument). The retry must use the failed attempt's error text. |
-| Decompose | 1 | A retry failed and the task has independent parts. Each part gets 1 attempt and no further decomposition. |
-| Prune | 0 | The goal is already met or the step is not needed. Write why. "I could not do it" is escalation, not pruning. |
-| Escalate | 0 | The error is architectural or vague, the budget is spent, or a decomposed part failed. Mandatory when the budget is spent. |
+| Strategy | Use when |
+|---|---|
+| Retry | The error is specific and actionable (typo, missing import, wrong argument). The retry must use the failed attempt's error text. |
+| Decompose | A retry failed and the task has independent parts. Each part gets one attempt and is not decomposed again. |
+| Prune | The goal is already met or the step is not needed. Write why. "I could not do it" is escalation, not pruning. |
+| Escalate | The error is architectural or vague, the stop rule has fired, or a decomposed part failed. |
 
 ## Before every retry
 
@@ -24,7 +22,7 @@ Name what is different from the last attempt: the error, the root cause, and the
 
 ## Loop signals
 
-- the same error three times;
+- the same error again;
 - edits to the same lines in consecutive attempts;
 - fix A breaks B and fix B reverts A (find the shared file both depend on and change that first);
 - lint and build alternating (get the build green first, then lint, then confirm the build is still green);

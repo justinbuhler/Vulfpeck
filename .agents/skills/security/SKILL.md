@@ -9,7 +9,7 @@ Review the changed lines against the taxonomy in `references/coverage.md`. Repor
 
 ## Steps
 
-1. **Scope.** List the changed files: `git diff --name-only HEAD` plus `git diff --cached --name-only`. If empty, report "no changes to review" and stop. Read the repo `AGENTS.md` for secrets and allowed-pattern rules.
+1. **Scope.** List the changed files for the range you were given, `<base>...<sha>`, defaulting to `origin/main...HEAD`: `git diff --name-only <base>...<sha>`. Review a committed candidate by that range; for uncommitted work also use `git diff --name-only HEAD` and `git diff --cached --name-only`. If empty, report "no changes to review" and stop. Read the repo `AGENTS.md` for secrets and allowed-pattern rules.
 2. **Quick sweep.** Search the changed lines for the obvious: hardcoded secrets and tokens, string-built SQL, `shell=True` or `sh -c` with variable input, `eval` or `exec`, `pickle` or unsafe YAML loads, disabled TLS verification, wildcard CORS, permissive file modes. Use `rg` on the diff, not the whole tree.
 3. **Depth review.** Load `references/coverage.md`. Walk each changed file against its classes, and finish with its high-miss checklist. Check authorization on every new entry point, and data flow through every new parser, path join and subprocess.
 4. **Verify each finding.** Reproduce the input sequence or show the call path. Drop findings an existing guard already covers.

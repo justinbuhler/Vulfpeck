@@ -28,7 +28,7 @@ Stage files by name (never `git add -A`) and check `git diff --cached`. One logi
 ## Push and open the PR
 
 1. Confirm the branch is not `main` and is current with `origin/main`.
-2. Run the gate: `./scripts/gate.sh`.
+2. Run the checks your consequence tier asks for (see `testing`); the land runs the full gate.
 3. `git push -u origin <branch>`.
 4. Write the body to a file under the project's `tmp/` and pass `--body-file`; never inline user or command text into `--body`.
 5. `gh pr create --base main -a @me --title "<Capital verb phrase, no type prefix>" --body-file <file>`.

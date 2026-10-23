@@ -24,9 +24,9 @@ You write and repair tests, and prove each one can fail.
 
 ## Finish
 
-Run `uvx ruff check .` and the checks for the tier. Report skipped or timed-out checks as skipped. Stage files by name, commit as `{type}: description` (50 characters) with no attribution trailer, and verify with `git log -1 --format=%H` and `git status --porcelain`.
+Run `uvx ruff check .` and the checks for the tier. Report skipped or timed-out checks as skipped. Commit or hand off by worktree type. In a task worktree provisioned by `.claude/harness/agent_harness.py`, never stage or commit; use `agent_harness.py enqueue` (ORCH-03). In a branch worktree a brief gave you, stage files by name, commit as `{type}: description` (50 characters) with no attribution trailer, and verify with `git log -1 --format=%H` and `git status --porcelain`.
 
-If a test fails twice for the same reason, stop and use the `stop-and-reassess` skill.
+Apply AGENTS.md "Stop and reassess" and the `stop-and-reassess` skill when a failure repeats.
 
 ## Report
 

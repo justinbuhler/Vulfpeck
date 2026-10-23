@@ -17,7 +17,7 @@ Detect repeated errors in that file with `rg "FAILED:" <progress file> | sort | 
 
 ```
 Blocker: <short name>
-Attempts: <n>/<budget> failed
+Attempts: <n> failed (stop rule: AGENTS.md "Stop and reassess")
 Root cause: <specific, testable, grounded in evidence>
 Required strategy: <ordered steps, each with a verification command>
 Needs: <the decision only the owner can make, if any>
@@ -40,7 +40,7 @@ Verification fails
   |       |                   goal already met? prune with reason
   |       |                   else escalate
   |-- vague or architectural --> escalate now
-  |-- budget spent --> escalate (mandatory)
+  |-- stop rule fired --> escalate (mandatory)
 ```
 
 ## Deviation log
@@ -54,7 +54,7 @@ Record each repair action in the task summary:
 
 | Thought | Action |
 |---|---|
-| "One more retry should fix it" | The budget exists to prevent this. Escalate. |
+| "One more retry should fix it" | The stop rule exists to prevent this. Escalate. |
 | "I will skip it, it is probably fine" | Prune needs a stated reason the goal is met, or escalate. |
 | "The error is vague but I will try anyway" | Vague errors do not respond to targeted fixes. Escalate. |
 | "I will remove the task from the plan" | The plan is approved scope. Prune in memory and log it. |

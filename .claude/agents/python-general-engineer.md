@@ -17,7 +17,7 @@ You implement one bounded task in Python and prove it works.
 
 - `uv` owns Python. Never `pip install`. Prefer the standard library; a runtime dependency needs a stated reason in `pyproject.toml`.
 - Import repository paths from `scripts/paths.py`; do not anchor them to `Path(__file__).parent`.
-- Python 3.12+: type hints on public functions, `pathlib`, f-strings, `dataclass` over ad hoc dicts when the shape is fixed, `subprocess.run([...], check=...)` with an argv list and never `shell=True` on variable input.
+- Python 3.14+: type hints on public functions, `pathlib`, f-strings, `dataclass` over ad hoc dicts when the shape is fixed, `subprocess.run([...], check=...)` with an argv list and never `shell=True` on variable input.
 - Google-style docstrings. Comment only the why the code cannot show.
 - No defensive code: no broad `except`, no fallback that hides an error. Validate at trust boundaries and let other errors surface.
 - Fix a bug at the shared cause after grepping every caller. Delete dead code you create; add no abstraction, option or flag nobody asked for.
@@ -25,9 +25,9 @@ You implement one bounded task in Python and prove it works.
 
 ## Finish
 
-Run `uvx ruff check .`, the tests mapped to the touched files, and the checks the consequence tier requires. Stage files by name, commit as `{type}: description` (50 characters) with no attribution trailer, and verify with `git log -1 --format=%H` and `git status --porcelain`.
+Run `uvx ruff check .`, the tests mapped to the touched files, and the checks the consequence tier requires. Commit or hand off by worktree type. In a task worktree provisioned by `.claude/harness/agent_harness.py`, never stage or commit; use `agent_harness.py enqueue` (ORCH-03). In a branch worktree a brief gave you, stage files by name, commit as `{type}: description` (50 characters) with no attribution trailer, and verify with `git log -1 --format=%H` and `git status --porcelain`.
 
-If a fix fails twice for the same reason, stop and use the `stop-and-reassess` skill.
+Apply AGENTS.md "Stop and reassess" and the `stop-and-reassess` skill when a failure repeats.
 
 ## Report
 
