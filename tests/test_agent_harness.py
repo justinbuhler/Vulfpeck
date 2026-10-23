@@ -85,7 +85,8 @@ def make_repo(tmp, gate_exit=0):
     # the one file that is genuinely authored here. Without this the cloned
     # inputs would show up as untracked and every worktree would read dirty.
     (repo / ".gitignore").write_text(
-        "func/sources/*\n!func/sources/tracked.txt\n.env\nnested_cache/\n")
+        "func/sources/*\n!func/sources/tracked.txt\n.env\n.env.*\nnested_cache/\ntmp/\n")
+    (repo / "harness.toml").write_text('[land]\ncopy_untracked = ["func/sources"]\n')
     (repo / "a.txt").write_text("one\n")
     git("add", "-A", cwd=repo)
     git("-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "first", cwd=repo)
@@ -98,6 +99,9 @@ def make_repo(tmp, gate_exit=0):
     (repo / "func" / "sources" / "nested").mkdir()
     (repo / "func" / "sources" / "nested" / "deep.json").write_text("{}\n")
     (repo / ".env").write_text("API_TOKEN=super-secret\n")
+    (repo / ".env.local").write_text("API_TOKEN=local-fixture\n")
+    (repo / "tmp" / "worktrees").mkdir(parents=True)
+    (repo / "tmp" / "worktrees" / "peer.txt").write_text("another task\n")
     (repo / "nested_cache").mkdir()
     (repo / "nested_cache" / "junk.bin").write_text("rebuildable\n")
     return repo, first, second
@@ -166,55 +170,33 @@ check("and so was one nested a directory deep",
 check("the supplied inputs are reported as cloned",
       any(c.startswith("func/sources/") for c in manifest.get("cloned_inputs", [])),
       str(manifest.get("cloned_inputs")))
-# The provisioner asks git for the ignored paths, so anything ignored is a
-# candidate for copying - including credentials. The deny-list is the only thing
-# stopping a scratch worktree in /tmp from carrying the repository's .env.
+# Inputs are explicit; ignored credentials and another task's scratch stay out.
 check("the ignored .env exists in the checkout being cloned from",
       (repo / ".env").read_text() == "API_TOKEN=super-secret\n")
 check("but credentials are never cloned into a worktree",
       not (tmp / "wt-alpha" / ".env").exists())
 check("and .env is not even reported as a cloned input",
       ".env" not in manifest.get("cloned_inputs", []), str(manifest.get("cloned_inputs")))
-check("a worktrees directory would be refused too, by name",
-      not H.clonable(".claude/worktrees") and not H.clonable(".claude/worktrees/other"))
-check("rebuildable caches are skipped", not H.clonable("a/__pycache__/b.pyc"))
-check("but real ignored data is cloned", H.clonable("output/x.json"))
-# Each platform is pinned here because each CI runner only exercises its own.
-_platform = H.sys.platform
-try:
-    H.sys.platform = "darwin"
-    check("macOS clones with the full-path /bin/cp -c, never a GNU cp on PATH",
-          H.clone_argv("-R", "-n") == ["/bin/cp", "-cRn"] and H.clone_argv() == ["/bin/cp", "-c"],
-          f"{H.clone_argv('-R', '-n')} {H.clone_argv()}")
-    H.sys.platform = "linux"
-    check("Linux never passes -c, which GNU cp rejects, and reflinks where it can",
-          H.clone_argv("-R", "-n") == ["cp", "-R", "-n", "--reflink=auto"]
-          and H.clone_argv() == ["cp", "--reflink=auto"],
-          f"{H.clone_argv('-R', '-n')} {H.clone_argv()}")
-finally:
-    H.sys.platform = _platform
+check("environment variants never arrive in the task worktree",
+      not (tmp / "wt-alpha" / ".env.local").exists())
+check("scratch worktrees are not copied as task inputs", not (tmp / "wt-alpha" / "tmp").exists())
+check("ignored data not declared in copy_untracked stays outside the task",
+      not (tmp / "wt-alpha" / "nested_cache").exists())
 check("the clone gave the worktree its own inode, not a shared one",
       (inputs / "supplied.bin").stat().st_ino
       != (repo / "func" / "sources" / "supplied.bin").stat().st_ino)
 (inputs / "supplied.bin").write_text("worktree-local change\n")
 check("writing through the clone does not reach the source",
       (repo / "func" / "sources" / "supplied.bin").read_text() == "supplied by hand\n")
-check("missing_after_clone finds a file the copy left behind",
-      H.missing_after_clone(repo / "func" / "sources", tmp / "empty-dir")
-      if (tmp / "empty-dir").mkdir() or True else False)
-
-print("\na live socket among the inputs is not an incomplete clone")
+print("\na live socket in declared inputs is refused before copying")
 sock_path = repo / "func" / "sources" / "live.sock"
 server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 server.bind(str(sock_path))
-left_behind = H.missing_after_clone(repo / "func" / "sources",
-                                    tmp / "wt-alpha" / "func" / "sources")
-check("the socket really is present in the source", sock_path.exists())
-check("cp cannot carry it, and it is not counted as missing",
-      "live.sock" not in left_behind, str(left_behind))
-check("a genuinely missing regular file would still be counted",
-      "supplied.bin" in H.missing_after_clone(repo / "func" / "sources",
-                                              tmp / "no-such-worktree"))
+out = run("provision", "--task", "socket", "--baseline", FIRST,
+          "--path", str(tmp / "wt-socket"), cwd=repo)
+check("nonregular declared input stops provisioning", out.returncode != 0 and "nonregular" in out.stderr,
+      out.stdout + out.stderr)
+check("refused input leaves no successful task manifest", not (state / "tasks/socket.json").exists())
 server.close()
 sock_path.unlink()
 
@@ -229,6 +211,10 @@ dirt_repo, dirt_first, _ = make_repo(dirt_tmp)
 (dirt_repo / "flow" / "logs").mkdir(parents=True)
 (dirt_repo / "flow" / ".gitignore").write_text("logs/\n")
 (dirt_repo / "flow" / "logs" / "daemon.log").write_text("noise\n")
+(dirt_repo / "harness.toml").write_text('[land]\ncopy_untracked = ["func/sources", "flow/logs"]\n')
+git("add", "harness.toml", cwd=dirt_repo)
+git("commit", "-q", "-m", "declare inputs", cwd=dirt_repo)
+dirt_first = git("rev-parse", "HEAD", cwd=dirt_repo).stdout.strip()
 listed = subprocess.run(["git", "ls-files", "--others", "--ignored",
                          "--exclude-standard", "--directory"],
                         cwd=dirt_repo, capture_output=True, text=True,

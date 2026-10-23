@@ -82,6 +82,11 @@ check("no harness.toml: nothing is copied into the lander", d0["land"]["copy_unt
 check("no harness.toml: harness.toml itself is a watched control",
       "harness.toml" in d0["hooks"]["watched_files"])
 
+check("the shared input copier is watched by default",
+      "scripts/harness_inputs.py" in d0["hooks"]["watched_files"])
+check("the shipped config watches the shared input copier",
+      "scripts/harness_inputs.py" in harness_config.load(REPO)["hooks"]["watched_files"])
+
 # --- overrides merge; unknown or mistyped keys are refused -------------------
 over = Path(tempfile.mkdtemp(prefix="harness-config-over."))
 (over / "harness.toml").write_text('[commands]\ntest = "npm test"\n[tests]\ncount_pattern = ""\n')

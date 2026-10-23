@@ -29,7 +29,7 @@ require_for = [".claude/hooks/**", ".claude/agents/**", ".claude/skills/**",
 exempt = []
 
 [hooks]
-watched_files = ["harness.toml", "scripts/paths.py", "scripts/harness_config.py",
+watched_files = ["harness.toml", "scripts/paths.py", "scripts/harness_config.py", "scripts/harness_inputs.py",
                  "scripts/gate.sh", "scripts/land.sh", "scripts/run.sh", ".claude/settings.json"]
 watched_dirs = [".githooks/"]
 skip_dirs = [".venv", "__pycache__", "node_modules", ".git"]
