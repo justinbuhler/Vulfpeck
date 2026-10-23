@@ -1,0 +1,24 @@
+# 0017. Loop, scope and budget limits are hooks, not prose
+
+Status: proposed
+Date: 2026-10-23
+Components: .claude/hooks/loop_guard.py, .claude/hooks/scope_guard.py, .claude/hooks/budget_guard.py, .claude/hooks/turn_guard.py, scripts/loop_reset.py, scripts/scope.py, scripts/guard_lib.py
+
+## Context
+
+`AGENTS.md` carried "Stop and reassess", "Scope" and "Turn completion" as prose marked "enforcement planned". An agent that repeats a failing command, drifts outside its task, runs without limit or ends a turn announcing work is stopped only if it reads and obeys the prose. Claude Code, Codex and Gemini all run the guards in `.claude/hooks/` through one `harness.toml` table (ADR 0015), so a rule enforced there is enforced under all three. Probed on Claude Code 2.1.309: a Bash command that exits non-zero fires `PostToolUseFailure` with `error` "Exit code N\n...", not `PostToolUse`, and a user-level hook may rewrite the command (`rtk ...`) after PreToolUse; Codex and Gemini send PostToolUse for success and failure (Gemini's `llmContent` carries an `Exit Code: N` line when non-zero). Gemini's AfterAgent payload carries `prompt_response` and `stop_hook_active`.
+
+## Decision
+
+Four gates, each registered once in `harness.toml`, with the shared helpers in `scripts/guard_lib.py` (state, payload reading, the one list of test commands, rule quotes). State is local, never tracked, under `<git common dir>/harness/`: `loop/<session_id>.json` (loop and turn counters), `loop/<session_id>.budget.json`, and `scope/<branch>.json`. A missing or corrupt state file is reset with a one-line notice. Each block, deny and reset appends one line through `scripts/harness_events.py`.
+
+- `loop_guard.py` (PreToolUse Bash, PostToolUse Bash, PostToolUseFailure Bash, PostToolUse Edit|Write). A failure fingerprint is the sha1 of the normalised command (rtk prefix and trailing `| tail`/`| head` dropped, whitespace collapsed) plus the first error line, counted only when the command exited non-zero. The 3rd sighting in a session trips the guard with the AGENTS.md rule, the three attempts and `jev.reassess()`'s advice when Jev answers (advice only; Jev cannot unblock). A command byte-identical to the last failed one is denied until an Edit or Write happens. A cycle is an edit followed by a test or lint run; progress is a passing run or fewer failing test commands than the cycle before; two consecutive cycles without progress trip the guard. A tripped guard denies the failing command (fingerprint trip) or every test and lint command (no-progress trip). Only `scripts/loop_reset.py --session <id> --reason "..."` clears a trip, and it records an event; the guard never resets itself.
+- `scope_guard.py` (PreToolUse Edit|Write; Codex apply_patch arrives as Edit or Write). Opt-in through a lease from `scripts/scope.py set --glob ... --max-files N --max-lines N --task "..."`; with no lease it allows silently. A path outside the globs is denied ("out of scope"). An edit that would take the branch's diff against its merge base past max_files or max_lines (untracked files included) is denied; `scope.py check` asks `jev.intent_alignment()` whether the diff still serves the task, and only a wider `scope.py set` unblocks.
+- `budget_guard.py` (PreToolUse, every tool). `harness.toml [budget]` sets `max_tool_calls` (400) and `max_minutes` (180) per session, 0 meaning off. One warning at 80%, a deny at 100% telling the agent to write status and stop. `loop_reset.py --budget` starts a fresh budget.
+- `turn_guard.py` (Stop; Gemini AfterAgent). A final message whose last paragraph announces unstarted work (the `ANNOUNCE` regex list in one place) is blocked once with "do it or name the blocker"; `stop_hook_active`, a repeat of the same message, a negation, a question, quoted or code text, or a paragraph that names a blocker passes.
+
+All four are gates: a crash blocks. `harness.toml` adds `PostToolUseFailure` as a hook event, which only Claude Code has; `render_hooks.py` leaves it out of the Codex and Gemini files and `gaps()` lists it.
+
+## Consequences
+
+The rules marked enforced in `AGENTS.md` hold under all three runtimes, and each guard has a deny and an allow canary per runtime in `tests/test_harness_controls.py`. Limits: the unchanged-re-run rule counts only Edit, Write and apply_patch as a change, so a Bash command that edits a file (`sed -i`) or fixes the environment does not lift it; the fingerprint's error line is the first line that reads as an error, so output that varies per run defeats it; Codex's PostToolUse response shape was read from a live probe only for the fields recorded in the proof, and Gemini's rests on the bundled source and tests; a Gemini block on a PostToolUse replaces the tool output with the message. "One corrective round per phase", the missing-worktree rule and the dispatch rules stay prose. Jev's advice is text only. This does not change `hook_adapter.py` or the event log format.
