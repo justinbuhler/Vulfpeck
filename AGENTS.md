@@ -95,7 +95,7 @@ Each phase gets one review and one corrective round. A third round requires an e
 - The same failure fingerprint (same failing check or error) 3 times: stop, write what was tried and why it failed, then choose a different approach or escalate. (prose; enforcement planned)
 - Two iterations with no new passing check: stop. (prose; enforcement planned)
 - Never re-run an unchanged failing command expecting a different result. (prose; enforcement planned)
-- At most 2 corrective rounds per phase, then an explicit scope reset. (prose; enforcement planned)
+- One corrective round per phase (see Delegation and review); a further round needs an explicit scope reset. (prose; enforcement planned)
 - A missing worktree or broken environment is reported once, not looped on. (prose; enforcement planned)
 
 ## Proportional testing
