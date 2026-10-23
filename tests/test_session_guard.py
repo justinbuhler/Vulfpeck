@@ -3,6 +3,7 @@
 Every case runs the real hook as a subprocess against a throwaway repository in a
 temp directory. Expectations are literals (CLAUDE.md Rule 11).
 """
+
 import json
 import os
 import subprocess
@@ -20,14 +21,20 @@ PASS, FAIL = [], []
 
 def check(name, cond, detail=""):
     (PASS if cond else FAIL).append(name)
-    print(("  PASS  " if cond else "  FAIL  ") + name + (("\n          " + detail) if detail and not cond else ""))
+    print(
+        ("  PASS  " if cond else "  FAIL  ")
+        + name
+        + (("\n          " + detail) if detail and not cond else "")
+    )
 
 
 ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 
 
 def git(cwd, *args):
-    done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, env=ENV)
+    done = subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, env=ENV
+    )
     if done.returncode:
         raise AssertionError(f"git {args} failed: {done.stderr}")
     return done.stdout.strip()
@@ -40,7 +47,11 @@ TOML = '[commands]\nlint = "if [ -e BAD ]; then echo lint-error-in-BAD; exit 1; 
 def repo():
     d = Path(tempfile.mkdtemp(prefix="session-repo.", dir=SCRATCH))
     git(d, "init", "-q", "-b", "main")
-    for k, v in (("user.email", "t@t"), ("user.name", "t"), ("commit.gpgsign", "false")):
+    for k, v in (
+        ("user.email", "t@t"),
+        ("user.name", "t"),
+        ("commit.gpgsign", "false"),
+    ):
         git(d, "config", k, v)
     (d / "harness.toml").write_text(TOML)
     git(d, "add", "-A")
@@ -52,9 +63,20 @@ def hook(event, d, session="s1", active=False, project=None, path=None):
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project or d)}
     if path:
         env["PATH"] = f"{path}{os.pathsep}{env['PATH']}"
-    done = subprocess.run([sys.executable, str(HOOK)], capture_output=True, text=True, env=env,
-                          input=json.dumps({"hook_event_name": event, "session_id": session,
-                                            "cwd": str(d), "stop_hook_active": active}))
+    done = subprocess.run(
+        [sys.executable, str(HOOK)],
+        capture_output=True,
+        text=True,
+        env=env,
+        input=json.dumps(
+            {
+                "hook_event_name": event,
+                "session_id": session,
+                "cwd": str(d),
+                "stop_hook_active": active,
+            }
+        ),
+    )
     try:
         out = json.loads(done.stdout) if done.stdout.strip() else {}
     except ValueError:
@@ -64,11 +86,18 @@ def hook(event, d, session="s1", active=False, project=None, path=None):
 
 def events():
     path = Path(os.environ["HARNESS_EVENTS_LOG"])
-    return [json.loads(x) for x in path.read_text().splitlines()] if path.exists() else []
+    return (
+        [json.loads(x) for x in path.read_text().splitlines()] if path.exists() else []
+    )
 
 
 def memo(d, session="s1"):
-    return Path(git(d, "rev-parse", "--path-format=absolute", "--git-common-dir")) / "harness" / "sessions" / f"{session}.json"
+    return (
+        Path(git(d, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+        / "harness"
+        / "sessions"
+        / f"{session}.json"
+    )
 
 
 d = repo()
@@ -77,16 +106,32 @@ check("a clean repository on main stops silently", rc == 0 and out == {}, str(ou
 
 (d / "BAD").write_text("x\n")
 rc, out = hook("Stop", d)
-check("failing lint blocks the stop", rc == 0 and out.get("decision") == "block", str(out))
-check("the block carries the lint output", "lint-error-in-BAD" in out.get("reason", ""), out.get("reason", ""))
-check("the block is recorded", events()[-1]["hook"] == "session_guard" and events()[-1]["decision"] == "block")
+check(
+    "failing lint blocks the stop", rc == 0 and out.get("decision") == "block", str(out)
+)
+check(
+    "the block carries the lint output",
+    "lint-error-in-BAD" in out.get("reason", ""),
+    out.get("reason", ""),
+)
+check(
+    "the block is recorded",
+    events()[-1]["hook"] == "session_guard" and events()[-1]["decision"] == "block",
+)
 rc, out = hook("Stop", d, active=True)
 check("on the continuation the session may stop", "decision" not in out, str(out))
-check("and is told lint still fails", "lint still fails" in out.get("systemMessage", ""), str(out))
+check(
+    "and is told lint still fails",
+    "lint still fails" in out.get("systemMessage", ""),
+    str(out),
+)
 check("the override is recorded", events()[-1]["decision"] == "block-overridden")
 rc, out = hook("Stop", d)
-check("lint that still fails is rechecked on the next reply, not trusted from memory",
-      out.get("decision") == "block", str(out))
+check(
+    "lint that still fails is rechecked on the next reply, not trusted from memory",
+    out.get("decision") == "block",
+    str(out),
+)
 
 (d / "BAD").unlink()
 rc, out = hook("Stop", d)
@@ -98,8 +143,10 @@ check("fixed lint no longer blocks", "decision" not in out, str(out))
 FAKE = SCRATCH / "fakebin"
 FAKE.mkdir()
 ARGV = SCRATCH / "uvx-argv.txt"
-(FAKE / "uvx").write_text(f'#!/bin/bash\n(IFS=\\|; echo "$*") >> "{ARGV}"\n'
-                          'for a in "$@"; do [ "$a" = bad.py ] && { echo "ruff: bad.py failed"; exit 1; }; done\nexit 0\n')
+(FAKE / "uvx").write_text(
+    f'#!/bin/bash\n(IFS=\\|; echo "$*") >> "{ARGV}"\n'
+    'for a in "$@"; do [ "$a" = bad.py ] && { echo "ruff: bad.py failed"; exit 1; }; done\nexit 0\n'
+)
 (FAKE / "uvx").chmod(0o755)
 RUFF_TOML = '[commands]\nlint = "uvx ruff check ."\n'
 
@@ -126,14 +173,25 @@ def stop(d):
 d = ruff_repo()
 (d / "ok.py").write_text("ok = 2\n")
 out, seen = stop(d)
-check("a pre-existing failure in an untouched file does not block the stop", "decision" not in out, str(out))
-check("only the changed .py path is linted, with --force-exclude", seen == ["ruff|check|--force-exclude|ok.py"], str(seen))
+check(
+    "a pre-existing failure in an untouched file does not block the stop",
+    "decision" not in out,
+    str(out),
+)
+check(
+    "only the changed .py path is linted, with --force-exclude",
+    seen == ["ruff|check|--force-exclude|ok.py"],
+    str(seen),
+)
 
 d = ruff_repo()
 (d / "bad.py").write_text("bad = 2\n")
 rc, out = hook("Stop", d, path=FAKE)
-check("a failure in a file this session changed still blocks the stop",
-      out.get("decision") == "block" and "bad.py failed" in out.get("reason", ""), str(out))
+check(
+    "a failure in a file this session changed still blocks the stop",
+    out.get("decision") == "block" and "bad.py failed" in out.get("reason", ""),
+    str(out),
+)
 
 d = ruff_repo()
 (d / "ok.py").write_text("ok = 2\n")
@@ -141,48 +199,73 @@ git(d, "commit", "-qam", "edit ok")
 (d / "new file.py").write_text("n = 1\n")
 (d / "bad.py").unlink()
 out, seen = stop(d)
-check("a committed branch change and an untracked file are both linted, whole, and a deleted file is not",
-      seen == ["ruff|check|--force-exclude|new file.py|ok.py"], str(seen))
+check(
+    "a committed branch change and an untracked file are both linted, whole, and a deleted file is not",
+    seen == ["ruff|check|--force-exclude|new file.py|ok.py"],
+    str(seen),
+)
 
 d = ruff_repo()
 (d / "notes.md").write_text("n\n")
 out, seen = stop(d)
-check("a session that changed no .py file runs no lint and does not block", seen == [] and "decision" not in out,
-      str(seen) + str(out))
+check(
+    "a session that changed no .py file runs no lint and does not block",
+    seen == [] and "decision" not in out,
+    str(seen) + str(out),
+)
 
 d = ruff_repo()
 git(d, "checkout", "-q", "main")
 (d / "ok.py").write_text("ok = 3\n")
 out, seen = stop(d)
-check("on main, only the uncommitted .py change is linted", seen == ["ruff|check|--force-exclude|ok.py"], str(seen))
+check(
+    "on main, only the uncommitted .py change is linted",
+    seen == ["ruff|check|--force-exclude|ok.py"],
+    str(seen),
+)
 
 d = ruff_repo()
 (d / "harness.toml").write_text('[commands]\nlint = "uvx ruff check src tests"\n')
 git(d, "commit", "-qam", "explicit paths")
 (d / "ok.py").write_text("ok = 2\n")
 out, seen = stop(d)
-check("a lint command that is not `ruff check .` runs unchanged on the whole tree", seen == ["ruff|check|src|tests"], str(seen))
+check(
+    "a lint command that is not `ruff check .` runs unchanged on the whole tree",
+    seen == ["ruff|check|src|tests"],
+    str(seen),
+)
 
 d = repo()
 git(d, "checkout", "-q", "-b", "feature")
 (d / "work.txt").write_text("w\n")
 rc, out = hook("Stop", d)
-check("an uncommitted path is reported, not blocked",
-      "decision" not in out and "1 uncommitted path(s)" in out.get("systemMessage", ""), str(out))
+check(
+    "an uncommitted path is reported, not blocked",
+    "decision" not in out and "1 uncommitted path(s)" in out.get("systemMessage", ""),
+    str(out),
+)
 rc, out = hook("Stop", d)
 check("the same state is not reported twice", out == {}, str(out))
 git(d, "add", "work.txt")
 git(d, "commit", "-qm", "work")
 rc, out = hook("Stop", d)
-check("a commit not on local main is reported with the land command",
-      "1 commit(s) on feature not on local main (./scripts/land.sh)" in out.get("systemMessage", ""), str(out))
+check(
+    "a commit not on local main is reported with the land command",
+    "1 commit(s) on feature not on local main (./scripts/land.sh)"
+    in out.get("systemMessage", ""),
+    str(out),
+)
 check("unlanded work never blocks", "decision" not in out, str(out))
 
 rc, out = hook("SessionEnd", d)
 last = events()[-1]
-check("SessionEnd records where the session left the repository",
-      rc == 0 and last["decision"] == "session-end" and last["reason"] == "dirty=0 unlanded=1 unpublished=None",
-      str(last))
+check(
+    "SessionEnd records where the session left the repository",
+    rc == 0
+    and last["decision"] == "session-end"
+    and last["reason"] == "dirty=0 unlanded=1 unpublished=None",
+    str(last),
+)
 check("SessionEnd names the branch", last["subject"].startswith("feature@"), str(last))
 check("SessionEnd removes the session's state", not memo(d).exists())
 
@@ -191,13 +274,20 @@ memo(d).parent.mkdir(parents=True, exist_ok=True)
 memo(d).write_text("{not json")
 (d / "BAD").write_text("x\n")
 rc, out = hook("Stop", d)
-check("a corrupt session state file is replaced, and lint still runs", out.get("decision") == "block", str(out))
+check(
+    "a corrupt session state file is replaced, and lint still runs",
+    out.get("decision") == "block",
+    str(out),
+)
 
 d = repo()
 (d / "harness.toml").write_text("[commands\n")
 rc, out = hook("Stop", d)
-check("an unreadable harness.toml is said out loud, not passed silently",
-      rc == 0 and "harness.toml unreadable" in out.get("systemMessage", ""), str(out))
+check(
+    "an unreadable harness.toml is said out loud, not passed silently",
+    rc == 0 and "harness.toml unreadable" in out.get("systemMessage", ""),
+    str(out),
+)
 
 d = repo()
 (d / "harness.toml").write_text('[commands]\nlint = ""\n')
@@ -208,7 +298,11 @@ check("an empty lint command runs nothing and stays quiet", out == {}, str(out))
 d, other = repo(), repo()
 (other / "BAD").write_text("x\n")
 rc, out = hook("Stop", other, project=d)
-check("a repository other than the project is never linted, so its lint command never runs", out == {}, str(out))
+check(
+    "a repository other than the project is never linted, so its lint command never runs",
+    out == {},
+    str(out),
+)
 wt = d.parent / (d.name + "-wt")
 git(d, "worktree", "add", "-q", "-b", "side", str(wt))
 (wt / "BAD").write_text("x\n")

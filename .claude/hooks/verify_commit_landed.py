@@ -40,7 +40,9 @@ STALE_SECONDS = 86400  # a baseline whose PostToolUse never ran
 LANDED = re.compile(r"^\[[^\]\n]* ([0-9a-f]{7,40})\]", re.M)
 # git's own failure lines. Anchored: another command's words (`git status`: "nothing to commit") are not a failed commit.
 FAILED = re.compile(r"^(?:fatal|error):|^Unable to create .*index\.lock", re.M)
-SAME_CALL_STALE = 600  # seconds: a Pre of this call whose Post never ran is dropped by the next Pre
+SAME_CALL_STALE = (
+    600  # seconds: a Pre of this call whose Post never ran is dropped by the next Pre
+)
 
 
 def commit_dir(command, cwd):
@@ -52,7 +54,9 @@ def commit_dir(command, cwd):
     for segment in re.split(r"[;&|\n]+", command):
         try:
             words = shlex.split(segment)
-        except ValueError:  # the split cut inside a quoted `;`/`|`; fail toward checking
+        except (
+            ValueError
+        ):  # the split cut inside a quoted `;`/`|`; fail toward checking
             words = segment.split()
         if len(words) == 2 and words[0] == "cd":
             here = os.path.join(here, os.path.expanduser(words[1]))
@@ -64,7 +68,7 @@ def commit_dir(command, cwd):
             if words[i] == "-C" and i + 1 < len(words):
                 where = os.path.join(where, os.path.expanduser(words[i + 1]))
             i += 2 if words[i] in ("-C", "-c") else 1
-        if words[i:i + 1] == ["commit"]:
+        if words[i : i + 1] == ["commit"]:
             return where
     return None
 
@@ -93,6 +97,7 @@ def record(*args, **kwargs):
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
         import harness_events
+
         harness_events.record(*args, **kwargs)
     except Exception:
         pass
@@ -101,8 +106,9 @@ def record(*args, **kwargs):
 def git(cwd, *args):
     """Run git in `cwd`; empty string if it cannot answer."""
     try:
-        done = subprocess.run(("git",) + args, capture_output=True, text=True,
-                              timeout=5, env=ENV, cwd=cwd)
+        done = subprocess.run(
+            ("git",) + args, capture_output=True, text=True, timeout=5, env=ENV, cwd=cwd
+        )
     except (OSError, subprocess.SubprocessError):
         return ""
     return done.stdout.strip() if done.returncode == 0 else ""
@@ -110,7 +116,10 @@ def git(cwd, *args):
 
 def position(where):
     """Return [HEAD sha, HEAD reflog entry count] in `where`; ["", 0] before the first commit."""
-    return [git(where, "rev-parse", "HEAD"), len(git(where, "reflog", "show", "--format=%h", "HEAD").splitlines())]
+    return [
+        git(where, "rev-parse", "HEAD"),
+        len(git(where, "reflog", "show", "--format=%h", "HEAD").splitlines()),
+    ]
 
 
 def baseline_dir(where):
@@ -120,8 +129,12 @@ def baseline_dir(where):
 
 
 def call_key(event):
-    key = event.get("tool_use_id") or hashlib.sha256(
-        f"{event.get('session_id')}|{event['tool_input']['command']}".encode()).hexdigest()
+    key = (
+        event.get("tool_use_id")
+        or hashlib.sha256(
+            f"{event.get('session_id')}|{event['tool_input']['command']}".encode()
+        ).hexdigest()
+    )
     return "".join(c for c in str(key) if c.isalnum() or c in "-_")
 
 
@@ -135,13 +148,17 @@ def save_baseline(where, event):
         limit = SAME_CALL_STALE if old.name.startswith(key + ".") else STALE_SECONDS
         if time.time() - old.stat().st_mtime > limit:
             old.unlink(missing_ok=True)
-    (folder / f"{call_key(event)}.{time.time_ns()}.{os.getpid()}.json").write_text(json.dumps(position(where)))
+    (folder / f"{call_key(event)}.{time.time_ns()}.{os.getpid()}.json").write_text(
+        json.dumps(position(where))
+    )
 
 
 def take_baseline(where, event):
     """Return and remove the newest baseline recorded for this call, or None."""
     folder = baseline_dir(where)
-    for path in sorted(folder.glob(f"{call_key(event)}.*.json"), reverse=True) if folder else []:
+    for path in (
+        sorted(folder.glob(f"{call_key(event)}.*.json"), reverse=True) if folder else []
+    ):
         try:
             before = json.loads(path.read_text())
             path.unlink()
@@ -162,19 +179,27 @@ def verdict(before, where, output):
     if before is None:
         if not head or (reported and head.startswith(reported[-1])):
             return None
-        why = ("No HEAD was recorded before this call, so git's output was checked instead, and it holds "
-               "no `[branch sha]` line equal to HEAD. A `git commit -q`, or a wrapper that condenses output, is "
-               "blocked on this path although the commit may have landed; confirm with `git log -1`.")
+        why = (
+            "No HEAD was recorded before this call, so git's output was checked instead, and it holds "
+            "no `[branch sha]` line equal to HEAD. A `git commit -q`, or a wrapper that condenses output, is "
+            "blocked on this path although the commit may have landed; confirm with `git log -1`."
+        )
     elif reported and not head.startswith(reported[-1]):
-        why = (f"git printed commit {reported[-1]}, but HEAD is {head[:12]}. "
-               "The commit just reported is not the one this branch is on.")
+        why = (
+            f"git printed commit {reported[-1]}, but HEAD is {head[:12]}. "
+            "The commit just reported is not the one this branch is on."
+        )
     elif position(where) == before:
-        why = (f"HEAD was {before[0][:12] or '(unborn)'} before the call and has not moved, so no commit was created. "
-               "An index.lock collision, or an exit code masked by a later "
-               "command in the same invocation, both look exactly like this.")
+        why = (
+            f"HEAD was {before[0][:12] or '(unborn)'} before the call and has not moved, so no commit was created. "
+            "An index.lock collision, or an exit code masked by a later "
+            "command in the same invocation, both look exactly like this."
+        )
     elif failed and not reported:
-        why = (f"HEAD moved, but git's output reports a failure ({failed.group(0)!r}) and no `[branch sha]` line. "
-               "Another commit in this worktree may have moved HEAD while this one failed.")
+        why = (
+            f"HEAD moved, but git's output reports a failure ({failed.group(0)!r}) and no `[branch sha]` line. "
+            "Another commit in this worktree may have moved HEAD while this one failed."
+        )
     else:
         return None
     # Asked for as a standing warning; it earns its place only here. A lock is
@@ -183,9 +208,11 @@ def verdict(before, where, output):
     lock = git(where, "rev-parse", "--git-path", "index.lock")
     if lock and os.path.exists(os.path.join(where, lock)):
         why += f" {lock} is still present, so a peer worktree likely held the index."
-    return (f"Commit not verified. {why} HEAD is now: {git(where, 'log', '-1', '--format=%h %s') or '(unknown)'}. "
-            "Re-run `git log -1` and `git status --short` and correct the record "
-            "before reporting this commit as landed.")
+    return (
+        f"Commit not verified. {why} HEAD is now: {git(where, 'log', '-1', '--format=%h %s') or '(unknown)'}. "
+        "Re-run `git log -1` and `git status --short` and correct the record "
+        "before reporting this commit as landed."
+    )
 
 
 def main():
@@ -194,8 +221,10 @@ def main():
     except ValueError:
         # Say so. A control that cannot read its input must not be
         # indistinguishable from one that looked and found nothing wrong.
-        print("verify_commit_landed: unreadable hook input, commit NOT checked",
-              file=sys.stderr)
+        print(
+            "verify_commit_landed: unreadable hook input, commit NOT checked",
+            file=sys.stderr,
+        )
         return
     command = (event.get("tool_input") or {}).get("command", "")
     cwd = event.get("cwd") or os.getcwd()
@@ -210,12 +239,22 @@ def main():
     before = take_baseline(where, event)
     reason = verdict(before, where, text_of(event.get("tool_response") or {}))
     head = git(where, "rev-parse", "--short", "HEAD") or "-"
-    record("verify_commit_landed", "block" if reason else "pass",
-           "not-landed" if reason else ("landed" if before else "landed-no-baseline"), head, event)
+    record(
+        "verify_commit_landed",
+        "block" if reason else "pass",
+        "not-landed" if reason else ("landed" if before else "landed-no-baseline"),
+        head,
+        event,
+    )
     if reason:
-        json.dump({"decision": "block", "reason": reason,
-                   "systemMessage": "git commit did not land - see the blocked reason"},
-                  sys.stdout)
+        json.dump(
+            {
+                "decision": "block",
+                "reason": reason,
+                "systemMessage": "git commit did not land - see the blocked reason",
+            },
+            sys.stdout,
+        )
 
 
 if __name__ == "__main__":

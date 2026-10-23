@@ -100,7 +100,11 @@ def build(entries, runtime):
                 continue
             event = entry["event"]
             matcher = translate_matcher(event, entry["matcher"], CODEX_MATCH)
-            if matcher and watches_edits(entry) and event in ("PreToolUse", "PostToolUse"):
+            if (
+                matcher
+                and watches_edits(entry)
+                and event in ("PreToolUse", "PostToolUse")
+            ):
                 matcher += "|Bash"
             hook = {
                 "type": "command",

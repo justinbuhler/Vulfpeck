@@ -18,6 +18,7 @@ configured.
 
 Reading a harness.toml needs Python 3.11+ (tomllib). The defaults need nothing.
 """
+
 import argparse
 import copy
 import json
@@ -55,7 +56,13 @@ DEFAULTS = {
         # Agent types (fnmatch patterns) that must leave the main checkout as
         # they found it. .claude/hooks/readonly_guard.py snapshots the checkout
         # when one starts and compares when it stops.
-        "read_only": ["dual-derive", "live-proof-auditor", "reviewer-*", "Explore", "Plan"],
+        "read_only": [
+            "dual-derive",
+            "live-proof-auditor",
+            "reviewer-*",
+            "Explore",
+            "Plan",
+        ],
     },
     "adr": {
         # Architecture decision records: docs/adr/NNNN-slug.md (scripts/adr.py).
@@ -66,7 +73,7 @@ DEFAULTS = {
         # (tests/test_adr.py). Empty: ADRs are written for real decisions, and
         # `scripts/adr.py check` still validates the ones that exist.
         "require_for": [],
-        "exempt": [],           # literal paths, each one named
+        "exempt": [],  # literal paths, each one named
     },
     "jev": {
         # scripts/jev.py: JEV_DISABLE=1 also turns it off. timeout is seconds per request.
@@ -79,12 +86,33 @@ DEFAULTS = {
         # critical, high, medium, low. Rules and machinery files are High.
         "low": ["README.md", "ENGINEERING_LOG.md", "HARNESS.md", "docs/**"],
         "medium": ["docs/adr/**"],
-        "high": [".claude/**", ".agents/**", ".codex/**", ".gemini/**", ".github/**", ".githooks/**",
-                 "AGENTS.md", "CLAUDE.md", "**/AGENTS.md", "**/CLAUDE.md", "harness.toml",
-                 "scripts/paths.py", "scripts/harness_config.py", "scripts/jev.py", "scripts/plan_tests.py",
-                 "scripts/standalone_tests.sh", "scripts/land.sh", "scripts/gate.sh", "scripts/run.sh",
-                 "mutants/**", "tests/**", "scripts/harness_env.sh", "scripts/adr.py",
-                 "docs/agents/**", "docs/mutation-testing.md"],
+        "high": [
+            ".claude/**",
+            ".agents/**",
+            ".codex/**",
+            ".gemini/**",
+            ".github/**",
+            ".githooks/**",
+            "AGENTS.md",
+            "CLAUDE.md",
+            "**/AGENTS.md",
+            "**/CLAUDE.md",
+            "harness.toml",
+            "scripts/paths.py",
+            "scripts/harness_config.py",
+            "scripts/jev.py",
+            "scripts/plan_tests.py",
+            "scripts/standalone_tests.sh",
+            "scripts/land.sh",
+            "scripts/gate.sh",
+            "scripts/run.sh",
+            "mutants/**",
+            "tests/**",
+            "scripts/harness_env.sh",
+            "scripts/adr.py",
+            "docs/agents/**",
+            "docs/mutation-testing.md",
+        ],
         "critical": [],
     },
     "budget": {
@@ -97,8 +125,12 @@ DEFAULTS = {
     },
     "hooks": {
         "watched_files": [
-            "harness.toml", "scripts/paths.py", "scripts/harness_config.py",
-            "scripts/gate.sh", "scripts/land.sh", "scripts/run.sh",
+            "harness.toml",
+            "scripts/paths.py",
+            "scripts/harness_config.py",
+            "scripts/gate.sh",
+            "scripts/land.sh",
+            "scripts/run.sh",
             ".claude/settings.json",
         ],
         "watched_dirs": [".githooks/"],
@@ -124,13 +156,40 @@ DEFAULTS = {
     ],
 }
 
-STRING_LISTS = {("budget", "status_glob"), ("land", "copy_untracked"), ("roles", "read_only"), ("adr", "require_for"), ("adr", "exempt"), ("hooks", "watched_files"),
-                ("hooks", "watched_dirs"), ("hooks", "skip_dirs"),
-                ("tiers", "low"), ("tiers", "medium"), ("tiers", "high"), ("tiers", "critical")}
+STRING_LISTS = {
+    ("budget", "status_glob"),
+    ("land", "copy_untracked"),
+    ("roles", "read_only"),
+    ("adr", "require_for"),
+    ("adr", "exempt"),
+    ("hooks", "watched_files"),
+    ("hooks", "watched_dirs"),
+    ("hooks", "skip_dirs"),
+    ("tiers", "low"),
+    ("tiers", "medium"),
+    ("tiers", "high"),
+    ("tiers", "critical"),
+}
 RULE_KEYS = {"match": str, "self": str, "tests": list, "command": str}
-HOOK_KEYS = {"name": str, "event": str, "matcher": str, "kind": str, "timeout": int, "command": str}
-HOOK_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "SessionStart", "SessionEnd",
-               "SubagentStart", "SubagentStop", "Stop")
+HOOK_KEYS = {
+    "name": str,
+    "event": str,
+    "matcher": str,
+    "kind": str,
+    "timeout": int,
+    "command": str,
+}
+HOOK_EVENTS = (
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "UserPromptSubmit",
+    "SessionStart",
+    "SessionEnd",
+    "SubagentStart",
+    "SubagentStop",
+    "Stop",
+)
 
 
 class ConfigError(Exception):
@@ -140,7 +199,9 @@ class ConfigError(Exception):
 def safe_relative(value, where):
     """Refuse a path that is absolute or climbs out of the repository."""
     if not value or value.startswith("/") or ".." in Path(value).parts:
-        raise ConfigError(f"{where}: {value!r} must be a relative path inside the repository")
+        raise ConfigError(
+            f"{where}: {value!r} must be a relative path inside the repository"
+        )
     return value
 
 
@@ -158,10 +219,14 @@ def merge_hooks(body):
         if missing:
             raise ConfigError(f"{where}: missing key(s) {sorted(missing)}")
         for key, kind in HOOK_KEYS.items():
-            if key in entry and (not isinstance(entry[key], kind) or isinstance(entry[key], bool)):
+            if key in entry and (
+                not isinstance(entry[key], kind) or isinstance(entry[key], bool)
+            ):
                 raise ConfigError(f"{where}.{key} must be a {kind.__name__}")
         if entry["event"] not in HOOK_EVENTS:
-            raise ConfigError(f"{where}.event {entry['event']!r} must be one of {list(HOOK_EVENTS)}")
+            raise ConfigError(
+                f"{where}.event {entry['event']!r} must be one of {list(HOOK_EVENTS)}"
+            )
         if entry["kind"] not in ("gate", "advisory"):
             raise ConfigError(f"{where}.kind must be 'gate' or 'advisory'")
         if entry["timeout"] <= 0:
@@ -181,7 +246,9 @@ def merge(raw):
             raise ConfigError(f"unknown section [{section}]")
         if section == "mapped_tests":
             if not isinstance(body, list):
-                raise ConfigError("mapped_tests must be an array of tables ([[mapped_tests]])")
+                raise ConfigError(
+                    "mapped_tests must be an array of tables ([[mapped_tests]])"
+                )
             rules = []
             for i, rule in enumerate(body):
                 where = f"mapped_tests[{i}]"
@@ -208,16 +275,24 @@ def merge(raw):
             if key not in DEFAULTS[section]:
                 raise ConfigError(f"unknown key {section}.{key}")
             if (section, key) in STRING_LISTS:
-                if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                if not isinstance(value, list) or not all(
+                    isinstance(v, str) for v in value
+                ):
                     raise ConfigError(f"{section}.{key} must be a list of strings")
             elif (section, key) == ("jev", "enabled"):
                 if not isinstance(value, bool):
                     raise ConfigError("jev.enabled must be true or false")
             elif section == "budget":
                 if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                    raise ConfigError(f"budget.{key} must be an integer >= 0 (0 is off)")
+                    raise ConfigError(
+                        f"budget.{key} must be an integer >= 0 (0 is off)"
+                    )
             elif (section, key) == ("jev", "timeout"):
-                if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or value <= 0
+                ):
                     raise ConfigError("jev.timeout must be a number of seconds above 0")
             elif not isinstance(value, str):
                 raise ConfigError(f"{section}.{key} must be a string")
@@ -230,26 +305,38 @@ def merge(raw):
     for entry in config["adr"]["require_for"]:
         safe_relative(entry, "adr.require_for")
         if set("*?[") & set(entry.strip("/").split("/")[0]):
-            raise ConfigError(f"adr.require_for: {entry!r} must start with a fixed directory or "
-                              "file name, not a glob")
-    for tier, globs in ((k, config["tiers"][k]) for k in ("low", "medium", "high", "critical")):
+            raise ConfigError(
+                f"adr.require_for: {entry!r} must start with a fixed directory or "
+                "file name, not a glob"
+            )
+    for tier, globs in (
+        (k, config["tiers"][k]) for k in ("low", "medium", "high", "critical")
+    ):
         for entry in globs:
             safe_relative(entry, f"tiers.{tier}")
     for entry in config["adr"]["exempt"]:
         safe_relative(entry, "adr.exempt")
         if set("*?[") & set(entry):
             # A glob here would exempt files wholesale; each exemption is named.
-            raise ConfigError(f"adr.exempt: {entry!r} must be a literal path, not a glob")
+            raise ConfigError(
+                f"adr.exempt: {entry!r} must be a literal path, not a glob"
+            )
     for entry in config["adr"]["require_for"]:
         if (entry.lower() + "/").startswith(adr_dir.lower() + "/"):
             # Files under adr.dir are never governed, so this would switch the rule off.
-            raise ConfigError(f"adr.dir {adr_dir!r} contains the governed path {entry!r}")
+            raise ConfigError(
+                f"adr.dir {adr_dir!r} contains the governed path {entry!r}"
+            )
     if config["tests"]["count_pattern"]:
         try:
             if re.compile(config["tests"]["count_pattern"]).groups < 1:
-                raise ConfigError("tests.count_pattern needs one capture group for the count")
+                raise ConfigError(
+                    "tests.count_pattern needs one capture group for the count"
+                )
         except re.error as exc:
-            raise ConfigError(f"tests.count_pattern is not a valid regex: {exc}") from exc
+            raise ConfigError(
+                f"tests.count_pattern is not a valid regex: {exc}"
+            ) from exc
     return config
 
 
@@ -268,8 +355,10 @@ def load(root):
     try:
         import tomllib
     except ModuleNotFoundError as exc:
-        raise ConfigError(f"{path} needs Python 3.11+ to read (tomllib); "
-                          f"this is Python {sys.version.split()[0]}") from exc
+        raise ConfigError(
+            f"{path} needs Python 3.11+ to read (tomllib); "
+            f"this is Python {sys.version.split()[0]}"
+        ) from exc
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
@@ -289,6 +378,7 @@ def mapped_test(config, root, edited):
         (tuple | None): the test to run and the command that runs it.
     """
     from fnmatch import fnmatch
+
     root = Path(root).resolve()
     try:
         rel = Path(edited).resolve().relative_to(root)
@@ -301,11 +391,17 @@ def mapped_test(config, root, edited):
         if not fnmatch(name, rule["match"]):
             continue
         # A `self` pattern with a "/" matches the repository-relative path, else the name.
-        if rule["self"] and fnmatch(rel.as_posix() if "/" in rule["self"] else name, rule["self"]):
+        if rule["self"] and fnmatch(
+            rel.as_posix() if "/" in rule["self"] else name, rule["self"]
+        ):
             test = root / rel
         else:
-            fields = {"dir": rel.parent.as_posix(), "name": name,
-                      "stem": rel.stem, "ext": rel.suffix}
+            fields = {
+                "dir": rel.parent.as_posix(),
+                "name": name,
+                "stem": rel.stem,
+                "ext": rel.suffix,
+            }
             test = None
             for pattern in rule["tests"]:
                 candidate = root / posixpath.normpath(pattern.format(**fields))
@@ -351,13 +447,16 @@ def shell(config):
 
 def default_root():
     """The git top level of the current directory, else the directory itself."""
-    done = subprocess.run(["git", "rev-parse", "--show-toplevel"],
-                          capture_output=True, text=True)
+    done = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
+    )
     return Path(done.stdout.strip()) if done.returncode == 0 else Path.cwd()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Read harness.toml for the harness scripts.")
+    parser = argparse.ArgumentParser(
+        description="Read harness.toml for the harness scripts."
+    )
     parser.add_argument("--root", type=Path, default=None)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--shell", action="store_true")
@@ -381,9 +480,11 @@ def main():
         text = Path(args.count).read_text(encoding="utf-8", errors="replace")
         n = count(config, text)
         if not n:
-            print(f"✗ the test command reported no checks (tests.count_pattern "
-                  f"{config['tests']['count_pattern']!r} {'found 0' if n == 0 else 'did not match'})",
-                  file=sys.stderr)
+            print(
+                f"✗ the test command reported no checks (tests.count_pattern "
+                f"{config['tests']['count_pattern']!r} {'found 0' if n == 0 else 'did not match'})",
+                file=sys.stderr,
+            )
             return 1
         print(n)
     return 0

@@ -25,6 +25,7 @@ and never committed: <git common dir>/harness/events.jsonl.
     python3 scripts/harness_events.py tail [-n N]   # last N records
     python3 scripts/harness_events.py record --hook land --decision landed --subject SHA
 """
+
 import argparse
 import fcntl
 import json
@@ -35,7 +36,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA = 1
-MAX_BYTES = 5 * 1024 * 1024  # not in harness.toml: hooks run copied beside this file, without harness_config
+MAX_BYTES = (
+    5 * 1024 * 1024
+)  # not in harness.toml: hooks run copied beside this file, without harness_config
 SUBJECT_MAX = 160
 
 
@@ -52,8 +55,14 @@ def log_path(cwd=None):
         return Path(override)
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     try:
-        done = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                              cwd=cwd or None, capture_output=True, text=True, timeout=5, env=env)
+        done = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=cwd or None,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=env,
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     if done.returncode != 0 or not done.stdout.strip():
@@ -105,7 +114,10 @@ def record(hook, decision, reason="", subject="", payload=None, cwd=None):
         return True
     except Exception as exc:  # logging must never change a decision
         try:
-            print(f"harness_events: not recorded ({type(exc).__name__}: {exc})", file=sys.stderr)
+            print(
+                f"harness_events: not recorded ({type(exc).__name__}: {exc})",
+                file=sys.stderr,
+            )
         except Exception:
             pass
         return False
@@ -131,7 +143,7 @@ def main():
         print("not inside a git repository", file=sys.stderr)
         return 2
     if path.is_file():
-        for line in path.read_text(encoding="utf-8").splitlines()[-args.n:]:
+        for line in path.read_text(encoding="utf-8").splitlines()[-args.n :]:
             print(line)
     return 0
 

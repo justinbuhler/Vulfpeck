@@ -298,11 +298,22 @@ ADR_GATE = (
     'echo "adr_gate.py crashed (rc=$rc); failing closed" >&2; exit 2; }'
 )
 for _runtime in ("codex", "gemini"):
-    _entries = [{"name": f"adr_gate_{e}", "event": e, "matcher": "Edit|Write", "kind": "gate",
-                 "timeout": 10, "command": ADR_GATE} for e in ("PreToolUse", "PostToolUse")]
+    _entries = [
+        {
+            "name": f"adr_gate_{e}",
+            "event": e,
+            "matcher": "Edit|Write",
+            "kind": "gate",
+            "timeout": 10,
+            "command": ADR_GATE,
+        }
+        for e in ("PreToolUse", "PostToolUse")
+    ]
     for _event, _groups in render_hooks.build(_entries, _runtime).items():
         for _group in _groups:
-            REG[_runtime][(_event, _group["matcher"], "adr_gate.py")] = _group["hooks"][0]["command"]
+            REG[_runtime][(_event, _group["matcher"], "adr_gate.py")] = _group["hooks"][
+                0
+            ]["command"]
 
 OPT_IN = Path(tempfile.mkdtemp(prefix="opt-in."))
 _genv = {k: v for k, v in os.environ.items() if k not in GIT_ENV}
@@ -312,7 +323,13 @@ subprocess.run(["git", "init", "-q"], cwd=OPT_IN, env=_genv, check=True)
 (OPT_IN / ".claude" / "hooks").mkdir(parents=True)
 shutil.copy2(ROOT / ".claude" / "hooks" / "adr_gate.py", OPT_IN / ".claude" / "hooks")
 (OPT_IN / "scripts").mkdir()
-for _name in ("adr.py", "harness_config.py", "harness_events.py", "hook_adapter.py", "paths.py"):
+for _name in (
+    "adr.py",
+    "harness_config.py",
+    "harness_events.py",
+    "hook_adapter.py",
+    "paths.py",
+):
     shutil.copy2(ROOT / "scripts" / _name, OPT_IN / "scripts")
 
 
@@ -322,7 +339,9 @@ def run(runtime, event, matcher, script, native, project=ROOT, cwd=None):
     `matcher` is only the caller's label: the CLIs name tools differently, so the
     registration is found by event and script.
     """
-    command = next(c for (e, _, sc), c in REG[runtime].items() if (e, sc) == (event, script))
+    command = next(
+        c for (e, _, sc), c in REG[runtime].items() if (e, sc) == (event, script)
+    )
     env = {k: v for k, v in os.environ.items() if k not in GIT_ENV}
     done = subprocess.run(
         ["bash", "-c", command],
@@ -443,7 +462,9 @@ for event in ("PreToolUse",):
             "cwd": str(OPT_IN),
             "tool_input": {"file_path": str(OPT_IN / path), "content": "x"},
         }
-        rc, out, err = run("gemini", "BeforeTool", "write_file", "adr_gate.py", native, project=OPT_IN)
+        rc, out, err = run(
+            "gemini", "BeforeTool", "write_file", "adr_gate.py", native, project=OPT_IN
+        )
         check(
             f"gemini: adr_gate {label}",
             rc == 0 and denied("gemini", out) == want,
@@ -482,10 +503,21 @@ with tempfile.TemporaryDirectory() as raw:
     ).stdout.strip()
     for runtime, pre_event, event, name, response in (
         ("codex", "PreToolUse", "PostToolUse", "Bash", lambda text: {"stdout": text}),
-        ("gemini", "BeforeTool", "AfterTool", "run_shell_command", lambda text: {"llmContent": text}),
+        (
+            "gemini",
+            "BeforeTool",
+            "AfterTool",
+            "run_shell_command",
+            lambda text: {"llmContent": text},
+        ),
     ):
         for text, moves, want, label in (
-            ("[work 1234567] base", False, True, "blocks a commit that did not move HEAD, whatever git printed"),
+            (
+                "[work 1234567] base",
+                False,
+                True,
+                "blocks a commit that did not move HEAD, whatever git printed",
+            ),
             ("", True, False, "passes a commit that moved HEAD and printed nothing"),
         ):
             native = {
@@ -498,9 +530,24 @@ with tempfile.TemporaryDirectory() as raw:
             run(runtime, pre_event, matcher, "verify_commit_landed.py", native)
             if moves:
                 subprocess.run(
-                    ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
-                     "commit", "-q", "--allow-empty", "-m", "moved"],
-                    cwd=repo, env=env, check=True, capture_output=True,
+                    [
+                        "git",
+                        "-c",
+                        "user.name=t",
+                        "-c",
+                        "user.email=t@t",
+                        "-c",
+                        "commit.gpgsign=false",
+                        "commit",
+                        "-q",
+                        "--allow-empty",
+                        "-m",
+                        "moved",
+                    ],
+                    cwd=repo,
+                    env=env,
+                    check=True,
+                    capture_output=True,
                 )
             rc, out, err = run(
                 runtime,
@@ -586,7 +633,10 @@ with tempfile.TemporaryDirectory() as raw:
     # Failure direction: a guard that crashes blocks (gate) on every runtime; an advisory fails open.
     # verify_commit_landed.py is a gate after the call and an advisory (it only records HEAD) before it.
     def is_gate(event, script):
-        return script in gates and not (script == "verify_commit_landed.py" and event in ("PreToolUse", "BeforeTool"))
+        return script in gates and not (
+            script == "verify_commit_landed.py"
+            and event in ("PreToolUse", "BeforeTool")
+        )
 
     gates = {
         "require_agent_model.py",
@@ -663,7 +713,10 @@ import time  # noqa: E402
 
 import render_hooks  # noqa: E402
 
-check("the adapter's budget is about 1s under the registered timeout", ha.budget(10) == 9.0 and ha.budget(2) == 1.0)
+check(
+    "the adapter's budget is about 1s under the registered timeout",
+    ha.budget(10) == 9.0 and ha.budget(2) == 1.0,
+)
 check("no --timeout means no deadline", ha.budget(None) is None)
 env = {k: v for k, v in os.environ.items() if k not in GIT_ENV}
 for runtime, event in (("codex", "PreToolUse"), ("gemini", "BeforeTool")):
@@ -671,16 +724,36 @@ for runtime, event in (("codex", "PreToolUse"), ("gemini", "BeforeTool")):
         entry = {"command": "sleep 30", "kind": kind, "timeout": 3}
         command = render_hooks.adapted(entry, runtime, event)
         began = time.monotonic()
-        done = subprocess.run(["bash", "-c", command], input="{}", capture_output=True, text=True, env=env, cwd=str(ROOT),
-                              timeout=20)
+        done = subprocess.run(
+            ["bash", "-c", command],
+            input="{}",
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(ROOT),
+            timeout=20,
+        )
         took = time.monotonic() - began
-        check(f"{runtime} {kind}: a guard that sleeps past the timeout ends the hook with rc {want_rc} before it",
-              done.returncode == want_rc and took < 3.0, f"rc={done.returncode} {took:.1f}s {done.stderr}")
-        check(f"{runtime} {kind}: the timeout is reported", "before the hook timeout" in done.stderr or kind == "advisory",
-              done.stderr)
+        check(
+            f"{runtime} {kind}: a guard that sleeps past the timeout ends the hook with rc {want_rc} before it",
+            done.returncode == want_rc and took < 3.0,
+            f"rc={done.returncode} {took:.1f}s {done.stderr}",
+        )
+        check(
+            f"{runtime} {kind}: the timeout is reported",
+            "before the hook timeout" in done.stderr or kind == "advisory",
+            done.stderr,
+        )
     entry = {"command": "true", "kind": "gate", "timeout": 3}
-    proc = subprocess.Popen(["bash", "-c", render_hooks.adapted(entry, runtime, event)], stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=str(ROOT))
+    proc = subprocess.Popen(
+        ["bash", "-c", render_hooks.adapted(entry, runtime, event)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        cwd=str(ROOT),
+    )
     began = time.monotonic()
     try:
         proc.wait(timeout=10)
@@ -688,96 +761,250 @@ for runtime, event in (("codex", "PreToolUse"), ("gemini", "BeforeTool")):
     except subprocess.TimeoutExpired:
         proc.kill()
         err = "HUNG"
-    check(f"{runtime} gate: a stdin that never closes ends the hook with rc 2 before the timeout",
-          proc.returncode == 2 and time.monotonic() - began < 3.0 and "stdin was not closed" in err, f"rc={proc.returncode} {err}")
+    check(
+        f"{runtime} gate: a stdin that never closes ends the hook with rc 2 before the timeout",
+        proc.returncode == 2
+        and time.monotonic() - began < 3.0
+        and "stdin was not closed" in err,
+        f"rc={proc.returncode} {err}",
+    )
 
 
 # --- a patch sent through the shell is a patch (observed: Codex reports it as Bash) ----
-heredoc = "apply_patch <<'EOF'\n" + patch("*** Add File: scripts/x.py", "+x", "*** Add File: y.md", "+y") + "\nEOF"
-shell_events = ha.to_claude("codex", "PreToolUse", {"tool_name": "Bash", "cwd": "/w", "tool_input": {"command": heredoc}},
-                            edits=True)
-check("an edit guard turns a shell apply_patch into one event per file",
-      [(e["tool_name"], e["tool_input"]["file_path"]) for e in shell_events]
-      == [("Write", "/w/scripts/x.py"), ("Write", "/w/y.md")], str(shell_events))
-check("a Bash guard still sees the Bash call itself",
-      [e["tool_name"] for e in ha.to_claude("codex", "PreToolUse", {"tool_name": "Bash", "tool_input": {"command": heredoc}})]
-      == ["Bash"])
-check("an edit guard gets no event for an ordinary Bash call",
-      ha.to_claude("codex", "PreToolUse", {"tool_name": "Bash", "tool_input": {"command": "git status"}}, edits=True) == [])
-check("a Begin Patch with no End Patch raises",
-      raises(lambda: ha.to_claude("codex", "PreToolUse", {"tool_name": "Bash", "tool_input": {
-          "command": "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: a\n+x\nEOF"}}, edits=True)))
-check("a compound command that ends in a patch is still found",
-      len(ha.to_claude("codex", "PreToolUse", {"tool_name": "Bash", "cwd": "/w", "tool_input": {
-          "command": "cd /w && " + heredoc}}, edits=True)) == 2)
-rc, out, err = run("codex", "PreToolUse", "apply_patch|Bash", "adr_gate.py",
-                   {"tool_name": "Bash", "cwd": str(OPT_IN), "tool_input": {
-                       "command": "apply_patch <<'EOF'\n" + patch("*** Add File: scripts/zzz_canary.py", "+x") + "\nEOF"}},
-                   project=OPT_IN)
-check("codex: adr_gate denies a governed file added by a shell apply_patch", rc == 0 and denied("codex", out), out + err)
-rc, out, err = run("codex", "PreToolUse", "apply_patch|Bash", "adr_gate.py",
-                   {"tool_name": "Bash", "cwd": str(OPT_IN), "tool_input": {"command": "git status"}},
-                   project=OPT_IN)
-check("codex: adr_gate stays silent on an ordinary Bash call", rc == 0 and out.strip() == "{}", out + err)
+heredoc = (
+    "apply_patch <<'EOF'\n"
+    + patch("*** Add File: scripts/x.py", "+x", "*** Add File: y.md", "+y")
+    + "\nEOF"
+)
+shell_events = ha.to_claude(
+    "codex",
+    "PreToolUse",
+    {"tool_name": "Bash", "cwd": "/w", "tool_input": {"command": heredoc}},
+    edits=True,
+)
+check(
+    "an edit guard turns a shell apply_patch into one event per file",
+    [(e["tool_name"], e["tool_input"]["file_path"]) for e in shell_events]
+    == [("Write", "/w/scripts/x.py"), ("Write", "/w/y.md")],
+    str(shell_events),
+)
+check(
+    "a Bash guard still sees the Bash call itself",
+    [
+        e["tool_name"]
+        for e in ha.to_claude(
+            "codex",
+            "PreToolUse",
+            {"tool_name": "Bash", "tool_input": {"command": heredoc}},
+        )
+    ]
+    == ["Bash"],
+)
+check(
+    "an edit guard gets no event for an ordinary Bash call",
+    ha.to_claude(
+        "codex",
+        "PreToolUse",
+        {"tool_name": "Bash", "tool_input": {"command": "git status"}},
+        edits=True,
+    )
+    == [],
+)
+check(
+    "a Begin Patch with no End Patch raises",
+    raises(
+        lambda: ha.to_claude(
+            "codex",
+            "PreToolUse",
+            {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: a\n+x\nEOF"
+                },
+            },
+            edits=True,
+        )
+    ),
+)
+check(
+    "a compound command that ends in a patch is still found",
+    len(
+        ha.to_claude(
+            "codex",
+            "PreToolUse",
+            {
+                "tool_name": "Bash",
+                "cwd": "/w",
+                "tool_input": {"command": "cd /w && " + heredoc},
+            },
+            edits=True,
+        )
+    )
+    == 2,
+)
+rc, out, err = run(
+    "codex",
+    "PreToolUse",
+    "apply_patch|Bash",
+    "adr_gate.py",
+    {
+        "tool_name": "Bash",
+        "cwd": str(OPT_IN),
+        "tool_input": {
+            "command": "apply_patch <<'EOF'\n"
+            + patch("*** Add File: scripts/zzz_canary.py", "+x")
+            + "\nEOF"
+        },
+    },
+    project=OPT_IN,
+)
+check(
+    "codex: adr_gate denies a governed file added by a shell apply_patch",
+    rc == 0 and denied("codex", out),
+    out + err,
+)
+rc, out, err = run(
+    "codex",
+    "PreToolUse",
+    "apply_patch|Bash",
+    "adr_gate.py",
+    {"tool_name": "Bash", "cwd": str(OPT_IN), "tool_input": {"command": "git status"}},
+    project=OPT_IN,
+)
+check(
+    "codex: adr_gate stays silent on an ordinary Bash call",
+    rc == 0 and out.strip() == "{}",
+    out + err,
+)
 
 
 # --- which shell commands are patches (scope reset) ---------------------------------------
 def files_of(command):
     """Return the file names the edit guards would see for a Bash command, in order."""
-    events = ha.to_claude("codex", "PreToolUse", {"tool_name": "Bash", "cwd": "/w", "tool_input": {"command": command}},
-                          edits=True)
+    events = ha.to_claude(
+        "codex",
+        "PreToolUse",
+        {"tool_name": "Bash", "cwd": "/w", "tool_input": {"command": command}},
+        edits=True,
+    )
     return [Path(e["tool_input"]["file_path"]).name for e in events]
 
 
 one = lambda name: patch(f"*** Add File: {name}", "+x")  # noqa: E731
 two_patches = f"apply_patch <<'EOF'\n{one('first.py')}\nEOF\napply_patch <<'EOF'\n{one('second.py')}\nEOF"
-check("two apply_patch heredocs in one command are both gated", files_of(two_patches) == ["first.py", "second.py"],
-      str(files_of(two_patches)))
-check("two patch blocks in one heredoc are both gated",
-      files_of(f"apply_patch <<'EOF'\n{one('a.py')}\n{one('b.py')}\nEOF") == ["a.py", "b.py"])
-decoy = f"echo '{one('decoy.py')}' >/dev/null; apply_patch <<'EOF'\n{one('real.py')}\nEOF"
-check("a decoy patch in an echo does not hide the real one: only the real file is gated",
-      files_of(decoy) == ["real.py"], str(files_of(decoy)))
-check("rg -F with both markers is not a patch and does not raise",
-      files_of("rg -F '*** Begin Patch' x # apply_patch") == [])
-check("a commit message naming apply_patch and holding both markers is not a patch",
-      files_of(f"git commit -m \"fix apply_patch: {one('m.py')}\"") == [])
-check("an unclosed Begin marker in an rg command does not raise", files_of("rg 'apply_patch|*** Begin Patch' .") == [])
-check("a cat heredoc holding a patch example is not an edit of the example's path",
-      files_of(f"cat > notes.md <<'EOF'\nexample:\n{one('example.py')}\nEOF") == [])
-check("text after a cat heredoc is still scanned, so a real patch there is gated",
-      files_of(f"cat > notes.md <<'EOF'\n{one('example.py')}\nEOF\napply_patch <<'EOF'\n{one('real.py')}\nEOF")
-      == ["real.py"])
-check("bash -c with an apply_patch heredoc is gated",
-      files_of("bash -c \"apply_patch <<'EOF'\n" + one("viabash.py") + "\nEOF\"") == ["viabash.py"])
-check("apply_patch after && or ; or a pipe's left side is a command word and is gated",
-      files_of(f"cd x && apply_patch <<'EOF'\n{one('c.py')}\nEOF") == ["c.py"])
-check("apply_patch given the patch as an argument is gated",
-      files_of("apply_patch \"" + one("arg.py") + "\"") == ["arg.py"])
-check("an env assignment before apply_patch does not hide it",
-      files_of(f"FOO=1 apply_patch <<'EOF'\n{one('env.py')}\nEOF") == ["env.py"])
-check("a malformed patch to a real apply_patch invocation still raises",
-      raises(lambda: files_of("apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: a\n+x\nEOF")))
-check("a heredoc to apply_patch with no patch at all raises",
-      raises(lambda: files_of("apply_patch <<'EOF'\nhello\nEOF")))
-check("apply_patch < file and cat p | apply_patch are left alone (no patch text in the command)",
-      files_of("apply_patch < p.txt") == [] and files_of("cat p.txt | apply_patch") == [])
-check("a quoted << in an echo does not swallow the next lines",
-      files_of(f"echo '<<X'\napply_patch <<'EOF'\n{one('after.py')}\nEOF") == ["after.py"])
+check(
+    "two apply_patch heredocs in one command are both gated",
+    files_of(two_patches) == ["first.py", "second.py"],
+    str(files_of(two_patches)),
+)
+check(
+    "two patch blocks in one heredoc are both gated",
+    files_of(f"apply_patch <<'EOF'\n{one('a.py')}\n{one('b.py')}\nEOF")
+    == ["a.py", "b.py"],
+)
+decoy = (
+    f"echo '{one('decoy.py')}' >/dev/null; apply_patch <<'EOF'\n{one('real.py')}\nEOF"
+)
+check(
+    "a decoy patch in an echo does not hide the real one: only the real file is gated",
+    files_of(decoy) == ["real.py"],
+    str(files_of(decoy)),
+)
+check(
+    "rg -F with both markers is not a patch and does not raise",
+    files_of("rg -F '*** Begin Patch' x # apply_patch") == [],
+)
+check(
+    "a commit message naming apply_patch and holding both markers is not a patch",
+    files_of(f'git commit -m "fix apply_patch: {one("m.py")}"') == [],
+)
+check(
+    "an unclosed Begin marker in an rg command does not raise",
+    files_of("rg 'apply_patch|*** Begin Patch' .") == [],
+)
+check(
+    "a cat heredoc holding a patch example is not an edit of the example's path",
+    files_of(f"cat > notes.md <<'EOF'\nexample:\n{one('example.py')}\nEOF") == [],
+)
+check(
+    "text after a cat heredoc is still scanned, so a real patch there is gated",
+    files_of(
+        f"cat > notes.md <<'EOF'\n{one('example.py')}\nEOF\napply_patch <<'EOF'\n{one('real.py')}\nEOF"
+    )
+    == ["real.py"],
+)
+check(
+    "bash -c with an apply_patch heredoc is gated",
+    files_of("bash -c \"apply_patch <<'EOF'\n" + one("viabash.py") + '\nEOF"')
+    == ["viabash.py"],
+)
+check(
+    "apply_patch after && or ; or a pipe's left side is a command word and is gated",
+    files_of(f"cd x && apply_patch <<'EOF'\n{one('c.py')}\nEOF") == ["c.py"],
+)
+check(
+    "apply_patch given the patch as an argument is gated",
+    files_of('apply_patch "' + one("arg.py") + '"') == ["arg.py"],
+)
+check(
+    "an env assignment before apply_patch does not hide it",
+    files_of(f"FOO=1 apply_patch <<'EOF'\n{one('env.py')}\nEOF") == ["env.py"],
+)
+check(
+    "a malformed patch to a real apply_patch invocation still raises",
+    raises(
+        lambda: files_of(
+            "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: a\n+x\nEOF"
+        )
+    ),
+)
+check(
+    "a heredoc to apply_patch with no patch at all raises",
+    raises(lambda: files_of("apply_patch <<'EOF'\nhello\nEOF")),
+)
+check(
+    "apply_patch < file and cat p | apply_patch are left alone (no patch text in the command)",
+    files_of("apply_patch < p.txt") == [] and files_of("cat p.txt | apply_patch") == [],
+)
+check(
+    "a quoted << in an echo does not swallow the next lines",
+    files_of(f"echo '<<X'\napply_patch <<'EOF'\n{one('after.py')}\nEOF")
+    == ["after.py"],
+)
 
 # --- the adapter takes its guard down with it ---------------------------------------------
 import signal  # noqa: E402
 
-check("Codex SessionEnd is capped at its 3s limit", ha.effective_timeout("codex", "SessionEnd", 20) == 3.0)
-check("other events keep the registered timeout",
-      ha.effective_timeout("codex", "PreToolUse", 10) == 10 and ha.effective_timeout("gemini", "SessionEnd", 20) == 20)
-check("a capped SessionEnd budget is 2s", ha.budget(ha.effective_timeout("codex", "SessionEnd", 20)) == 2.0)
+check(
+    "Codex SessionEnd is capped at its 3s limit",
+    ha.effective_timeout("codex", "SessionEnd", 20) == 3.0,
+)
+check(
+    "other events keep the registered timeout",
+    ha.effective_timeout("codex", "PreToolUse", 10) == 10
+    and ha.effective_timeout("gemini", "SessionEnd", 20) == 20,
+)
+check(
+    "a capped SessionEnd budget is 2s",
+    ha.budget(ha.effective_timeout("codex", "SessionEnd", 20)) == 2.0,
+)
 with tempfile.TemporaryDirectory() as raw:
     pidfile = Path(raw) / "guard.pid"
-    entry = {"command": f"echo $$ > {pidfile}; exec sleep 60", "kind": "gate", "timeout": 120}
-    proc = subprocess.Popen(["bash", "-c", render_hooks.adapted(entry, "codex", "PreToolUse")], stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=str(ROOT),
-                            start_new_session=True)
+    entry = {
+        "command": f"echo $$ > {pidfile}; exec sleep 60",
+        "kind": "gate",
+        "timeout": 120,
+    }
+    proc = subprocess.Popen(
+        ["bash", "-c", render_hooks.adapted(entry, "codex", "PreToolUse")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        cwd=str(ROOT),
+        start_new_session=True,
+    )
     proc.stdin.write("{}")
     proc.stdin.flush()
     proc.stdin.close()
@@ -789,7 +1016,9 @@ with tempfile.TemporaryDirectory() as raw:
     # signal the adapter itself (the python child of the registration shell), as the runtime would
     adapter_pid = None
     for _ in range(50):  # the adapter is the registration shell's child
-        kids = subprocess.run(["pgrep", "-P", str(proc.pid)], capture_output=True, text=True).stdout.split()
+        kids = subprocess.run(
+            ["pgrep", "-P", str(proc.pid)], capture_output=True, text=True
+        ).stdout.split()
         if kids:
             adapter_pid = int(kids[0])
             break
@@ -802,8 +1031,11 @@ with tempfile.TemporaryDirectory() as raw:
         alive = True
     except OSError:
         alive = False
-    check("SIGTERM to the adapter leaves no live guard", not alive and proc.returncode == 2,
-          f"alive={alive} rc={proc.returncode}")
+    check(
+        "SIGTERM to the adapter leaves no live guard",
+        not alive and proc.returncode == 2,
+        f"alive={alive} rc={proc.returncode}",
+    )
     if alive:
         os.kill(guard_pid, signal.SIGKILL)
 
