@@ -24,6 +24,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+from paths import REPO
 LINT_TIMEOUT = 50
 TAIL = 25
 
@@ -165,7 +167,7 @@ def trusted(top):
     The lint command comes from top's harness.toml, so a session that has cd'd
     into some other repository must not run that repository's command.
     """
-    project = os.environ.get("CLAUDE_PROJECT_DIR") or str(ROOT)
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or str(REPO)
     mine = git(project, "rev-parse", "--path-format=absolute", "--git-common-dir")
     theirs = git(top, "rev-parse", "--path-format=absolute", "--git-common-dir")
     return bool(mine) and mine == theirs

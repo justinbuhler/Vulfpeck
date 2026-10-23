@@ -1,0 +1,15 @@
+# mutant_id: M030
+# target: scripts/harness_install.py
+# operator: disconnect-hook
+# behaviour: prior commit-msg and pre-push events remain callable after adoption
+--- a/scripts/harness_install.py
++++ b/scripts/harness_install.py
+@@ -296,7 +296,7 @@
+     config = "[commands]\n" + "".join(f"{key} = {json.dumps(commands[key])}\n" for key in ("setup", "lint", "test"))
+     config += "\n[tests]\ncount_pattern = " + json.dumps(commands["count_pattern"]) + "\n"
+     contents[".vulfpeck/harness.toml"] = config.encode()
+-    for name in sorted(events):
++    for name in sorted(set(OWNED_GIT_HOOKS)):
+         contents[f".vulfpeck/git-hooks/{name}"] = dispatcher(name, prior_path)
+     if previous and set(previous["files"]) - set(contents):
+         raise ValueError("release removes owned components; restore the previous installation before adopting it")

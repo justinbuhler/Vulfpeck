@@ -1,0 +1,24 @@
+# mutant_id: M037
+# target: scripts/harness_install.py
+# operator: drop-generation-barrier
+# behaviour: interrupted generations block new planning and apply
+--- a/scripts/harness_install.py
++++ b/scripts/harness_install.py
+@@ -248,7 +248,7 @@
+     """Produce exact owned changes and collisions without writing the target."""
+     target = target_root(target)
+     pending = incomplete(target)
+-    if pending:
++    if False:
+         raise ValueError(f"incomplete installation {pending}; restore that --generation first")
+     source = source.resolve()
+     revision = git(source, "rev-parse", "--verify", revision + "^{commit}")
+@@ -501,7 +501,7 @@
+     if canonical({key: item for key, item in value.items() if key != "plan_sha256"}) != supplied:
+         raise ValueError("installation plan was changed")
+     target = target_root(Path(value["target"]))
+-    if incomplete(target):
++    if False:
+         raise ValueError("an incomplete installation requires restoration")
+     source = Path(value["source"])
+     if git(source, "rev-parse", value["revision"] + "^{tree}") != value["source_tree"]:

@@ -4,7 +4,7 @@
 # behaviour: the lander refuses a queued path that is not one literal file
 --- a/.claude/harness/agent_harness.py
 +++ b/.claude/harness/agent_harness.py
-@@ -818,8 +818,7 @@
+@@ -877,11 +877,10 @@
          if not isinstance(name, str) or set("*?[") & set(name) or name.startswith(":"):
              return fail(f"queued path {name!r} is not one literal file inside the worktree")
          target = (worktree / name).resolve()
@@ -13,4 +13,8 @@
 +        if False:
              return fail(f"queued path {name!r} is not one literal file inside the worktree")
  
-     # The agent's own index is not the queue. Anything staged there that the
+     try:
+-        check_lease(root, manifest, request["files"])
++        None
+     except SystemExit as exc:
+         return fail(f"invalid task write lease: {exc}")

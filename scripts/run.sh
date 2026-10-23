@@ -11,20 +11,16 @@
 # failure mode a gate must never have.
 
 set -uo pipefail
-cd "$(dirname "$0")/.." || exit 1     # repository root
-mkdir -p .omc
-if [ "${HARNESS_REPOSITORY_LOCKED:-0}" != "1" ]; then
-  # No system ships both: flock is util-linux, lockf is BSD/macOS.
-  if command -v flock >/dev/null; then LOCK="flock"
-  elif command -v lockf >/dev/null; then LOCK="lockf -k"
-  else echo "flock or lockf is required to serialise repository verification"; exit 1
-  fi
-  # shellcheck disable=SC2086  # deliberate: LOCK carries lockf's -k as a word
-  exec $LOCK .omc/repository-verification.lock \
-    env HARNESS_REPOSITORY_LOCKED=1 "$0" "$@"
+CONTROL=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(python3 "$CONTROL/paths.py") || exit 1
+cd "$ROOT" || exit 1
+# The configured gate and direct suite share the same inherited OS mutex.
+LOCK_TOOL="$CONTROL/harness_lock.py"
+if ! python3 "$LOCK_TOOL" --root "$PWD" --name verification --check-held; then
+  exec python3 "$LOCK_TOOL" --root "$PWD" --name verification -- bash "$CONTROL/run.sh" "$@"
 fi
 
-. scripts/harness_env.sh
+. "$CONTROL/harness_env.sh"
 harness_load "$PWD" || exit 1
 
 TESTS_ONLY=0
@@ -45,7 +41,7 @@ trap 'rm -f "$log"' EXIT
 bash -c "$HARNESS_TEST" 2>&1 | tee "$log"
 fail=${PIPESTATUS[0]}
 if [ "$fail" = 0 ] && [ -n "$HARNESS_COUNT_PATTERN" ]; then
-  "${HARNESS_PY[@]}" scripts/harness_config.py --root "$PWD" --count "$log" >/dev/null || fail=1
+  "${HARNESS_PY[@]}" "$CONTROL/harness_config.py" --root "$PWD" --count "$log" >/dev/null || fail=1
 fi
 [ "$TESTS_ONLY" = 1 ] && exit "$fail"
 [ "$fail" = 0 ] || { echo "tests failed — stopping"; exit 1; }

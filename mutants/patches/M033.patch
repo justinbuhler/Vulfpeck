@@ -1,0 +1,14 @@
+# mutant_id: M033
+# target: scripts/run.sh
+# operator: stale-relative-path
+# behaviour: relative runner invocation survives cd and lock reexecution
+--- a/scripts/run.sh
++++ b/scripts/run.sh
+@@ -17,5 +17,5 @@
+ # The configured gate and direct suite share the same inherited OS mutex.
+-LOCK_TOOL="$CONTROL/harness_lock.py"
++LOCK_TOOL="$(cd "$(dirname "$0")" && pwd)/harness_lock.py"
+ if ! python3 "$LOCK_TOOL" --root "$PWD" --name verification --check-held; then
+-  exec python3 "$LOCK_TOOL" --root "$PWD" --name verification -- bash "$CONTROL/run.sh" "$@"
++  exec python3 "$LOCK_TOOL" --root "$PWD" --name verification -- bash "$0" "$@"
+ fi

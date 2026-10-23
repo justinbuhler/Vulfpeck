@@ -1,0 +1,15 @@
+# mutant_id: M031
+# target: scripts/harness_install.py
+# operator: relative-path
+# behaviour: linked Git discovers the owned primary dispatcher
+--- a/scripts/harness_install.py
++++ b/scripts/harness_install.py
+@@ -268,7 +268,7 @@
+         raise ValueError("old generation lacks the effective prior hook path; restore before upgrading")
+     prior_path = (previous.get("prior_hook_path", inherited or prior_directory) if previous else
+                   local_hook_path(target, local=False) or prior_directory)
+-    owned_hook_path = str(target / ".vulfpeck/git-hooks")
++    owned_hook_path = ".vulfpeck/git-hooks"
+     events = set(OWNED_GIT_HOOKS)
+     if previous:
+         events.update(Path(name).name for name in previous["files"] if name.startswith(".vulfpeck/git-hooks/"))

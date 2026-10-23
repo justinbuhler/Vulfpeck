@@ -1,0 +1,11 @@
+# mutant_id: M040
+# target: .claude/hooks/test_for_edited_module.py
+# operator: import-domain-reader
+# behaviour: mapped tests import only the owned config reader
+--- a/.claude/hooks/test_for_edited_module.py
++++ b/.claude/hooks/test_for_edited_module.py
+@@ -64,3 +64,3 @@
+     """Return (harness_config module, config) for one repository root."""
+-    sys.path.insert(0, str(SCRIPTS))
++    sys.path.insert(0, str(root / "scripts"))
+     import harness_config

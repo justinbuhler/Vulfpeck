@@ -27,6 +27,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from paths import CODE, REPO, root_for
 
 FILE = "harness.toml"
 
@@ -180,7 +181,14 @@ def load(root):
     Returns:
         (dict): DEFAULTS overlaid with root/harness.toml when it exists.
     """
-    path = Path(root) / FILE
+    owned = Path(root) / ".vulfpeck" / FILE
+    if CODE.name == ".vulfpeck":
+        root_for(Path(root))
+        local = Path(root) / FILE
+        if local.is_file() or (owned.is_file() and owned.resolve() != (CODE / FILE).resolve()):
+            raise ConfigError("installed command config conflicts with checkout-owned harness.toml; reconcile explicitly")
+        owned = CODE / FILE
+    path = owned if owned.is_file() else Path(root) / FILE
     if not path.is_file():
         return copy.deepcopy(DEFAULTS)
     try:

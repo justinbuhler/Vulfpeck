@@ -290,5 +290,19 @@ other = repo()
 rc, out = bash("git commit -m x", other)
 check("a repository with no task manifests passes", out == {}, str(out))
 
+# Bytes and staged identities must change even when porcelain does not.
+for staged in (False, True):
+    r = repo()
+    (r / "a.txt").write_text("first dirty bytes\n")
+    if staged:
+        git(r, "add", "a.txt")
+    sub("SubagentStart", r, agent_id=f"bytes-{staged}")
+    (r / "a.txt").write_text("second dirty bytes\n")
+    if staged:
+        git(r, "add", "a.txt")
+    _, outcome = sub("SubagentStop", r, agent_id=f"bytes-{staged}")
+    check(f"same-status {'staged' if staged else 'dirty'} bytes block review completion",
+          outcome.get("decision") == "block" and "contents" in outcome.get("reason", ""), str(outcome))
+
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

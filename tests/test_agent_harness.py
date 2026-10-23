@@ -53,6 +53,10 @@ def _clean_env():
 
 def run(*args, cwd, gate=True):
     """Run the harness CLI as a subprocess, the way an agent would."""
+    if args and args[0] == "provision":
+        task = args[args.index("--task") + 1]
+        lease = ["alpha.txt"] if task == "alpha" else ["a.txt", "renamed.txt"]
+        args = (*args, *(item for name in lease for item in ("--file", name)))
     return subprocess.run([sys.executable, str(HARNESS), *args], cwd=cwd,
                           capture_output=True, text=True, timeout=300,
                           env=_clean_env())
@@ -86,6 +90,7 @@ def make_repo(tmp, gate_exit=0):
     # inputs would show up as untracked and every worktree would read dirty.
     (repo / ".gitignore").write_text(
         "func/sources/*\n!func/sources/tracked.txt\n.env\nnested_cache/\n")
+    (repo / "harness.toml").write_text('[land]\ncopy_untracked = ["func/sources"]\n')
     (repo / "a.txt").write_text("one\n")
     git("add", "-A", cwd=repo)
     git("-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "first", cwd=repo)
@@ -178,7 +183,7 @@ check("and .env is not even reported as a cloned input",
 check("a worktrees directory would be refused too, by name",
       not H.clonable(".claude/worktrees") and not H.clonable(".claude/worktrees/other"))
 check("rebuildable caches are skipped", not H.clonable("a/__pycache__/b.pyc"))
-check("but real ignored data is cloned", H.clonable("output/x.json"))
+check("ordinary data can be explicitly selected", H.clonable("output/x.json"))
 # Each platform is pinned here because each CI runner only exercises its own.
 _platform = H.sys.platform
 try:
@@ -229,6 +234,7 @@ dirt_repo, dirt_first, _ = make_repo(dirt_tmp)
 (dirt_repo / "flow" / "logs").mkdir(parents=True)
 (dirt_repo / "flow" / ".gitignore").write_text("logs/\n")
 (dirt_repo / "flow" / "logs" / "daemon.log").write_text("noise\n")
+(dirt_repo / "harness.toml").write_text('[land]\ncopy_untracked = ["func/sources", "flow/logs"]\n')
 listed = subprocess.run(["git", "ls-files", "--others", "--ignored",
                          "--exclude-standard", "--directory"],
                         cwd=dirt_repo, capture_output=True, text=True,
@@ -265,18 +271,18 @@ check("a task name cannot be provisioned twice",
 print("\nan agent cannot queue a path belonging to another worktree")
 run("provision", "--task", "delta", "--baseline", FIRST,
     "--path", str(tmp / "wt-delta"), cwd=repo)
-(tmp / "wt-alpha" / "a.txt").write_text("alpha edit\n")
+(tmp / "wt-alpha" / "alpha.txt").write_text("alpha edit\n")
 (tmp / "wt-delta" / "a.txt").write_text("delta edit\n")
 out = run("enqueue", "--task", "delta", "-m", "reach across", "--file",
-          str(tmp / "wt-alpha" / "a.txt"), cwd=tmp / "wt-delta")
+          str(tmp / "wt-alpha" / "alpha.txt"), cwd=tmp / "wt-delta")
 check("enqueue refuses a file outside the task's worktree", out.returncode != 0)
 check("and names the boundary it refused", "outside task" in out.stderr, out.stderr.strip())
 check("no request reached the queue", not list((state / "queue").glob("*delta*")))
 check("enqueue requires at least one file",
       run("enqueue", "--task", "delta", "-m", "empty", cwd=tmp / "wt-delta").returncode != 0)
 
-print("\nthe two worktrees hold different content at the same relative path")
-check("wt-alpha keeps its own a.txt", (tmp / "wt-alpha" / "a.txt").read_text() == "alpha edit\n")
+print("\nthe two worktrees hold disjoint leased content")
+check("wt-alpha keeps its own alpha.txt", (tmp / "wt-alpha" / "alpha.txt").read_text() == "alpha edit\n")
 check("wt-delta keeps its own a.txt", (tmp / "wt-delta" / "a.txt").read_text() == "delta edit\n")
 
 print("\nverification re-reads the log and disagrees with a lying exit code")
@@ -366,7 +372,7 @@ check("and the ledger names the gate that ran",
 check("the consumed request left the queue", not list((state / "queue").glob("*.json")))
 check("and is retained for forensics", len(list((state / "done").glob("*.json"))) >= 2)
 check("wt-alpha was untouched by landing wt-delta",
-      (tmp / "wt-alpha" / "a.txt").read_text() == "alpha edit\n")
+      (tmp / "wt-alpha" / "alpha.txt").read_text() == "alpha edit\n")
 
 print("\nreconcile separates landed, queued and orphaned")
 out = run("reconcile", "--json", cwd=repo)
@@ -375,7 +381,7 @@ states = {row["task"]: row["state"] for row in report["tasks"]}
 check("the task whose commit landed reads LANDED", states.get("delta") == "LANDED", str(states))
 check("the task holding an uncommitted edit reads ORPHANED",
       states.get("alpha") == "ORPHANED", str(states))
-run("enqueue", "--task", "alpha", "-m", "alpha pending", "--file", "a.txt", cwd=tmp / "wt-alpha")
+run("enqueue", "--task", "alpha", "-m", "alpha pending", "--file", "alpha.txt", cwd=tmp / "wt-alpha")
 states = {row["task"]: row["state"]
           for row in json.loads(run("reconcile", "--json", cwd=repo).stdout)["tasks"]}
 check("a waiting request outranks the orphan reading", states.get("alpha") == "QUEUED", str(states))
@@ -721,26 +727,34 @@ check("a process that has exited does not", not H.alive(DEAD_PID))
 check("nor does a pid too large for kill()", not H.alive("9" * 20))
 check("and neither does an unreadable holder", not H.alive("") and not H.alive("nonsense"))
 
-lander_lock = state / "lander.lock"
-lander_lock.write_text(f"{os.getpid()}\n")
-out = run("land", "--once", cwd=repo)
-check("a second lander refuses while a live process holds the lock",
-      out.returncode != 0, out.stdout)
-check("and says who holds it", "already holds" in out.stderr, out.stderr.strip())
-
-# A lander killed between taking the lock and releasing it leaves this behind.
-# Before the takeover check, every later lander refused forever and the queue
-# needed a human to unwedge it. That happened during the harness's trial run.
-lander_lock.write_text(f"{DEAD_PID}\n")
-run("enqueue", "--task", "delta", "-m", "after a crashed lander", "--file", "a.txt",
-    cwd=tmp / "wt-delta")
+with H.repository_lock(repo, "queue"):
+    out = run("land", "--once", cwd=repo)
+    check("a second lander refuses while a descriptor owns the queue", out.returncode != 0, out.stdout)
+    check("and names the active mutex", "already holds" in out.stderr, out.stderr)
+run("enqueue", "--task", "delta", "-m", "after descriptor release", "--file", "a.txt", cwd=tmp / "wt-delta")
 (tmp / "wt-delta" / "a.txt").write_text("delta again\n")
 out = run("land", "--once", "--timeout", "120", cwd=repo)
-check("a lock left by a dead process is taken over, not obeyed forever",
-      "taking over" in out.stdout, out.stdout + out.stderr)
-check("and the queue drains rather than wedging",
-      not list((state / "queue").glob("*.json")), out.stdout)
-check("the lock is released when that lander finishes", not lander_lock.exists())
+check("closing ownership permits the next lander", out.returncode == 0, out.stdout + out.stderr)
+check("the queue drains rather than wedging", not list((state / "queue").glob("*.json")), out.stdout)
+check("the common queue mutex inode remains", (repo / ".git/harness/locks/queue.lock").is_file())
+
+print("\nwriter ownership must be literal, exclusive and explicitly verified")
+with tempfile.TemporaryDirectory() as lease_tmp:
+    lease_root, baseline, _ = make_repo(Path(lease_tmp))
+    one, two = Path(lease_tmp) / "one", Path(lease_tmp) / "two"
+    first = run("provision", "--task", "first", "--baseline", baseline, "--path", str(one), cwd=lease_root)
+    check("writer starts only after lease creation", first.returncode == 0, first.stderr)
+    overlap = run("provision", "--task", "second", "--baseline", baseline, "--path", str(two), cwd=lease_root)
+    check("same-file concurrent lease is refused before worktree creation", overlap.returncode != 0
+          and "overlap" in overlap.stderr and not two.exists(), overlap.stderr)
+    undeclared = run("enqueue", "--task", "first", "-m", "outside lease", "--file", "unleased.txt", cwd=one)
+    check("enqueue refuses an undeclared writer path", undeclared.returncode != 0 and "lease" in undeclared.stderr)
+    wrong = run("release", "--task", "first", "--expect", "wrong", cwd=lease_root)
+    check("failed verification retains the active lease", wrong.returncode != 0)
+    released = run("release", "--task", "first", "--expect", baseline, cwd=lease_root)
+    check("clean expected-tip verification releases ownership", released.returncode == 0, released.stderr)
+    second = run("provision", "--task", "second", "--baseline", baseline, "--path", str(two), cwd=lease_root)
+    check("verified transfer permits the dependent writer", second.returncode == 0, second.stderr)
 
 print("\nno git subprocess in this file may inherit the gate's environment")
 # GIT_DIR + GIT_WORK_TREE reaching `git init` writes core.worktree into the

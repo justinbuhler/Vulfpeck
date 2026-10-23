@@ -3,6 +3,50 @@
 Dated failures, measurements, limitations, and implementation history (AGENTS.md ownership pointers).
 Newest first. Each entry: date, what happened, how it was measured, what changed.
 
+## 2026-10-22 - installed domain hook propagation corrections
+
+Independent scoped review requested changes because adoption disconnected prior Git hook events, linked Git resolved the owned relative hook path locally, mapped edits required an unowned domain reader, and relative runner invocation lost its location after changing directory.
+Real disposable Git and installed-hook cases reproduce these failures in `tmp/json/installer-domain-before.json` and `tmp/txt/installer-domain-before.log`.
+The corrective cases exercise prior commit-msg and pre-push refusal, distinct worktree-relative hooks, actual edit registrations, and relative runner reexecution.
+The installer now records an absolute owned dispatcher path and preserves prior relative hook paths and event dispatchers across adoption, upgrade and restore.
+Mapped edits import owned code and normalize the execution root; the runner reuses its absolute control directory.
+Focused before/after and individual fault detections are retained in `tmp/json/installer-domain-corrections.json`; parent integration and release review remain separate.
+
+The subsequent real native preflight rejected the inherited environment set map before inference, without an authorizing receipt.
+A leaf `set.PATH` override recursively merged other user set keys; replacing the aggregate map is not supported by the inspected native merge semantics.
+The native lane's correction filters inherited keys with `shell_environment_policy.include_only=["PATH"]`, retains public PATH and verifies the effective environment.
+The retained failure is `tmp/json/native-review-live-codex-corrected-proof.json`; no global configuration changed.
+
+## 2026-10-22 - receipt fixture race and owned installation
+
+The full configured gate on immutable e641bd4 failed in the concurrent land fixture with a missing worker result.
+A focused land rerun passed under the actual outer verification mutex, so that result alone did not identify a lock defect.
+Independent concurrent calls to the real approval fixture reproduced `isolation evidence digest does not match`: reviewers truncated the same fixture evidence files while peers hashed them.
+The retained reproduction is `tmp/json/core-receipt-fixture-race.json`.
+Each fixture launch now writes a unique evidence directory, concurrent checks validate every receipt, and land worker exceptions retain their full traceback.
+Production evidence hash validation remains strict.
+
+The owned installer separates payload CODE from governed REPO, journals local changes and restores only owned entries, policy spans and files.
+The disposable adoption, upgrade and restore record is `tmp/json/installer-adoption-proof.json`.
+It exercises actual installed Claude/native registrations and the configured gate, retains stronger user policy and foreign additions, and refuses edited ownership or ambiguous linked policy.
+This local proof does not approve native hook trust or authorize a real target installation.
+
+The earlier invocation-only native trust probe used quoted dotted keys on the override's left side.
+Inspection and a live metadata probe confirmed that Codex splits those keys literally on dots; aggregate TOML values on the right side activate the intended project and hook keys.
+The corrected public no-tools sentinel also required `features.apps=false` to remove implicit `codex_apps`, separately from the default app policy.
+The literal proof is `tmp/json/native-readonly-sentinel-proof.json`; global configuration was unchanged.
+
+The later exact native reviewer launch failed closed after preflight and a registered turn, without an authorizing receipt.
+The diagnostic attempt identified `mcpToolCall` for server `codex`, tool `list_mcp_resources`; that native discovery classification remained under tagged-source review at this installer checkpoint.
+The retained failures are `tmp/json/native-review-live-codex-proof.json` and `tmp/txt/g/native-review-live/tmp/json/review-cbdc9a299aa44180/native-events.jsonl`.
+These failures do not supersede the earlier no-tools sentinel or prove completion of the actual reviewer launcher.
+No global configuration was changed by either failed launch.
+Tagged native source identifies the resource-list event as built-in discovery that can aggregate active MCP connections.
+The launcher's pending correction permits only empty built-in listings after measured native status proves every external server disabled and every external catalogue empty; external fetches and unknown tools remain refused.
+A separate reproduced launch bug supplied `thread/start environments=[]`, which disables environment access.
+The pending correction omits that override and verifies the returned sole local environment and its exact clone roots.
+The parent still owns the corrected live retry; this checkpoint records no successful actual reviewer turn.
+
 ## 2026-10-22 - native Codex trust and linked-worktree activation
 
 The native policy probe using the real `~/.codex` did not load the untrusted project layer.
@@ -44,3 +88,39 @@ The lander's hard-coded input provisioning was replaced by `land.copy_untracked`
 
 Fixed: the mutation runner crashed with `ZeroDivisionError` on an empty corpus, wrote its ledger at the repository root while `CLAUDE.md` named `mutants/`, and missed indented `N passed` lines (199 of 488 checks counted). A `CLAUDE_VERIFY_ON_STOP` setting had no consumer and was removed.
 Measured: suite and lint pass in a clean environment with no git identity and no `codegraph`; `land.sh` landed a branch end to end in a scratch clone; the runner killed M001.
+
+## 2026-10-22 - native event adapter and commit proof
+
+Added per-file native patch adaptation with rename coverage, path validation, shell execution workdir handling and stable lifecycle identities.
+Existing policy scripts still decide ADR, test, routing, snapshot and session outcomes.
+The adapter bounds policy subprocesses and kills their process groups on inner timeouts, then emits explicit gate denials; advisory crashes continue.
+Claude gate registrations now use onFailure:block, which installed Claude 2.1.305 supports according to the documented 2.1.295 floor.
+Installed Codex 0.163.0 source leaves outer command-hook timeout, invalid output and untrusted definitions non-blocking; this is a runtime restriction, not repaired by the adapter.
+The real local doctor config/read and hooks/list probe is retained at tmp/json/native-doctor-phase1.json.
+Its effective configuration response is restricted to safe layer metadata; it is not a byte-for-byte config response and contains no copied credential configuration.
+The probe found real user project trust disabled and the new project registrations absent.
+No user or global trust/configuration was modified.
+Paired commit receipts now capture branch, HEAD and status before and after supported plain, git-C and RTK commands, so quiet output does not hide failure.
+Receipt command identity is hashed rather than storing shell command text.
+The native review launcher remains pending the integration receipt core and real isolation canary.
+
+The documented worktree_capacity.py helper was absent from both ~/.claude/scripts and ~/.claude/skills/process/worktree-agent/scripts.
+Work continued in the existing isolated candidate checkout; no checkout was allocated.
+Explicit git -C addresses the intended checkout when global home-cwd hook detection otherwise reports not-a-repo.
+No global toolkit script was changed.
+
+## 2026-10-22 - review range and accepted installer journal corrections
+
+Independent review identified a registered review baseline that could omit candidate-only ancestors from the reviewed diff.
+Real B -> A -> C fixtures registered approvals from A and C, then the old lander integrated both commits onto B and ran the gate.
+A retry fixture also integrated after origin reconciliation disappeared and a peer advanced the target without A.
+The lander now checks the registered baseline against each reconciled scratch target before its candidate merge.
+Older common baselines and already-reachable candidates remain valid.
+
+The actual a2b1ac7 installer produced schema-1 journals accepted by current verification but rejected by current restore with `KeyError('owned_hook_path')`.
+Restore now uses the same relative-path fallback as verification.
+Real old-release adoption, upgrade restoration and interrupted-upgrade rollback cases exercise the current CLI against those retained journals; this is an unreleased accepted-state correction, not a deployed incident.
+
+An actual local `git send-pack` was refused by a relative pre-receive hook in the target Git directory before adoption, then accepted after adoption because event discovery inspected only checkout directories.
+Discovery now includes each registered checkout's actual Git directory.
+A linked checkout created before adoption carries a unique prior post-rewrite event and verifies its working directory, input, argument and refusal through Git.

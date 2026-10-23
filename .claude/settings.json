@@ -7,12 +7,14 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/require_agent_model.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"require_agent_model.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
-            "timeout": 5
+            "timeout": 5,
+            "onFailure": "block"
           },
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/model_router.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"model_router.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
-            "timeout": 5
+            "timeout": 5,
+            "onFailure": "block"
           }
         ]
       },
@@ -27,7 +29,8 @@
           {
             "type": "command",
             "timeout": 10,
-            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "onFailure": "block"
           }
         ]
       },
@@ -38,6 +41,12 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/queue_guard.py\" || true",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_commit_landed.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"verify_commit_landed.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 10,
+            "onFailure": "block"
           }
         ]
       }
@@ -49,7 +58,8 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_commit_landed.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"verify_commit_landed.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
-            "timeout": 10
+            "timeout": 10,
+            "onFailure": "block"
           }
         ]
       },
@@ -59,12 +69,14 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/test_for_edited_module.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"test_for_edited_module.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
-            "timeout": 70
+            "timeout": 70,
+            "onFailure": "block"
           },
           {
             "type": "command",
             "timeout": 10,
-            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "onFailure": "block"
           }
         ]
       }

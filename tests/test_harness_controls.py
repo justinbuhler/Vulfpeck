@@ -49,6 +49,7 @@ EXPECTED = {
     ("SessionStart", "startup", "codegraph_freshness.py", "advisory"),
     ("SessionStart", "startup", "harness_doctor.py", "advisory"),
     ("PreToolUse", "Bash", "queue_guard.py", "advisory"),
+    ("PreToolUse", "Bash", "verify_commit_landed.py", "gate"),
     ("SubagentStart", "", "readonly_guard.py", "advisory"),
     ("SubagentStop", "", "readonly_guard.py", "advisory"),
     ("Stop", "", "session_guard.py", "advisory"),
@@ -112,6 +113,11 @@ for event, matcher, script, kind in sorted(EXPECTED):
     check(f"{script} exists", path.is_file(), str(path))
     _, timeout = REG.get((event, matcher, script), ("", None))
     check(f"{event} {script} declares a timeout", isinstance(timeout, int) and timeout > 0)
+    definition = next(h for g in json.loads(SETTINGS.read_text())["hooks"][event]
+                      if g.get("matcher", "") == matcher for h in g["hooks"]
+                      if script_of(h["command"]) == script)
+    check(f"{event} {script} declares runtime failure direction",
+          definition.get("onFailure") == "block" if kind == "gate" else "onFailure" not in definition)
 
 
 def command(event, matcher, script):
@@ -163,6 +169,7 @@ with tempfile.TemporaryDirectory() as raw:
     project = Path(raw)
     (project / "scripts").mkdir()
     shutil.copy2(ROOT / "scripts" / "harness_config.py", project / "scripts")
+    shutil.copy2(ROOT / "scripts" / "paths.py", project / "scripts")
     (project / "harness.toml").write_text(
         '[[mapped_tests]]\nmatch = "*.txt"\ntests = ["{dir}/check_{stem}.sh"]\ncommand = "bash {test}"\n')
     (project / "a.txt").write_text("x\n")
@@ -198,7 +205,7 @@ with tempfile.TemporaryDirectory() as raw:
     (project / ".claude" / "hooks").mkdir(parents=True)
     shutil.copy2(ROOT / ".claude" / "hooks" / "adr_gate.py", project / ".claude" / "hooks")
     (project / "scripts").mkdir()
-    for name in ("adr.py", "harness_config.py", "harness_events.py"):
+    for name in ("adr.py", "harness_config.py", "harness_events.py", "paths.py"):
         shutil.copy2(ROOT / "scripts" / name, project / "scripts")
     pre, _ = command("PreToolUse", "Edit|Write", "adr_gate.py")
     post, _ = command("PostToolUse", "Edit|Write", "adr_gate.py")

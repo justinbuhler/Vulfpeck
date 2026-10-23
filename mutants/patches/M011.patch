@@ -1,15 +1,15 @@
 # mutant_id: M011
 # target: .claude/hooks/readonly_guard.py
 # operator: drop-branch
-# behaviour: a read-only agent's working-tree change blocks its stop
+# behaviour: a read-only agent changing already-dirty bytes blocks its stop
 --- a/.claude/hooks/readonly_guard.py
 +++ b/.claude/hooks/readonly_guard.py
-@@ -94,7 +94,7 @@
-     for key, label in (("head", "HEAD"), ("branch", "checked-out branch"), ("main", "local main")):
-         if before.get(key) != after.get(key):
-             out.append(f"{label}: {(before.get(key) or '-')[:12]} -> {(after.get(key) or '-')[:12]}")
--    if before.get("status_sha") != after.get("status_sha"):
-+    if False:
-         was, now = set(before.get("status", [])), set(after.get("status", []))
-         changed = sorted((now - was) | (was - now))
-         shown = ", ".join(line[3:] for line in changed[:8])
+@@ -157,7 +157,7 @@
+     contents, index_sha = content_state(top)
+     return {
+         "refs": refs(top),
+-        "contents": contents,
++        "contents": {},
+         "index_sha": index_sha,
+         "writer_branches": sorted(writer_branches(top)),
+         "gitdir_sha": gitdir_state(top),

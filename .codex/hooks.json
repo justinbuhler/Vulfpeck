@@ -2,12 +2,91 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^spawn_agent$",
         "hooks": [
           {
             "type": "command",
-            "command": "root=$(git rev-parse --show-toplevel) && python3 \"$root/.claude/hooks/model_router.py\" --runtime codex || { rc=$?; echo \"Codex model routing failed (rc=$rc); failing closed\" >&2; exit 2; }",
-            "timeout": 5
+            "command": "root=$(git rev-parse --show-toplevel) && python3 \"$root/scripts/native_hook_adapter.py\" || { rc=$?; echo \"Native policy adapter failed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 75
+          }
+        ],
+        "matcher": "^(spawn_agent|apply_patch|Bash|exec_command|shell_command)$"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 \"$root/scripts/native_hook_adapter.py\" || { rc=$?; echo \"Native policy adapter failed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 75
+          }
+        ],
+        "matcher": "^(apply_patch|Bash|exec_command|shell_command)$"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 \"$root/scripts/native_hook_adapter.py\" || true",
+            "timeout": 75
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 \"$root/scripts/native_hook_adapter.py\" || true",
+            "timeout": 75
+          }
+        ],
+        "matcher": "startup|resume|clear|compact|fork"
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 \"$root/scripts/native_hook_adapter.py\" || true",
+            "timeout": 40
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 \"$root/scripts/native_hook_adapter.py\" || true",
+            "timeout": 40
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 \"$root/scripts/native_hook_adapter.py\" || true",
+            "timeout": 75
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 \"$root/scripts/native_hook_adapter.py\" || true",
+            "timeout": 3
           }
         ]
       }

@@ -1,0 +1,10 @@
+# mutant_id: M042
+# target: scripts/land.sh
+# operator: drop-range-check
+# behaviour: review baseline covers every candidate change entering the target
+--- a/scripts/land.sh
++++ b/scripts/land.sh
+@@ -285,2 +285,2 @@
+-  git -C "$LWT" merge-base --is-ancestor "$REVIEW_BASE" HEAD \
++  true \
+     || die "review baseline $REVIEW_BASE is not covered by the integration target; main is unchanged"
