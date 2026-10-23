@@ -9,14 +9,15 @@ the tool call looking successful with no new commit.
 
     PreToolUse   a command that runs `git commit`: record HEAD and the number of
                  HEAD reflog entries in the directory the commit runs in. Each
-                 call gets its own baseline file; PostToolUse takes the oldest
-                 for that call id (else session and command), so parallel
-                 identical commands each get theirs.
+                 call gets its own baseline file; PostToolUse takes the newest
+                 for that call id (else session and command), and a Pre drops
+                 that key's baselines older than ten minutes, so a Pre whose Post
+                 never ran cannot stand in for the current call.
     PostToolUse  read both again. Unchanged means no commit was created: block.
                  Git's output is a second witness: a `[branch sha]` line must
-                 equal the new HEAD, and a failure marker (index.lock, nothing
-                 to commit, a hook rejection) with no sha line blocks even when
-                 HEAD moved, because a peer commit in the same worktree can move it.
+                 equal the new HEAD, and a git failure line (`fatal:`, `error:`,
+                 `Unable to create ... index.lock`) with no sha line blocks even
+                 when HEAD moved, because a peer commit in the same worktree can move it.
 
 With no recorded baseline (the PreToolUse call crashed, never fired, or its file was
 taken) the old output check applies: block unless the output holds a `[branch sha]`
@@ -37,8 +38,9 @@ from pathlib import Path
 STALE_SECONDS = 86400  # a baseline whose PostToolUse never ran
 # `[main 1a2b3c4] subject` - the one line a successful commit prints.
 LANDED = re.compile(r"^\[[^\]\n]* ([0-9a-f]{7,40})\]", re.M)
-# What git or a hook prints when a commit is refused.
-FAILED = re.compile(r"index\.lock|nothing (?:added )?to commit|^fatal:|hook .*(?:exit|fail|reject)", re.M | re.I)
+# git's own failure lines. Anchored: another command's words (`git status`: "nothing to commit") are not a failed commit.
+FAILED = re.compile(r"^(?:fatal|error):|^Unable to create .*index\.lock", re.M)
+SAME_CALL_STALE = 600  # seconds: a Pre of this call whose Post never ran is dropped by the next Pre
 
 
 def commit_dir(command, cwd):
@@ -128,16 +130,18 @@ def save_baseline(where, event):
     if folder is None:
         return
     folder.mkdir(parents=True, exist_ok=True)
+    key = call_key(event)
     for old in folder.glob("*.json"):
-        if time.time() - old.stat().st_mtime > STALE_SECONDS:
+        limit = SAME_CALL_STALE if old.name.startswith(key + ".") else STALE_SECONDS
+        if time.time() - old.stat().st_mtime > limit:
             old.unlink(missing_ok=True)
     (folder / f"{call_key(event)}.{time.time_ns()}.{os.getpid()}.json").write_text(json.dumps(position(where)))
 
 
 def take_baseline(where, event):
-    """Return and remove the oldest baseline recorded for this call, or None."""
+    """Return and remove the newest baseline recorded for this call, or None."""
     folder = baseline_dir(where)
-    for path in sorted(folder.glob(f"{call_key(event)}.*.json")) if folder else []:
+    for path in sorted(folder.glob(f"{call_key(event)}.*.json"), reverse=True) if folder else []:
         try:
             before = json.loads(path.read_text())
             path.unlink()

@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -186,14 +187,51 @@ with tempfile.TemporaryDirectory() as tmp:
     git(tmp, "commit", "-q", "--allow-empty", "-m", "peer")
     check("a peer commit moving HEAD, with our output naming another sha, blocks",
           fire(tmp, "PostToolUse", "git commit -m mine", session="peer2", stdout="[main deadbee] mine")[0] != "")
-    fire(tmp, "PreToolUse", "git commit -m mine", session="peer3")
-    git(tmp, "commit", "-q", "--allow-empty", "-m", "peer")
-    check("a peer commit moving HEAD, with our commit refused by a hook, blocks",
-          fire(tmp, "PostToolUse", "git commit -m mine", session="peer3",
-               stdout="husky - pre-commit hook exited with code 1")[0] != "")
     fire(tmp, "PreToolUse", "git commit -q -m ok", session="peer4")
     git(tmp, "commit", "-q", "--allow-empty", "-m", "ok")
     check("HEAD moved and a quiet success still passes", fire(tmp, "PostToolUse", "git commit -q -m ok", session="peer4")[0] == "")
+
+    # Failure markers are git's own line prefixes. Words from another command in the same call
+    # (`git status` printing "nothing to commit") must not read as a failed commit.
+    quiet_cmd = "git commit -qam quiet; git status"
+    fire(tmp, "PreToolUse", quiet_cmd, session="st")
+    git(tmp, "commit", "-q", "--allow-empty", "-m", "quiet")
+    check("a landed `commit -q; git status` whose output says 'nothing to commit' passes",
+          fire(tmp, "PostToolUse", quiet_cmd, session="st",
+               stdout="On branch main\nnothing to commit, working tree clean")[0] == "")
+    fire(tmp, "PreToolUse", "git commit -m noop", session="noop")
+    check("a no-op commit still blocks (HEAD did not move)",
+          fire(tmp, "PostToolUse", "git commit -m noop", session="noop",
+               stdout="nothing to commit, working tree clean")[0] != "")
+    fire(tmp, "PreToolUse", "git commit -m x", session="sub")
+    git(tmp, "commit", "-q", "--allow-empty", "-m", "fatal: not a typo")
+    check("a subject containing 'fatal:' with a `[branch sha]` line passes",
+          fire(tmp, "PostToolUse", "git commit -m x", session="sub",
+               stdout=f"[main {git(tmp, 'rev-parse', '--short', 'HEAD')}] fatal: not a typo")[0] == "")
+    fire(tmp, "PreToolUse", "git commit -m x", session="hk")
+    git(tmp, "commit", "-q", "--allow-empty", "-m", "peer")
+    check("ordinary hook output does not read as a failure marker when HEAD moved",
+          fire(tmp, "PostToolUse", "git commit -m x", session="hk",
+               stdout="pre-commit hook: lint failed on an unrelated file, continuing")[0] == "")
+
+    # A baseline whose Post never ran must not be taken in place of the current call's.
+    stale_cmd = "git commit -q -m stale"
+    fire(tmp, "PreToolUse", stale_cmd, session="old")
+    git(tmp, "commit", "-q", "--allow-empty", "-m", "moves HEAD after the stale Pre")
+    fire(tmp, "PreToolUse", stale_cmd, session="old")
+    check("a later failing commit blocks even though an older baseline of the same call is on disk",
+          fire(tmp, "PostToolUse", stale_cmd, session="old")[0] != "")
+    commits = Path(git(tmp, "rev-parse", "--path-format=absolute", "--git-common-dir")) / "harness" / "commits"
+    for leftover in commits.glob("*.json"):
+        leftover.unlink()
+    fire(tmp, "PreToolUse", stale_cmd, session="old2")
+    (old_file,) = [f for f in commits.glob("*.json")]
+    os.utime(old_file, (time.time() - 700, time.time() - 700))
+    fire(tmp, "PreToolUse", stale_cmd, session="old2")
+    check("a Pre removes the same call's baselines older than 10 minutes",
+          not old_file.exists() and len(list(commits.glob("*.json"))) == 1)
+    for leftover in commits.glob("*.json"):
+        leftover.unlink()
 
     # Parallel identical commands (no tool id) each keep their own baseline; the first lands, the second fails.
     cmd = "git commit -q --allow-empty -m par"
