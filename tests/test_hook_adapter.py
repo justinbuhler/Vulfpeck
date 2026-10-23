@@ -553,6 +553,10 @@ with tempfile.TemporaryDirectory() as raw:
         "verify_commit_landed.py",
         "test_for_edited_module.py",
         "adr_gate.py",
+        "loop_guard.py",
+        "scope_guard.py",
+        "budget_guard.py",
+        "turn_guard.py",
     }
     for runtime in ("codex", "gemini"):
         for (event, matcher, script), command in sorted(REG[runtime].items()):
