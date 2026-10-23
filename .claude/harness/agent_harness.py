@@ -259,8 +259,10 @@ def refuse_if_dirty(path):
 # would put somebody else's work inside this one - the exact contamination this
 # harness exists to prevent. `.env` holds credentials, and the suite runs with
 # no network and no keys, so a scratch worktree has no reason to carry them.
+# `tmp/` is scratch and holds the task worktrees themselves: cloning it into a
+# worktree under it copies the worktree into itself, recursively.
 # The rest are caches that uv and the interpreter rebuild.
-NEVER_CLONE = (".env", ".claude/worktrees", ".venv", ".git", ".claude-flow")
+NEVER_CLONE = (".env", ".claude/worktrees", ".venv", ".git", ".claude-flow", "tmp")
 CACHE_NAMES = {
     "__pycache__",
     ".pytest_cache",
