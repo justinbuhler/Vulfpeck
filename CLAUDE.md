@@ -9,6 +9,7 @@ Rules live in `AGENTS.md`; this file holds only what is specific to Claude Code.
 - The Agent-matcher hooks run `require_agent_model.py`, which denies an `Agent` call with no or `inherit` model, and `model_router.py`, which denies an `Agent` call whose `model` does not match its `subagent_type` tier (Haiku: Explore; Sonnet: implementation engineers and code-simplifiers; Opus or Fable: review, planning and dual-derive) and passes unlisted types and `fork`. Neither routes the interactive parent session.
 - Every tracked `.claude/workflows/*.js` `agent()` call selects a named ROLE; `tests/test_workflow_routing.py` pins ROLE-to-model mappings and workflow inventory.
 - Gate decisions are recorded, hash-chained, in `.git/harness/events.jsonl` by `scripts/harness_events.py`; `python3 scripts/harness_events.py verify` checks the chain.
+- Codex runs the hooks of the main checkout, not of a linked worktree: a branch that changes hook registration is only exercised under Codex from a standalone clone or after it lands on main (`scripts/harness_doctor.py --runtimes` reports it).
 - Skills live once in `.agents/skills/`; `.claude/skills` links to it. Gemini and Codex load project skills, settings and agent roles only after the owner trusts the folder.
 
 ## Agent skills
