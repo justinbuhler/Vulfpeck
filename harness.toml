@@ -29,6 +29,24 @@ require_for = [".claude/hooks/**", ".claude/agents/**", ".claude/skills/**",
                "scripts/**", "mutants/*.py"]
 exempt = []
 
+[jev]
+enabled = true                          # JEV_DISABLE=1 also turns it off
+timeout = 8.0                           # seconds per request
+
+[tiers]
+# Floor globs for scripts/jev.py consequence, checked critical, high, medium, low;
+# a path matching none is Medium and a change's floor is its highest path. Jev may
+# raise the tier, never lower it. Rules and machinery files are High.
+low = ["README.md", "ENGINEERING_LOG.md", "HARNESS.md", "docs/**"]
+medium = ["docs/adr/**"]
+high = [".claude/**", ".agents/**", ".codex/**", ".gemini/**", ".github/**", ".githooks/**",
+        "AGENTS.md", "CLAUDE.md", "**/AGENTS.md", "**/CLAUDE.md", "harness.toml",
+        "scripts/paths.py", "scripts/harness_config.py", "scripts/jev.py", "scripts/plan_tests.py",
+        "scripts/standalone_tests.sh", "scripts/land.sh", "scripts/gate.sh", "scripts/run.sh",
+        "mutants/**", "tests/**", "scripts/harness_env.sh", "scripts/adr.py",
+        "docs/agents/**", "docs/mutation-testing.md"]
+critical = []
+
 [hooks]
 watched_files = ["harness.toml", "scripts/paths.py", "scripts/harness_config.py",
                  "scripts/gate.sh", "scripts/land.sh", "scripts/run.sh", ".claude/settings.json"]
@@ -37,6 +55,6 @@ skip_dirs = [".venv", "__pycache__", "node_modules", ".git"]
 
 [[mapped_tests]]
 match = "*.py"
-self = "test_*.py"
+self = "*tests/test_*.py"
 tests = ["{dir}/tests/test_{name}", "tests/test_{name}"]
 command = "uv run --no-sync python3 {test}"

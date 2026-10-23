@@ -115,6 +115,48 @@ for toml, expect in (
     got = config_error(toml) or ""
     check(f"[adr] refuses {toml.splitlines()[1]!r}", expect in got, got)
 
+# --- [jev] and [tiers] ----------------------------------------------------------
+check("no harness.toml: Jev is enabled with an 8 second timeout",
+      d0["jev"]["enabled"] is True and d0["jev"]["timeout"] == 8.0)
+check("no harness.toml: only plain docs are Low, ADRs are Medium",
+      d0["tiers"]["low"] == ["README.md", "ENGINEERING_LOG.md", "HARNESS.md", "docs/**"]
+      and d0["tiers"]["medium"] == ["docs/adr/**"] and d0["tiers"]["critical"] == [])
+check("no harness.toml: rules and machinery are High",
+      {"harness.toml", "AGENTS.md", "CLAUDE.md", ".claude/**", ".agents/**", ".codex/**", ".gemini/**",
+       ".github/**", "scripts/paths.py", "scripts/harness_config.py", "scripts/jev.py", "scripts/plan_tests.py",
+       "scripts/standalone_tests.sh", "scripts/land.sh", "scripts/gate.sh", "scripts/run.sh", "mutants/**",
+       "tests/**", "scripts/harness_env.sh", "scripts/adr.py", "docs/agents/**", "docs/mutation-testing.md"} <= set(d0["tiers"]["high"]))
+mt = Path(tempfile.mkdtemp(prefix="harness-config-mt.")).resolve()
+for rel in ("scripts/test_helper.py", "scripts/plan.py", "tests/test_plan.py", "tests/test_other.py",
+            "pkg/scripts/tests/test_mod.py", "pkg/mod.py", "pkg/tests/test_mod.py"):
+    (mt / rel).parent.mkdir(parents=True, exist_ok=True)
+    (mt / rel).write_text("x\n")
+check("default rule: a script named test_*.py outside tests/ is not its own test",
+      harness_config.mapped_test(d0, mt, mt / "scripts/test_helper.py") is None)
+check("default rule: scripts/plan.py maps to tests/test_plan.py",
+      harness_config.mapped_test(d0, mt, mt / "scripts/plan.py")[0] == mt / "tests/test_plan.py")
+check("default rule: a file under tests/ is its own test",
+      harness_config.mapped_test(d0, mt, mt / "tests/test_other.py")[0] == mt / "tests/test_other.py")
+check("default rule: a file under a folder's scripts/tests/ is its own test",
+      harness_config.mapped_test(d0, mt, mt / "pkg/scripts/tests/test_mod.py")[0] == mt / "pkg/scripts/tests/test_mod.py")
+jv = Path(tempfile.mkdtemp(prefix="harness-config-jev."))
+(jv / "harness.toml").write_text('[jev]\nenabled = false\ntimeout = 2\n[tiers]\ncritical = ["scripts/x.py"]\n')
+j = harness_config.load(jv)
+check("[jev] and [tiers] overrides are read",
+      j["jev"] == {"enabled": False, "timeout": 2} and j["tiers"]["critical"] == ["scripts/x.py"]
+      and "docs/**" in j["tiers"]["low"])
+for toml, expect in (
+        ('[jev]\nenabled = "yes"\n', "jev.enabled must be true or false"),
+        ('[jev]\ntimeout = 0\n', "jev.timeout must be a number of seconds above 0"),
+        ('[jev]\ntimeout = true\n', "jev.timeout must be a number of seconds above 0"),
+        ('[jev]\nretries = 3\n', "unknown key jev.retries"),
+        ('[tiers]\nextra = ["a"]\n', "unknown key tiers.extra"),
+        ('[tiers]\nmedium = ["/etc"]\n', "tiers.medium: '/etc' must be a relative path"),
+        ('[tiers]\nhigh = "scripts/x.py"\n', "tiers.high must be a list of strings"),
+        ('[tiers]\nhigh = ["../x"]\n', "tiers.high: '../x' must be a relative path")):
+    got = config_error(toml) or ""
+    check(f"{toml.splitlines()[1]!r} is refused", expect in got, got)
+
 # --- count: last match wins, zero and absence both fail -----------------------
 cfg = harness_config.merge({"tests": {"count_pattern": r"(\d+) passed"}})
 check("count takes the last match", harness_config.count(cfg, "1 passed\n9 passed\n") == 9)
