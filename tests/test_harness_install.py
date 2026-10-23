@@ -242,5 +242,63 @@ with tempfile.TemporaryDirectory() as raw:
     check("the doctor words the finding plainly",
           any(p.startswith("Codex in this worktree runs main's hooks: stale") for p in problems), str(problems))
 
+
+# --- trust writes never corrupt or override existing config ---------------------------
+import tomllib  # noqa: E402
+
+with tempfile.TemporaryDirectory() as raw:
+    h = Path(raw).resolve()
+    target = h / "proj"
+    cfg = h / ".codex" / "config.toml"
+    cfg.parent.mkdir()
+
+    def codex_case(text):
+        """Write `text` as the Codex config, run trust_codex, return (message or SystemExit text, file text)."""
+        cfg.write_text(text)
+        try:
+            out = harness_install.trust_codex(target, h)
+        except SystemExit as exc:
+            out = "REFUSED: " + str(exc)
+        return out, cfg.read_text()
+
+    broken = 'model = "x"\n[projects\n'
+    out, after = codex_case(broken)
+    check("an unparseable Codex config is refused and left byte for byte", out.startswith("REFUSED") and after == broken, out)
+    for label, text in (
+            ("quoted table", f'[projects."{target}"]\ntrust_level = "untrusted"\n'),
+            ("dotted key", f'projects."{target}".trust_level = "untrusted"\n'),
+            ("inline table", f'projects = {{ "{target}" = {{ trust_level = "untrusted" }} }}\n')):
+        out, after = codex_case(text)
+        check(f"a project already present as a {label} is left alone and reported",
+              after == text and "already has" in out and "'untrusted'" in out, out)
+    out, after = codex_case('projects = 5\n')
+    check("a config whose `projects` is not a table is refused unchanged", out.startswith("REFUSED") and after == "projects = 5\n", out)
+    out, after = codex_case('model = "x"')
+    parsed = tomllib.loads(after)
+    check("an absent project is appended to a file with no trailing newline and the result parses",
+          parsed["projects"][str(target)]["trust_level"] == "trusted" and parsed["model"] == "x", after)
+    cfg.unlink()
+    harness_install.trust_codex(target, h)
+    after = cfg.read_text()
+    check("a missing Codex config is created with the trusted table", tomllib.loads(after)["projects"][str(target)]["trust_level"] == "trusted")
+
+    gem = h / ".gemini" / "trustedFolders.json"
+    gem.parent.mkdir()
+    rule = json.dumps({str(h): "DO_NOT_TRUST"})
+    gem.write_text(rule)
+    try:
+        harness_install.trust_gemini(target, h)
+        refused = False
+    except SystemExit as exc:
+        refused = "DO_NOT_TRUST" in str(exc)
+    check("an ancestor DO_NOT_TRUST rule is refused, not overridden", refused and gem.read_text() == rule)
+    gem.write_text(json.dumps({str(target): "DO_NOT_TRUST"}))
+    try:
+        harness_install.trust_gemini(target, h)
+        refused = False
+    except SystemExit:
+        refused = True
+    check("a DO_NOT_TRUST rule on the path itself is refused", refused and json.loads(gem.read_text()) == {str(target): "DO_NOT_TRUST"})
+
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

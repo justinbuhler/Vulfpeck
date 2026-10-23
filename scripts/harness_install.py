@@ -41,34 +41,60 @@ def toml_key(path):
 
 
 def trust_codex(root, home):
-    """Append a trusted-project table for `root` to Codex's config; return what happened."""
-    if harness_doctor.codex_trusted(root, home):
-        return f"codex already trusts {root}"
+    """Append a trusted-project table for `root` to Codex's config; return what happened.
+
+    The file is parsed first and an unparseable one is refused untouched. A project
+    path present in any TOML form (quoted, dotted, inline) is left as it is. After
+    the append the result is parsed again, and the original is restored if that fails.
+    """
+    import tomllib
     config = harness_doctor.codex_config(home)
     text = config.read_text(encoding="utf-8") if config.is_file() else ""
-    if f"[projects.{toml_key(root)}]" in text:
-        return f"{config} already has a [projects] table for {root}; left as it is"
+    try:
+        projects = tomllib.loads(text).get("projects", {})
+    except tomllib.TOMLDecodeError as exc:
+        raise SystemExit(f"{config} does not parse ({exc}); nothing was changed. Fix it, then re-run") from exc
+    if isinstance(projects, dict) and str(root) in projects:
+        level = projects[str(root)].get("trust_level") if isinstance(projects[str(root)], dict) else None
+        return f"{config} already has {root} (trust_level {level!r}); left as it is"
+    appended = text + ("" if text.endswith("\n") or not text else "\n") + (
+        f'\n[projects.{toml_key(root)}]\ntrust_level = "trusted"\n')
+    try:
+        ok = tomllib.loads(appended).get("projects", {}).get(str(root), {}).get("trust_level") == "trusted"
+    except (tomllib.TOMLDecodeError, AttributeError):
+        ok = False
+    if not ok:
+        raise SystemExit(f"appending {root} would not give a valid {config}; nothing was changed")
     config.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text(
-        text
-        + ("" if text.endswith("\n") or not text else "\n")
-        + f'\n[projects.{toml_key(root)}]\ntrust_level = "trusted"\n',
-        encoding="utf-8",
-    )
+    config.write_text(appended, encoding="utf-8")
+    try:
+        ok = tomllib.loads(config.read_text(encoding="utf-8"))["projects"][str(root)]["trust_level"] == "trusted"
+    except (tomllib.TOMLDecodeError, KeyError, TypeError):
+        ok = False
+    if not ok:
+        config.write_text(text, encoding="utf-8")
+        raise SystemExit(f"{config} did not re-parse after the append; the original was restored")
     return f"added {root} to {config}"
 
 
 def trust_gemini(root, home):
-    """Add a TRUST_FOLDER rule for `root` to Gemini's trustedFolders.json; return what happened."""
+    """Add a TRUST_FOLDER rule for `root` to Gemini's trustedFolders.json; return what happened.
+
+    An explicit DO_NOT_TRUST rule on the path or an ancestor is a decision the owner
+    made; it is reported and left, never overridden.
+    """
     path = home / ".gemini" / "trustedFolders.json"
-    if harness_doctor.gemini_trusted(root, home):
-        return f"gemini already trusts {root}"
     try:
         rules = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     except ValueError as exc:
-        raise SystemExit(
-            f"{path} is not valid JSON ({exc}); fix it, then re-run"
-        ) from exc
+        raise SystemExit(f"{path} is not valid JSON ({exc}); fix it, then re-run") from exc
+    if harness_doctor.gemini_trusted(root, home):
+        return f"gemini already trusts {root}"
+    where = str(Path(root).resolve()).lower()
+    for rule, trust in rules.items():
+        base = rule.lower().rstrip("/")
+        if trust == "DO_NOT_TRUST" and (where == base or where.startswith(base + "/")):
+            raise SystemExit(f"{path} has DO_NOT_TRUST for {rule}, which covers {root}; not overriding it")
     rules[str(root)] = "TRUST_FOLDER"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(rules, indent=2) + "\n", encoding="utf-8")
