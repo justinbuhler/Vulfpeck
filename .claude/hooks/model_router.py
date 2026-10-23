@@ -21,7 +21,12 @@ from typing import Any
 # tests/test_model_router_hook.py asserts the two sets are equal.
 INHERIT = {"", "inherit", "inherit_parent", "none", "null"}
 HAIKU = {"Explore"}
-SONNET = {"code-simplifier:code-simplifier", "pr-review-toolkit:code-simplifier"}
+SONNET = {
+    "code-simplifier:code-simplifier",
+    "pr-review-toolkit:code-simplifier",
+    "python-general-engineer",
+    "testing-automation-engineer",
+}
 SONNET_SUFFIX = "-engineer"  # `*-engineer` types are bounded implementation ...
 COORDINATORS = {  # ... except these coordination roles, which are left unlisted
     "project-coordinator-engineer",
@@ -33,6 +38,8 @@ OPUS = {
     "Plan",
     "dual-derive",
     "live-proof-auditor",
+    "reviewer-code",
+    "reviewer-system",
     "pr-review-toolkit:code-reviewer",
     "pr-review-toolkit:comment-analyzer",
     "pr-review-toolkit:pr-test-analyzer",

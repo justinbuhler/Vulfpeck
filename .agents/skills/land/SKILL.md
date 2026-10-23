@@ -21,8 +21,8 @@ env | grep -E '^GIT_(DIR|INDEX_FILE|WORK_TREE)='
 Stop and report, do not work around: `core.bare` is `true`; any of those `GIT_*`
 variables is set; `HEAD` is `main`.
 
-Being the primary checkout is **not** a reason to abort. `~/Projects/Vulfpeck`
-is where branch work is committed; the `~/.cache/vulfpeck-land/*` worktrees belong to
+Being the primary checkout is **not** a reason to abort. the primary checkout (`git rev-parse --show-toplevel`
+in the main worktree) is where branch work is committed; the `~/.cache/vulfpeck-land/*` worktrees belong to
 `land.sh`. Do check `git status --porcelain` for files you did not touch - a peer
 session's uncommitted work lives in this tree.
 

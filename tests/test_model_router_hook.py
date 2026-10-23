@@ -57,6 +57,7 @@ MATCH = [
     ("Plan", "fable"), ("reviewer-code", "Fable"), ("dual-derive", "claude-fable-1"),
     ("live-proof-auditor", "fable"),
     ("project-coordinator-engineer", "sonnet"), ("toolkit-governance-engineer", "haiku"),
+    ("testing-automation-engineer", "sonnet"), ("reviewer-system", "opus"),
 ]
 for kind, model in MATCH:
     check(f"{kind} on {model} is allowed", denial(kind, model) is None)
@@ -80,6 +81,8 @@ MISMATCH = [
     ("code-modernization:architecture-critic", "haiku", "opus"),
     ("live-proof-auditor", "sonnet", "opus"),
     ("Explore", "fable", "haiku"), ("python-general-engineer", "fable", "sonnet"),
+    ("testing-automation-engineer", "opus", "sonnet"), ("testing-automation-engineer", "haiku", "sonnet"),
+    ("reviewer-code", "sonnet", "opus"), ("reviewer-system", "haiku", "opus"),
     ("code-simplifier:code-simplifier", "fable", "sonnet"),
 ]
 for kind, model, expected in MISMATCH:
@@ -125,6 +128,18 @@ check("the two INHERIT sets are equal",
 check("model_router does not import require_agent_model",
       "require_agent_model" not in {n.module for n in ast.walk(ast.parse(HOOK.read_text()))
                                     if isinstance(n, ast.ImportFrom)})
+
+def named_in(table, name):
+    """Return whether a module-level set literal `table` in the router lists `name`, parsed without importing."""
+    for node in ast.parse(HOOK.read_text()).body:
+        if isinstance(node, ast.Assign) and [t.id for t in node.targets if isinstance(t, ast.Name)] == [table]:
+            return name in ast.literal_eval(node.value)
+    return False
+
+
+for table, name in [("SONNET", "python-general-engineer"), ("SONNET", "testing-automation-engineer"),
+                    ("OPUS", "reviewer-code"), ("OPUS", "reviewer-system")]:
+    check(f"{name} is named in the {table} table", named_in(table, name))
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)
