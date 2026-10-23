@@ -4,7 +4,7 @@ Single-context layout: optional root `CONTEXT.md` and `docs/adr/`.
 
 ## Before exploring
 
-Read `CLAUDE.md`, root `AGENTS.md`, and the `AGENTS.md` of every folder you touch.
+Read root `AGENTS.md`, and the `AGENTS.md` of every folder you touch.
 Read `MEMORY.md` when it exists and follow relevant linked decisions.
 If present, also read `CONTEXT.md` and relevant ADRs in `docs/adr/`.
 

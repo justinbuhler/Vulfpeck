@@ -14,4 +14,4 @@ Root `AGENTS.md` holds every rule that is not Claude-specific, plus Scope, Stop 
 
 ## Consequences
 
-One edit changes the rules for all three CLIs. Gemini in an untrusted folder does not load them. The new prose rules are not controls until code enforces them. The old "one review and one corrective round" line and the new "2 corrective rounds per phase" rule disagree and need an owner decision. Comments and tests that cite "CLAUDE.md Rule 11" now point at the wrong file and are left for a follow-up.
+One edit changes the rules for all three CLIs. Gemini in an untrusted folder does not load them. The new prose rules are not controls until code enforces them. Comments and tests that cite "CLAUDE.md Rule 11" now point at the wrong file and are left for a follow-up.

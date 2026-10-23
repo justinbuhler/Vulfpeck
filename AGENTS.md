@@ -78,7 +78,7 @@ Each phase gets one review and one corrective round. A third round requires an e
 ## Control principles
 
 - **Rule 11, the relocating oracle.** A control must not derive its expectation from the thing it checks: such an oracle agrees by construction and passes hardest exactly when the artefact is wrong. `MODEL-03B` in `tests/test_workflow_routing.py` is the pattern to copy: it keeps its own expectation table and refuses to read it from the files it validates.
-- Bounded implementation goes to Sonnet, mechanical discovery and complete counting to Haiku, review, planning and independent re-derivation to Opus; an `Agent` call states `model` explicitly. Authoring and approval occur in fresh contexts.
+- Mechanical discovery and counting: cheapest model tier; bounded implementation: mid tier; review, planning and re-derivation: top tier; every delegation names its model explicitly. Authoring and approval occur in fresh contexts.
 - Every gate hook fails closed (a crash blocks) and every advisory fails open; `tests/test_harness_controls.py` pins the registrations and proves both.
 - Hook success is permission to continue, not proof the candidate is correct.
 - Never hand-edit marker-delimited or generated content; change its owner and regenerate.
@@ -92,15 +92,15 @@ Each phase gets one review and one corrective round. A third round requires an e
 
 ## Stop and reassess
 
-- The same failure fingerprint (same failing check or error) 3 times: stop, write what was tried and why it failed, then choose a different approach or escalate. (prose; enforcement planned)
-- Two iterations with no new passing check: stop. (prose; enforcement planned)
+- A failure fingerprint (same failing check or error) seen 3 times, meaning the original failure plus two failed repairs: stop, write what was tried and why it failed, then change approach or escalate. (prose; enforcement planned)
+- Two consecutive edit-and-run cycles with no new passing check: stop. (prose; enforcement planned)
 - Never re-run an unchanged failing command expecting a different result. (prose; enforcement planned)
 - One corrective round per phase (see Delegation and review); a further round needs an explicit scope reset. (prose; enforcement planned)
 - A missing worktree or broken environment is reported once, not looped on. (prose; enforcement planned)
 
 ## Proportional testing
 
-- The consequence tier picks the gate. Low: lint plus mapped tests. Medium: plus affected test files. High: full suite plus mutation on the touched High paths only. Critical: plus independent re-derivation. (prose; enforcement planned)
+- The consequence tier picks what an agent runs before reporting (the land gate is unchanged: the full suite). Low: lint plus mapped tests. Medium: plus affected test files. High: full suite plus mutation on the touched High paths only. Critical: plus independent re-derivation. (prose; enforcement planned)
 - A bug fix shows red, then green. (prose; enforcement planned)
 - Every report names which gate ran and what was skipped. (prose; enforcement planned)
 - A test that cannot fail when the logic changes is wrong. (prose; enforcement planned)

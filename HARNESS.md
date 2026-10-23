@@ -103,7 +103,7 @@ Requirements: git, bash, Python 3.11+ and uv for the harness's own scripts, `rsy
 
 1. Decide visibility and a licence. Branch protection on a private repository needs a paid GitHub plan, and `github_bootstrap.sh --apply` exits non-zero when it is refused.
 2. Create the repository, push `main`, set it in `docs/agents/issue-tracker.md`, run `./scripts/github_bootstrap.sh --apply`. The first CI run is the first test of `run.sh`'s `flock` path on Linux.
-3. Fill in the Project context in `AGENTS.md` and add domain invariants to `AGENTS.md`.
+3. Fill in the Project context and add domain invariants in `AGENTS.md`.
 4. Run `codegraph init`, or remove the freshness hooks. Until then every prompt reports CG-01.
 
 ### For autonomous operation
