@@ -646,5 +646,32 @@ for runtime, event in (("codex", "PreToolUse"), ("gemini", "BeforeTool")):
     check(f"{runtime} gate: a stdin that never closes ends the hook with rc 2 before the timeout",
           proc.returncode == 2 and time.monotonic() - began < 3.0 and "stdin was not closed" in err, f"rc={proc.returncode} {err}")
 
+
+# --- a patch sent through the shell is a patch (observed: Codex reports it as Bash) ----
+heredoc = "apply_patch <<'EOF'\n" + patch("*** Add File: scripts/x.py", "+x", "*** Add File: y.md", "+y") + "\nEOF"
+shell_events = ha.to_claude("codex", "PreToolUse", {"tool_name": "Bash", "cwd": "/w", "tool_input": {"command": heredoc}},
+                            edits=True)
+check("an edit guard turns a shell apply_patch into one event per file",
+      [(e["tool_name"], e["tool_input"]["file_path"]) for e in shell_events]
+      == [("Write", "/w/scripts/x.py"), ("Write", "/w/y.md")], str(shell_events))
+check("a Bash guard still sees the Bash call itself",
+      [e["tool_name"] for e in ha.to_claude("codex", "PreToolUse", {"tool_name": "Bash", "tool_input": {"command": heredoc}})]
+      == ["Bash"])
+check("an edit guard gets no event for an ordinary Bash call",
+      ha.to_claude("codex", "PreToolUse", {"tool_name": "Bash", "tool_input": {"command": "git status"}}, edits=True) == [])
+check("a Begin Patch with no End Patch raises",
+      raises(lambda: ha.to_claude("codex", "PreToolUse", {"tool_name": "Bash", "tool_input": {
+          "command": "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: a\n+x\nEOF"}}, edits=True)))
+check("a compound command that ends in a patch is still found",
+      len(ha.to_claude("codex", "PreToolUse", {"tool_name": "Bash", "cwd": "/w", "tool_input": {
+          "command": "cd /w && " + heredoc}}, edits=True)) == 2)
+rc, out, err = run("codex", "PreToolUse", "apply_patch|Bash", "adr_gate.py",
+                   {"tool_name": "Bash", "cwd": str(ROOT), "tool_input": {
+                       "command": "apply_patch <<'EOF'\n" + patch("*** Add File: scripts/zzz_canary.py", "+x") + "\nEOF"}})
+check("codex: adr_gate denies a governed file added by a shell apply_patch", rc == 0 and denied("codex", out), out + err)
+rc, out, err = run("codex", "PreToolUse", "apply_patch|Bash", "adr_gate.py",
+                   {"tool_name": "Bash", "cwd": str(ROOT), "tool_input": {"command": "git status"}})
+check("codex: adr_gate stays silent on an ordinary Bash call", rc == 0 and out.strip() == "{}", out + err)
+
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

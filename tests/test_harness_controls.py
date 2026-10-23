@@ -119,9 +119,9 @@ for event, matcher, script, kind in sorted(EXPECTED):
 CODEX_EXPECTED = {
     ("PreToolUse", "spawn_agent", "require_agent_model.py", "gate"),
     ("PreToolUse", "spawn_agent", "model_router.py", "gate"),
-    ("PreToolUse", "apply_patch", "blast_radius_advisory.py", "advisory"),
+    ("PreToolUse", "apply_patch|Bash", "blast_radius_advisory.py", "advisory"),
     ("PostToolUse", "Bash", "verify_commit_landed.py", "gate"),
-    ("PostToolUse", "apply_patch", "test_for_edited_module.py", "gate"),
+    ("PostToolUse", "apply_patch|Bash", "test_for_edited_module.py", "gate"),
     ("UserPromptSubmit", "", "codegraph_freshness.py", "advisory"),
     ("SessionStart", "startup", "codegraph_freshness.py", "advisory"),
     ("SessionStart", "startup", "harness_doctor.py", "advisory"),
@@ -129,8 +129,8 @@ CODEX_EXPECTED = {
     ("SubagentStart", "", "readonly_guard.py", "advisory"),
     ("SubagentStop", "", "readonly_guard.py", "advisory"),
     ("Stop", "", "session_guard.py", "advisory"),
-    ("PreToolUse", "apply_patch", "adr_gate.py", "gate"),
-    ("PostToolUse", "apply_patch", "adr_gate.py", "gate"),
+    ("PreToolUse", "apply_patch|Bash", "adr_gate.py", "gate"),
+    ("PostToolUse", "apply_patch|Bash", "adr_gate.py", "gate"),
     ("SessionEnd", "", "session_guard.py", "advisory"),
 }
 GEMINI_EXPECTED = {
@@ -190,7 +190,8 @@ for runtime, path, expected in (("codex", ROOT / ".codex" / "hooks.json", CODEX_
             continue
         cmd, timeout = reg[(event, matcher, script)]
         check(f"{runtime} {event} {script} runs through hook_adapter for {runtime}",
-              f"hook_adapter.py\" --timeout {timeout // (1 if runtime == 'codex' else 1000)} "
+              f"hook_adapter.py\" --timeout {timeout // (1 if runtime == 'codex' else 1000)}"
+              f"{' --edits' if runtime == 'codex' and matcher == 'apply_patch|Bash' else ''} "
               f"--runtime {runtime} --event {event} -- " in cmd, cmd)
         tail = cmd.rsplit("' ", 1)[-1]
         if kind == "gate":

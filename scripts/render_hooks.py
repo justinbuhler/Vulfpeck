@@ -60,9 +60,19 @@ def translate_matcher(event, matcher, table):
     return "|".join(dict.fromkeys(mapped)) or None
 
 
+def watches_edits(entry):
+    """Return whether the entry's Claude matcher names Edit or Write."""
+    return bool({"Edit", "Write"} & set(entry.get("matcher", "").split("|")))
+
+
 def adapted(entry, runtime, native_event):
-    """Return the registered command that runs the entry's guard through the adapter."""
-    command = f"{ADAPTER} --timeout {entry['timeout']} --runtime {runtime} --event {native_event} -- {shlex.quote(entry['command'])}"
+    """Return the registered command that runs the entry's guard through the adapter.
+
+    Under Codex an edit guard also gets `--edits` and a Bash matcher: a patch sent
+    through the shell is reported as Bash, and the adapter turns it into edit events.
+    """
+    flag = " --edits" if runtime == "codex" and watches_edits(entry) else ""
+    command = f"{ADAPTER} --timeout {entry['timeout']}{flag} --runtime {runtime} --event {native_event} -- {shlex.quote(entry['command'])}"
     if entry["kind"] == "gate":
         return (
             command
@@ -87,6 +97,8 @@ def build(entries, runtime):
         elif runtime == "codex":
             event = entry["event"]
             matcher = translate_matcher(event, entry["matcher"], CODEX_MATCH)
+            if matcher and watches_edits(entry) and event in ("PreToolUse", "PostToolUse"):
+                matcher += "|Bash"
             hook = {
                 "type": "command",
                 "command": adapted(entry, "codex", event),

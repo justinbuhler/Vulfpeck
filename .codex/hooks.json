@@ -17,16 +17,16 @@
         ]
       },
       {
-        "matcher": "apply_patch",
+        "matcher": "apply_patch|Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --timeout 30 --runtime codex --event PreToolUse -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/blast_radius_advisory.py\" || true' || true",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --timeout 30 --edits --runtime codex --event PreToolUse -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/blast_radius_advisory.py\" || true' || true",
             "timeout": 30
           },
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --timeout 10 --runtime codex --event PreToolUse -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }' || { rc=$?; [ \"$rc\" = 2 ] || echo \"hook_adapter crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --timeout 10 --edits --runtime codex --event PreToolUse -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }' || { rc=$?; [ \"$rc\" = 2 ] || echo \"hook_adapter crashed (rc=$rc); failing closed\" >&2; exit 2; }",
             "timeout": 10
           }
         ]
@@ -54,16 +54,16 @@
         ]
       },
       {
-        "matcher": "apply_patch",
+        "matcher": "apply_patch|Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --timeout 70 --runtime codex --event PostToolUse -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/test_for_edited_module.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"test_for_edited_module.py crashed (rc=$rc); failing closed\" >&2; exit 2; }' || { rc=$?; [ \"$rc\" = 2 ] || echo \"hook_adapter crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --timeout 70 --edits --runtime codex --event PostToolUse -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/test_for_edited_module.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"test_for_edited_module.py crashed (rc=$rc); failing closed\" >&2; exit 2; }' || { rc=$?; [ \"$rc\" = 2 ] || echo \"hook_adapter crashed (rc=$rc); failing closed\" >&2; exit 2; }",
             "timeout": 70
           },
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --timeout 10 --runtime codex --event PostToolUse -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }' || { rc=$?; [ \"$rc\" = 2 ] || echo \"hook_adapter crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --timeout 10 --edits --runtime codex --event PostToolUse -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }' || { rc=$?; [ \"$rc\" = 2 ] || echo \"hook_adapter crashed (rc=$rc); failing closed\" >&2; exit 2; }",
             "timeout": 10
           }
         ]

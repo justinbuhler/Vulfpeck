@@ -29,6 +29,7 @@ The apply_patch parser is adapted from vexjoy-agent's codex-hook-adapter.py.
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -183,8 +184,28 @@ def _absolute(tool_input, cwd):
     return tool_input
 
 
-def to_claude(runtime, event, native):
-    """Return the list of Claude-shaped payloads for one native payload."""
+def shell_patch(command):
+    """Return the patch text inside a shell command that runs apply_patch, else None.
+
+    Codex reports `apply_patch <<'EOF' ... EOF` sent through the shell as a Bash call
+    (observed on 0.164), not as an apply_patch call. A command that names apply_patch
+    and holds a patch is treated as one; a Begin marker with no End marker raises.
+    """
+    if not isinstance(command, str) or not re.search(r"\bapply_patch\b", command) or "*** Begin Patch" not in command:
+        return None
+    start = command.index("*** Begin Patch")
+    end = command.find("*** End Patch", start)
+    if end < 0:
+        raise AdapterError("a shell apply_patch command has no End Patch marker")
+    return command[start:end + len("*** End Patch")]
+
+
+def to_claude(runtime, event, native, edits=False):
+    """Return the list of Claude-shaped payloads for one native payload.
+
+    `edits` marks a guard registered for file edits: a Codex Bash call that carries a
+    patch becomes one Edit or Write event per file, and any other Bash call yields none.
+    """
     if not isinstance(native, dict):
         raise AdapterError("payload is not a JSON object")
     payload = dict(native)
@@ -230,6 +251,17 @@ def to_claude(runtime, event, native):
                 out.append(child)
             return out
         payload["tool_name"] = CODEX_TOOLS.get(name, name)
+        if edits and payload["tool_name"] == "Bash":
+            patch = shell_patch(tool_input.get("command"))
+            if patch is None:
+                return []
+            out = []
+            for tool, edit_input in parse_apply_patch(patch):
+                child = dict(payload)
+                child["tool_name"] = tool
+                child["tool_input"] = _absolute(edit_input, cwd)
+                out.append(child)
+            return out
     if "tool_input" in payload or name is not None:
         payload["tool_input"] = _absolute(dict(payload.get("tool_input") or {}), cwd)
     return [payload]
@@ -401,7 +433,7 @@ def run_guard(command, payload, deadline=None):
     return interpret(proc.returncode, stdout, stderr)
 
 
-def handle(runtime, native_event, raw, command, deadline=None):
+def handle(runtime, native_event, raw, command, deadline=None, edits=False):
     """Translate, run the guard and return the native output object."""
     if runtime == "gemini":
         if native_event not in GEMINI_EVENTS:
@@ -415,7 +447,7 @@ def handle(runtime, native_event, raw, command, deadline=None):
         native = json.loads(raw)
     except ValueError as exc:
         raise AdapterError(f"payload is not JSON: {exc}") from exc
-    result = merge([run_guard(command, p, deadline) for p in to_claude(runtime, event, native)])
+    result = merge([run_guard(command, p, deadline) for p in to_claude(runtime, event, native, edits)])
     return emit(runtime, event, result)
 
 
@@ -423,6 +455,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--runtime", choices=("codex", "gemini"), required=True)
     parser.add_argument("--event", required=True, help="the runtime's own event name")
+    parser.add_argument("--edits", action="store_true", help="the guard watches file edits (see to_claude)")
     parser.add_argument("--timeout", type=float, default=None, help="the registered hook timeout, in seconds")
     parser.add_argument("guard", nargs=argparse.REMAINDER, help="-- <guard command>")
     args = parser.parse_args(argv)
@@ -435,7 +468,7 @@ def main(argv=None):
     try:
         raw = read_stdin(limit)
         deadline = None if limit is None else started + limit
-        output = handle(args.runtime, args.event, raw, " ".join(guard), deadline)
+        output = handle(args.runtime, args.event, raw, " ".join(guard), deadline, args.edits)
     except AdapterError as exc:
         print(f"hook_adapter: {exc}", file=sys.stderr)
         return 1
