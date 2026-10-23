@@ -31,6 +31,11 @@
           },
           {
             "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --timeout 10 --edits --runtime codex --event PreToolUse -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }' || { rc=$?; [ \"$rc\" = 2 ] || echo \"hook_adapter crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 10
+          },
+          {
+            "type": "command",
             "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --timeout 15 --edits --runtime codex --event PreToolUse -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/scope_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"scope_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }' || { rc=$?; [ \"$rc\" = 2 ] || echo \"hook_adapter crashed (rc=$rc); failing closed\" >&2; exit 2; }",
             "timeout": 15
           }
