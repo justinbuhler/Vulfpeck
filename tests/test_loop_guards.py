@@ -1,0 +1,465 @@
+"""loop_guard, scope_guard, budget_guard, turn_guard and their scripts (ADR 0017).
+
+Hooks run as real subprocesses against throwaway git repositories; the pure helpers are
+imported. Expectations are literals (Rule 11); nothing here reads a count or a phrase back
+from the file it checks except the AGENTS.md quote check, which compares two files.
+"""
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+SCRATCH = Path(tempfile.mkdtemp(prefix="harness-loop."))
+EVENTS = SCRATCH / "events.jsonl"
+os.environ["HARNESS_EVENTS_LOG"] = str(EVENTS)
+os.environ["JEV_DISABLE"] = "1"
+
+import guard_lib as g  # noqa: E402
+
+PASS, FAIL = [], []
+
+
+def check(name, cond, detail=""):
+    (PASS if cond else FAIL).append(name)
+    print(("  PASS  " if cond else "  FAIL  ") + name + (("\n          " + detail) if detail and not cond else ""))
+
+
+ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
+def git(cwd, *args):
+    done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, env=ENV)
+    if done.returncode:
+        raise AssertionError(f"git {args} failed: {done.stderr}")
+    return done.stdout.strip()
+
+
+def repo(files=("a.py", "b.py", "c.py", "docs.md")):
+    d = Path(tempfile.mkdtemp(prefix="repo.", dir=SCRATCH))
+    git(d, "init", "-q", "-b", "main")
+    for k, v in (("user.email", "t@t"), ("user.name", "t"), ("commit.gpgsign", "false")):
+        git(d, "config", k, v)
+    for name in files:
+        (d / name).write_text("x = 1\n")
+    git(d, "add", "-A")
+    git(d, "commit", "-qm", "base")
+    git(d, "checkout", "-qb", "work")
+    return d
+
+
+def run_hook(name, payload, cwd, project=ROOT):
+    done = subprocess.run([sys.executable, str(project / ".claude" / "hooks" / name)], capture_output=True,
+                          text=True, input=json.dumps(payload), cwd=cwd,
+                          env={**ENV, "CLAUDE_PROJECT_DIR": str(project), "JEV_DISABLE": "1",
+                               "HARNESS_EVENTS_LOG": str(EVENTS)})
+    out = {}
+    if done.stdout.strip():
+        try:
+            out = json.loads(done.stdout)
+        except ValueError:
+            out = {"unparsed": done.stdout}
+    return done.returncode, out, done.stderr
+
+
+def reason_of(out):
+    inner = out.get("hookSpecificOutput", {})
+    return inner.get("permissionDecisionReason") or out.get("reason") or inner.get("additionalContext") or ""
+
+
+def is_deny(out):
+    return out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+
+def is_block(out):
+    return out.get("decision") == "block"
+
+
+# --- the rule quotes are the AGENTS.md rules ------------------------------------------
+agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+for label, rule in (("fingerprint", g.RULE_FINGERPRINT), ("no-progress", g.RULE_NO_PROGRESS),
+                    ("unchanged", g.RULE_UNCHANGED), ("turn", g.RULE_TURN)):
+    check(f"the quoted {label} rule is a line of AGENTS.md", rule in agents, rule)
+
+# --- fingerprint normalisation --------------------------------------------------------
+check("rtk prefix, repeated spaces and a trailing tail filter are dropped",
+      g.normalise("rtk  pytest   -x   tests/  | tail -5") == "pytest -x tests/")
+check("head then tail filters are both dropped", g.normalise("make test | head -n 3 | tail -2") == "make test")
+check("a pipe into another command is kept", g.normalise("ls | grep x") == "ls | grep x")
+check("the same failing check fingerprints alike across spacing and filters",
+      g.fingerprint("pytest -x", "E boom") == g.fingerprint("rtk pytest  -x | tail -3", "E boom"))
+check("a different error line is a different fingerprint",
+      g.fingerprint("pytest -x", "E boom") != g.fingerprint("pytest -x", "E crash"))
+check("a different command is a different fingerprint",
+      g.fingerprint("pytest -x", "E boom") != g.fingerprint("pytest -y", "E boom"))
+check("the fingerprint is a sha1 hex digest", len(g.fingerprint("a", "b")) == 40)
+
+# --- exit status and error line, per runtime ------------------------------------------
+check("Claude PostToolUseFailure carries the exit status in `error`",
+      g.exit_status({"hook_event_name": "PostToolUseFailure", "error": "Exit code 2\nboom"}) == 2)
+check("a Claude PostToolUse {stdout, stderr} response is a success even if the text says exit code",
+      g.exit_status({"hook_event_name": "PostToolUse",
+                     "tool_response": {"stdout": "Exit code: 1\n", "stderr": ""}}) == 0)
+check("a numeric exit_code in a response is read",
+      g.exit_status({"hook_event_name": "PostToolUse", "tool_response": {"exit_code": 3, "output": "x"}}) == 3)
+check("Gemini's `Exit Code: N` line is read",
+      g.exit_status({"hook_event_name": "PostToolUse",
+                     "tool_response": {"llmContent": "Output: nope\nExit Code: 1", "stdout": "Output: nope\nExit Code: 1"}}) == 1)
+codex_log = SCRATCH / "rollout.jsonl"
+codex_log.write_text(json.dumps({"type": "event_msg", "payload": {"item": {"id": "exec-1", "exit_code": 0}}}) + "\n"
+                     + json.dumps({"type": "event_msg", "payload": {"item": {"id": "exec-2", "exit_code": 4}}}) + "\n")
+check("a Codex text-only response takes the exit code its rollout logged for the tool_use_id",
+      g.exit_status({"hook_event_name": "PostToolUse", "tool_response": "boom\n", "tool_use_id": "exec-2",
+                     "transcript_path": str(codex_log)}) == 4)
+check("a Codex call the rollout shows exiting 0 is a success",
+      g.exit_status({"hook_event_name": "PostToolUse", "tool_response": "boom\n", "tool_use_id": "exec-1",
+                     "transcript_path": str(codex_log)}) == 0)
+check("a Codex call the rollout does not hold yet reads as a success, not a crash",
+      g.exit_status({"hook_event_name": "PostToolUse", "tool_response": "boom\n", "tool_use_id": "exec-9",
+                     "transcript_path": str(codex_log)}) == 0)
+check("a Codex-style text response with an exit line is read",
+      g.exit_status({"hook_event_name": "PostToolUse", "tool_response": "boom\nExit code: 7\n"}) == 7)
+check("the error line skips the Exit code header",
+      g.first_error_line({"hook_event_name": "PostToolUseFailure", "error": "Exit code 1\nls: x: No such file"})
+      == "ls: x: No such file")
+check("the error line prefers a line that reads as an error",
+      g.first_error_line({"hook_event_name": "PostToolUse", "tool_response": {"stdout": "collected 3\nFAILED t.py::a - x", "stderr": ""}})
+      == "FAILED t.py::a - x")
+
+# --- which commands are test or lint runs ----------------------------------------------
+for cmd, want in (("./scripts/run.sh --tests", True), ("./scripts/gate.sh", True), ("python3 tests/test_x.py", True),
+                  ("uv run --no-sync python3 tests/test_x.py", True), ("uvx ruff check .", True),
+                  ("./scripts/standalone_tests.sh", True), ("python3 scripts/plan_tests.py --base x --run", True),
+                  ("python3 scripts/plan_tests.py --base x", False), ("ls tests", False), ("git status", False)):
+    check(f"is_test_command({cmd!r}) is {want}", g.is_test_command(cmd) is want)
+
+# --- loop_guard: the 3rd sighting blocks, the 2nd does not ------------------------------
+def post_fail(cwd, cmd, error, session="s1", exit_code=1):
+    return run_hook("loop_guard.py", {"hook_event_name": "PostToolUseFailure", "tool_name": "Bash", "session_id": session,
+                                      "cwd": str(cwd), "tool_input": {"command": cmd},
+                                      "error": f"Exit code {exit_code}\n{error}"}, cwd)
+
+
+def post_ok(cwd, cmd, session="s1"):
+    return run_hook("loop_guard.py", {"hook_event_name": "PostToolUse", "tool_name": "Bash", "session_id": session,
+                                      "cwd": str(cwd), "tool_input": {"command": cmd},
+                                      "tool_response": {"stdout": "ok", "stderr": ""}}, cwd)
+
+
+def pre(cwd, cmd, session="s1"):
+    return run_hook("loop_guard.py", {"hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": session,
+                                      "cwd": str(cwd), "tool_input": {"command": cmd}}, cwd)
+
+
+def edit(cwd, session="s1"):
+    return run_hook("loop_guard.py", {"hook_event_name": "PostToolUse", "tool_name": "Edit", "session_id": session,
+                                      "cwd": str(cwd), "tool_input": {"file_path": str(cwd / "a.py")}}, cwd)
+
+
+d = repo()
+rc, out, _ = post_fail(d, "make check", "E: boom")
+check("1st sighting of a fingerprint does not block", rc == 0 and not is_block(out), str(out))
+edit(d)
+rc, out, _ = post_fail(d, "make   check | tail -3", "E: boom")
+check("2nd sighting (same command modulo spacing and tail, same error) does not block", rc == 0 and not is_block(out), str(out))
+edit(d)
+rc, out, _ = post_fail(d, "rtk make check", "E: boom")
+text = reason_of(out)
+check("3rd sighting blocks", rc == 0 and is_block(out), str(out))
+check("the block quotes the AGENTS.md rule", g.RULE_FINGERPRINT in text, text)
+check("the block lists the 3 attempts as one-liners", all(f"  {i}. make" in text for i in (1, 2, 3)) and text.count("-> E: boom") == 3, text)
+check("the block names the way out and the session id",
+      "write what was tried" in text and "loop_reset.py --session s1" in text, text)
+check("without Jev the block carries no Jev line", "Jev" not in text, text)
+rc, out, _ = pre(d, "make check")
+check("after the trip the failing command is denied at PreToolUse", rc == 0 and is_deny(out) and g.RULE_FINGERPRINT in reason_of(out), str(out))
+rc, out, _ = pre(d, "make other")
+check("after the trip a different command is allowed", rc == 0 and not is_deny(out), str(out))
+rc, out, _ = pre(d, "make check", session="s2")
+check("another session is not tripped", rc == 0 and not is_deny(out), str(out))
+
+# --- recovery -----------------------------------------------------------------------------
+before = EVENTS.read_text() if EVENTS.is_file() else ""
+done = subprocess.run([sys.executable, str(ROOT / "scripts" / "loop_reset.py"), "--session", "s1"], cwd=d,
+                      capture_output=True, text=True, env={**ENV, "HARNESS_EVENTS_LOG": str(EVENTS)})
+check("loop_reset refuses to run without a reason", done.returncode == 2, done.stderr)
+done = subprocess.run([sys.executable, str(ROOT / "scripts" / "loop_reset.py"), "--session", "s1", "--reason", "owner changed the test"],
+                      cwd=d, capture_output=True, text=True, env={**ENV, "HARNESS_EVENTS_LOG": str(EVENTS)})
+check("loop_reset clears the session's counters", done.returncode == 0 and "cleared: s1.json" in done.stdout, done.stdout + done.stderr)
+events = [json.loads(line) for line in EVENTS.read_text().splitlines()]
+check("a block and a reset each append an event",
+      any(e["hook"] == "loop_guard" and e["decision"] == "block" and e["reason"] == "fingerprint-x3" for e in events)
+      and any(e["hook"] == "loop_guard" and e["decision"] == "reset" and e["reason"] == "owner changed the test"
+              and e["subject"] == "s1" for e in events), str(events[-3:]))
+rc, out, _ = pre(d, "make check")
+check("after a reset the command is allowed again", rc == 0 and not is_deny(out), str(out))
+
+# --- unchanged re-run ---------------------------------------------------------------------
+d = repo()
+post_fail(d, "pytest -x", "E: one")
+rc, out, _ = pre(d, "pytest -x")
+check("an unchanged re-run of the last failed command is denied", rc == 0 and is_deny(out)
+      and "never re-run an unchanged failing command" in reason_of(out).lower(), str(out))
+rc, out, _ = pre(d, "pytest  -x")
+check("a re-run that differs by a space is not byte-identical, so it is allowed", rc == 0 and not is_deny(out), str(out))
+rc, out, _ = pre(d, "rtk pytest -x")
+check("the rtk prefix a user hook adds does not hide an unchanged re-run (rtk is stripped)", rc == 0 and is_deny(out), str(out))
+edit(d)
+rc, out, _ = pre(d, "pytest -x")
+check("the same command is allowed once a file was edited", rc == 0 and not is_deny(out), str(out))
+post_fail(d, "pytest -x", "E: one")
+post_ok(d, "pytest -x")
+rc, out, _ = pre(d, "pytest -x")
+check("a command that then passed may run again", rc == 0 and not is_deny(out), str(out))
+
+# --- no progress across 2 cycles -----------------------------------------------------------
+d = repo()
+T = "python3 tests/test_a.py"
+post_fail(d, T, "E: a1")
+edit(d)
+rc, out, _ = post_fail(d, T, "E: a2")
+check("one edit-and-run cycle with no progress does not block", rc == 0 and not is_block(out), str(out))
+edit(d)
+rc, out, _ = post_fail(d, T, "E: a3")
+check("a second consecutive cycle with no progress blocks", rc == 0 and is_block(out) and g.RULE_NO_PROGRESS in reason_of(out), str(out))
+rc, out, _ = pre(d, "python3 tests/test_other.py")
+check("after a no-progress trip every test command is denied", rc == 0 and is_deny(out), str(out))
+rc, out, _ = pre(d, "git status")
+check("after a no-progress trip other commands still run", rc == 0 and not is_deny(out), str(out))
+
+d = repo()
+L, T = "uvx ruff check .", "python3 tests/test_a.py"
+post_fail(d, L, "E: lint 1")
+post_fail(d, T, "E: test 1")
+edit(d)
+post_ok(d, L)
+edit(d)
+rc, out, _ = post_fail(d, T, "E: test 2")
+check("a shrinking failure set is progress, so the next stalled cycle is only the first", rc == 0 and not is_block(out), str(out))
+edit(d)
+rc, out, _ = post_fail(d, T, "E: test 3")
+check("two stalled cycles after that progress block", rc == 0 and is_block(out), str(out))
+
+d = repo()
+post_fail(d, T, "E: b1")
+edit(d)
+post_fail(d, T, "E: b2")
+edit(d)
+post_ok(d, T)
+edit(d)
+rc, out, _ = post_fail(d, T, "E: b3")
+check("a passing run resets the stalled count", rc == 0 and not is_block(out), str(out))
+
+# --- corrupt state ------------------------------------------------------------------------
+d = repo()
+post_fail(d, "x", "E: y")
+state = next((Path(git(d, "rev-parse", "--path-format=absolute", "--git-common-dir")) / "harness" / "loop").glob("s1.json"))
+state.write_text("{not json")
+rc, out, err = pre(d, "anything")
+check("a corrupt state file is reset with a one-line notice, not a crash",
+      rc == 0 and "was unreadable and was reset" in reason_of(out) and len(reason_of(out).splitlines()) == 1, f"{rc} {out} {err}")
+rc, out, _ = post_fail(d, "x", "E: y")
+check("the reset state counts from zero and is valid JSON again", rc == 0 and json.loads(state.read_text())["v"] == 1)
+state.write_text('{"v": 2}')
+rc, out, _ = pre(d, "anything")
+check("a state file of another version is reset too", rc == 0 and "reset" in reason_of(out), str(out))
+
+# --- Jev advice is appended, advisory --------------------------------------------------------
+spec = importlib.util.spec_from_file_location("loop_guard_under_test", ROOT / ".claude" / "hooks" / "loop_guard.py")
+lg = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(lg)
+import jev  # noqa: E402
+
+original = jev.reassess
+jev.reassess = lambda ctx: {"source": "jev", "action": "escalate", "reason": "needs the owner", "attempts": ctx["attempts"]}
+state = g.fresh_loop()
+entry = {"n": 3, "cmd": "make", "attempts": ["make -> E: x"] * 3}
+msg = lg.trip_fingerprint(state, "f" * 40, "make", entry, "s9")
+check("Jev's recommendation is appended when Jev answered", "recommends escalate: needs the owner" in msg and "cannot unblock" in msg, msg)
+jev.reassess = lambda ctx: {"source": "fallback", "action": "change_approach", "reason": None}
+check("a fallback Jev answer adds nothing", "Jev" not in lg.trip_fingerprint(g.fresh_loop(), "f" * 40, "make", entry, "s9"))
+
+
+def boom(ctx):
+    raise RuntimeError("down")
+
+
+jev.reassess = boom
+check("a Jev failure adds nothing and does not raise", "Jev" not in lg.trip_fingerprint(g.fresh_loop(), "f" * 40, "make", entry, "s9"))
+jev.reassess = original
+
+# --- scope_guard ------------------------------------------------------------------------------
+def scope(cwd, *args):
+    return subprocess.run([sys.executable, str(ROOT / "scripts" / "scope.py"), *args], cwd=cwd, capture_output=True, text=True,
+                          env={**ENV, "JEV_DISABLE": "1", "HARNESS_EVENTS_LOG": str(EVENTS)})
+
+
+def write_event(cwd, name, tool="Write", **extra):
+    return run_hook("scope_guard.py", {"hook_event_name": "PreToolUse", "tool_name": tool, "cwd": str(cwd),
+                                       "tool_input": {"file_path": name, **extra}}, cwd)
+
+
+d = repo()
+rc, out, _ = write_event(d, "a.py", content="y = 2\n")
+check("with no lease an edit is allowed silently", rc == 0 and out == {})
+done = scope(d, "set", "--glob", "a.py", "--glob", "b.py", "--max-files", "2", "--max-lines", "10", "--task", "tidy a and b", "--base", "main")
+check("scope.py set writes a lease", done.returncode == 0 and "lease set for work" in done.stdout, done.stdout + done.stderr)
+lease = json.loads(scope(d, "show").stdout)
+check("show prints the lease fields", lease["globs"] == ["a.py", "b.py"] and lease["max_files"] == 2 and lease["max_lines"] == 10
+      and lease["task"] == "tidy a and b" and len(lease["base"]) == 40, str(lease))
+rc, out, _ = write_event(d, "a.py", content="y = 2\n")
+check("an edit inside the globs is allowed", rc == 0 and out == {}, str(out))
+rc, out, _ = write_event(d, str(d / "c.py"), content="y = 2\n")
+check("an edit outside the globs is denied with the out-of-scope message", rc == 0 and is_deny(out)
+      and reason_of(out).startswith("out of scope: c.py; file an issue or report it, do not edit"), str(out))
+(d / "a.py").write_text("x = 1\ny = 2\n")
+(d / "b.py").write_text("x = 1\ny = 2\n")
+git(d, "add", "-A")
+rc, out, _ = write_event(d, "b.py", tool="Edit", old_string="y = 2", new_string="y = 3")
+check("an edit to a file already in the diff does not add a file", rc == 0 and out == {}, str(out))
+done = scope(d, "set", "--glob", "*.py", "--max-files", "2", "--max-lines", "100", "--task", "tidy", "--base", "main")
+rc, out, _ = write_event(d, "c.py", content="y = 2\n")
+check("an edit that takes the branch past max_files is denied and points at scope.py check", rc == 0 and is_deny(out)
+      and "scope exceeded" in reason_of(out) and "python3 scripts/scope.py check" in reason_of(out)
+      and "only an explicit" in reason_of(out).lower(), str(out))
+done = scope(d, "set", "--glob", "*.py", "--max-files", "5", "--max-lines", "3", "--task", "tidy", "--base", "main")
+rc, out, _ = write_event(d, "a.py", content="a\nb\nc\nd\n")
+check("an edit that takes the branch past max_lines is denied", rc == 0 and is_deny(out) and "scope exceeded" in reason_of(out), str(out))
+done = scope(d, "set", "--glob", "*.py", "--max-files", "5", "--max-lines", "300", "--task", "tidy", "--base", "main")
+rc, out, _ = write_event(d, "c.py", content="y = 2\n")
+check("widening the lease with scope.py set unblocks it", rc == 0 and out == {}, str(out))
+done = scope(d, "check")
+check("scope.py check runs the intent re-check and says when Jev is unavailable", done.returncode == 0 and "Jev unavailable" in done.stdout
+      and "task: tidy" in done.stdout, done.stdout + done.stderr)
+(d / "new.py").write_text("n = 1\n")
+done = scope(d, "set", "--glob", "*.py", "--max-files", "3", "--max-lines", "300", "--task", "tidy", "--base", "main")
+rc, out, _ = write_event(d, "c.py", content="y = 2\n")
+check("an untracked file counts toward max_files (a, b, new, c is 4 > 3)", rc == 0 and is_deny(out), str(out))
+rc, out, _ = write_event(Path(tempfile.mkdtemp(dir=SCRATCH)), "x.py", content="x")
+check("an edit outside any repository passes", rc == 0 and out == {})
+(lease_file := Path(git(d, "rev-parse", "--path-format=absolute", "--git-common-dir")) / "harness" / "scope" / "work.json").write_text("{bad")
+rc, out, _ = write_event(d, "a.py", content="x")
+check("an unreadable lease denies rather than allows", rc == 0 and is_deny(out) and "unreadable" in reason_of(out), str(out))
+done = scope(d, "clear")
+rc, out, _ = write_event(d, "c.py", content="y = 2\n")
+check("scope.py clear removes the lease and edits pass again", done.returncode == 0 and rc == 0 and out == {}, done.stdout + str(out))
+git(d, "checkout", "-q", "--detach")
+check("scope.py set refuses on a detached HEAD", scope(d, "set", "--glob", "a", "--max-files", "1", "--max-lines", "1", "--task", "t", "--base", "main").returncode != 0)
+
+# --- budget_guard -------------------------------------------------------------------------------
+def project(budget):
+    """A copy of the hooks and scripts whose harness.toml carries the given [budget]."""
+    p = Path(tempfile.mkdtemp(prefix="project.", dir=SCRATCH))
+    shutil.copytree(ROOT / ".claude" / "hooks", p / ".claude" / "hooks")
+    shutil.copytree(ROOT / "scripts", p / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
+    (p / "harness.toml").write_text(f"[budget]\n{budget}\n")
+    git(p, "init", "-q", "-b", "main")
+    return p
+
+
+def tool_call(p, session="b1", tool="Read"):
+    return run_hook("budget_guard.py", {"hook_event_name": "PreToolUse", "tool_name": tool, "session_id": session,
+                                        "cwd": str(p), "tool_input": {}}, p, project=p)
+
+
+p = project("max_tool_calls = 5\nmax_minutes = 0")
+results = [tool_call(p) for _ in range(7)]
+check("calls 1 to 3 are silent", all(rc == 0 and out == {} for rc, out, _ in results[:3]), str(results[:3]))
+check("call 5 (4 used of 5 = 80%) warns once as context", "80%" in reason_of(results[4][1]) and not is_deny(results[4][1])
+      and "write status" in reason_of(results[4][1]), str(results[4]))
+p10 = project("max_tool_calls = 10\nmax_minutes = 0")
+r10 = [tool_call(p10) for _ in range(10)]
+check("the 80% warning appears on call 9 only (call 10 is silent)", "80%" in reason_of(r10[8][1]) and r10[9][1] == {}
+      and all(r[1] == {} for r in r10[:8]), str(r10[7:]))
+check("call 6 (5 used of 5 = 100%) is denied with the budget message", is_deny(results[5][1])
+      and "budget exhausted: write status (done, left, blockers) and stop" in reason_of(results[5][1]), str(results[5]))
+check("call 7 stays denied", is_deny(results[6][1]))
+check("another session has its own budget", tool_call(p, "b2")[1] == {})
+done = subprocess.run([sys.executable, str(ROOT / "scripts" / "loop_reset.py"), "--session", "b1", "--reason", "extend", "--budget"],
+                      cwd=p, capture_output=True, text=True, env={**ENV, "HARNESS_EVENTS_LOG": str(EVENTS)})
+check("loop_reset --budget starts a fresh budget", done.returncode == 0 and tool_call(p, "b1")[1] == {}, done.stdout + done.stderr)
+p = project("max_tool_calls = 0\nmax_minutes = 1")
+tool_call(p)
+bfile = next((Path(git(p, "rev-parse", "--path-format=absolute", "--git-common-dir")) / "harness" / "loop").glob("b1.budget.json"))
+state = json.loads(bfile.read_text())
+state["start"] = time.time() - 50
+bfile.write_text(json.dumps(state))
+rc, out, _ = tool_call(p)
+check("elapsed minutes count: 50s of a 1-minute budget warns", "83%" in reason_of(out), str(out))
+state["start"] = time.time() - 120
+bfile.write_text(json.dumps(state))
+rc, out, _ = tool_call(p)
+check("elapsed minutes past the limit deny", is_deny(out), str(out))
+p = project("max_tool_calls = 0\nmax_minutes = 0")
+check("0 turns both limits off", all(tool_call(p)[1] == {} for _ in range(5)))
+bfile = next((Path(git(p, "rev-parse", "--path-format=absolute", "--git-common-dir")) / "harness" / "loop").glob("b1.budget.json"))
+bfile.write_text("garbage")
+rc, out, _ = tool_call(p)
+check("a corrupt budget file resets with a notice", rc == 0 and "reset" in reason_of(out), str(out))
+
+# --- turn_guard ---------------------------------------------------------------------------------
+spec = importlib.util.spec_from_file_location("turn_guard_under_test", ROOT / ".claude" / "hooks" / "turn_guard.py")
+tg = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tg)
+for text, want in (
+        ("Fixed the bug.\n\nNext I will run the full suite.", "Next I will"),
+        ("Done with part one. I'll now update the docs.", "I'll now"),
+        ("Let me now check the other callers.", "Let me now"),
+        ("The tests need an update, so I'm going to rewrite them.", "I'm going to"),
+        ("I will start with the adapter.", "I will start"),
+        ("We'll now move to phase two.", "We'll now")):
+    check(f"announcing message blocks: {text!r}", tg.announced(text) == want, str(tg.announced(text)))
+for text in (
+        "I will not touch the adapter.",
+        "This is not going to work, so I stopped.",
+        "He said \"next I will run it\" in the notes.",
+        "The log line `I'll now retry` is from the old script.",
+        "Result:\n\n```\nnext I will run it\n```\n",
+        "> next I will run the suite\n\nAll done.",
+        "Shall I start with the adapter?",
+        "I am going to need a decision: which base?\n\nBlocked: no access to the repo, so I cannot go on. Next I will wait.",
+        "Done. Tests pass: 12 checks.",
+        "Let me know if you want more.",
+        "Earlier I will have said so; the first paragraph only.\n\nAll finished."):
+    check(f"non-announcing message passes: {text[:50]!r}", tg.announced(text) is None, str(tg.announced(text)))
+
+
+def stop(cwd, message, session="t1", active=False, key="last_assistant_message"):
+    return run_hook("turn_guard.py", {"hook_event_name": "Stop", "session_id": session, "cwd": str(cwd),
+                                      "stop_hook_active": active, key: message}, cwd)
+
+
+d = repo()
+rc, out, _ = stop(d, "Next I will run the tests.")
+check("an announcing final message blocks once with 'do it or name the blocker'", rc == 0 and is_block(out)
+      and "do it or name the blocker" in reason_of(out) and g.RULE_TURN in reason_of(out), str(out))
+rc, out, _ = stop(d, "Next I will run the tests.")
+check("the same message does not block twice", rc == 0 and out == {}, str(out))
+rc, out, _ = stop(d, "Then I'll start on the adapter.", session="t2", active=True)
+check("a continuation (stop_hook_active) is never blocked", rc == 0 and out == {}, str(out))
+rc, out, _ = stop(d, "All done.", session="t3")
+check("a finished message stops silently", rc == 0 and out == {})
+transcript = d / "t.jsonl"
+transcript.write_text(json.dumps({"type": "user", "message": {"content": "go"}}) + "\n" + json.dumps(
+    {"type": "assistant", "message": {"content": [{"type": "text", "text": "I'll now run it."}]}}) + "\n")
+rc, out, _ = run_hook("turn_guard.py", {"hook_event_name": "Stop", "session_id": "t4", "cwd": str(d),
+                                        "transcript_path": str(transcript)}, d)
+check("with no last_assistant_message the Claude transcript is read", rc == 0 and is_block(out), str(out))
+rc, out, _ = run_hook("turn_guard.py", {"hook_event_name": "Stop", "session_id": "t5", "cwd": str(d),
+                                        "transcript_path": str(d / "missing.jsonl")}, d)
+check("an unreadable transcript is a pass", rc == 0 and out == {})
+
+# --- unreadable input: a gate that cannot read it allows rather than crashes ------------------------
+for name in ("loop_guard.py", "scope_guard.py", "budget_guard.py", "turn_guard.py"):
+    done = subprocess.run([sys.executable, str(ROOT / ".claude" / "hooks" / name)], input="not json", capture_output=True, text=True,
+                          env={**ENV, "CLAUDE_PROJECT_DIR": str(ROOT)})
+    check(f"{name} allows unreadable input", done.returncode == 0 and done.stdout == "", done.stdout + done.stderr)
+
+print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
+sys.exit(1 if FAIL else 0)

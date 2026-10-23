@@ -47,6 +47,10 @@ high = [".claude/**", ".agents/**", ".codex/**", ".gemini/**", ".github/**", ".g
         "docs/agents/**", "docs/mutation-testing.md"]
 critical = []
 
+[budget]
+max_tool_calls = 400                     # per session; warn at 80%, deny at 100%; 0 is off
+max_minutes = 180
+
 [hooks]
 watched_files = ["harness.toml", "scripts/paths.py", "scripts/harness_config.py",
                  "scripts/gate.sh", "scripts/land.sh", "scripts/run.sh", ".claude/settings.json"]
@@ -179,3 +183,57 @@ event = "SessionEnd"
 kind = "advisory"
 timeout = 20
 command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/session_guard.py\" || true"
+
+[[hook]]
+name = "loop_guard_PreToolUse"
+event = "PreToolUse"
+matcher = "Bash"
+kind = "gate"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "loop_guard_PostToolUse"
+event = "PostToolUse"
+matcher = "Bash"
+kind = "gate"
+timeout = 25
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "loop_guard_PostToolUseFailure"
+event = "PostToolUseFailure"
+matcher = "Bash"
+kind = "gate"
+timeout = 25
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "loop_guard_edits_PostToolUse"
+event = "PostToolUse"
+matcher = "Edit|Write"
+kind = "gate"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "scope_guard_PreToolUse"
+event = "PreToolUse"
+matcher = "Edit|Write"
+kind = "gate"
+timeout = 15
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/scope_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"scope_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "budget_guard_PreToolUse"
+event = "PreToolUse"
+kind = "gate"
+timeout = 5
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/budget_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"budget_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "turn_guard_Stop"
+event = "Stop"
+kind = "gate"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/turn_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"turn_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"

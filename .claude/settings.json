@@ -28,6 +28,11 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/scope_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"scope_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 15
           }
         ]
       },
@@ -38,6 +43,20 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/queue_guard.py\" || true",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/budget_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"budget_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 5
           }
         ]
       }
@@ -50,6 +69,11 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_commit_landed.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"verify_commit_landed.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 25
           }
         ]
       },
@@ -64,6 +88,11 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"adr_gate.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
             "timeout": 10
           }
         ]
@@ -126,6 +155,11 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/session_guard.py\" || true",
             "timeout": 60
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/turn_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"turn_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 10
           }
         ]
       }
@@ -137,6 +171,18 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/session_guard.py\" || true",
             "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }",
+            "timeout": 25
           }
         ]
       }
