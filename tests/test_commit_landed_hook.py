@@ -37,9 +37,10 @@ def check(name, cond, detail=""):
     print(f"  {'ok  ' if cond else 'FAIL'} {name}" + (f"  {detail}" if detail and not cond else ""))
 
 
-def blocked(repo, command, stdout):
+def blocked(repo, command, stdout, payload_cwd=None):
     """Run the hook as Claude Code runs it; return its reason, or '' when silent."""
     event = {"tool_name": "Bash", "tool_input": {"command": command},
+             **({"cwd": payload_cwd} if payload_cwd else {}),
              "tool_response": {"stdout": stdout, "stderr": "", "interrupted": False}}
     done = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(event),
                           capture_output=True, text=True, cwd=repo, env=ENV)
@@ -84,6 +85,35 @@ with tempfile.TemporaryDirectory() as tmp:
           blocked(tmp, "git commit --dry-run", "nothing to commit") == "")
     check("a commit into another repository is not judged against this HEAD",
           blocked(tmp, "git -C /elsewhere commit -m x", "") == "")
+
+    # The hook's own cwd is not where the command ran: a real commit made in a
+    # scratch repo via `cd` or `-C` is judged against that repo's HEAD.
+    with tempfile.TemporaryDirectory() as other:
+        subprocess.run(["git", "init", "-q", "-b", "main", other], check=True, env=ENV)
+        (Path(other) / "b.txt").write_text("two\n")
+        subprocess.run(["git", "-C", other, "add", "b.txt"], check=True, env=ENV)
+        subprocess.run(["git", "-C", other, "-c", "user.email=t@t", "-c", "user.name=t",
+                        "commit", "-q", "--no-verify", "-m", "other"], check=True, env=ENV)
+        ohead = subprocess.run(["git", "-C", other, "rev-parse", "HEAD"], capture_output=True,
+                               text=True, check=True, env=ENV).stdout.strip()
+        line = f"[main {ohead[:7]}] other\n 1 file changed"
+        check("a commit made via cd into another repository is judged there",
+              blocked(tmp, f"cd {other} && git commit -m other", line) == "")
+        check("a commit made via git -C into another repository is judged there",
+              blocked(tmp, f"git -C {other} commit -m other", line) == "")
+        check("a commit with -c options is judged in the payload cwd",
+              blocked(tmp, "git -c user.name=t commit -m other", line, payload_cwd=other) == "")
+        check("a masked commit in another repository is still caught",
+              blocked(tmp, f"cd {other} && git commit -m x; echo done", "done") != "")
+    # A separator inside a quoted message must not switch the check off.
+    check("a commit message containing ; is still verified",
+          blocked(tmp, 'git commit -m "fix: a; b"', "") != "")
+    check("a commit message containing | is still verified",
+          blocked(tmp, "git commit -m 'a | b'", "") != "")
+    check("git help commit is not a commit",
+          blocked(tmp, "git help commit", "GIT-COMMIT(1) manual") == "")
+    check("git log --grep commit is not a commit",
+          blocked(tmp, "git log --grep commit", "") == "")
 
     # A control that cannot read its input must not read as "nothing wrong".
     quiet = subprocess.run([sys.executable, str(HOOK)], input="not json",
