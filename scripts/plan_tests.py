@@ -109,7 +109,7 @@ def referencing_tests(root, path):
     if not path.endswith(".py"):
         return []
     done = subprocess.run(
-        ["rg", "-l", "-w", "-g", "**/tests/test_*.py", "--", Path(path).stem, "."],
+        ["rg", "-l", "-F", "-w", "-g", "**/tests/test_*.py", "--", Path(path).stem, "."],
         cwd=root,
         capture_output=True,
         text=True,

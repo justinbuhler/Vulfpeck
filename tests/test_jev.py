@@ -94,7 +94,7 @@ for path, want in {
         "scripts/plan_tests.py": "High", "scripts/standalone_tests.sh": "High", "scripts/gate.sh": "High",
         "mutants/runner.py": "High", "mutants/patches/M001.patch": "High", "tests/test_jev.py": "High",
         ".github/workflows/tests.yml": "High", ".githooks/pre-commit": "High", "docs/adr/0016-x.md": "Medium",
-        "scripts/adr.py": "Medium", "tests/AGENTS.md": "High", "docs/AGENTS.md": "High", "docs/mutation-testing.md": "Low",
+        "scripts/adr.py": "High", "scripts/harness_env.sh": "High", "docs/agents/issue-tracker.md": "High", "scripts/harness_doctor.py": "Medium", "tests/AGENTS.md": "High", "docs/AGENTS.md": "High", "docs/mutation-testing.md": "High", "docs/notes.md": "Low",
         "README.md": "Low", "ENGINEERING_LOG.md": "Low", "HARNESS.md": "Low"}.items():
     check(f"shipped floor: {path} is {want}", jev.floor_tier([path], SHIPPED)[0] == want, jev.floor_tier([path], SHIPPED)[0])
 

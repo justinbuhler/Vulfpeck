@@ -88,6 +88,11 @@ check("Critical adds the independent re-derivation requirement", any("re-derivat
 check("High does not carry the re-derivation note", not any("re-derivation" in n for n in high["notes"]))
 check("every plan says the land gate is unchanged", all(any("land gate is unchanged" in n for n in p["notes"]) for p in (low, med, high, crit)))
 
+(root / "scripts/c+d(.py").write_text("x = 1\n")
+(root / "tests/test_plus.py").write_text("uses c+d( here\n")
+check("a module stem with regex characters is searched as a fixed string, not a pattern",
+      plan_tests.referencing_tests(root, "scripts/c+d(.py") == ["tests/test_plus.py"], str(plan_tests.referencing_tests(root, "scripts/c+d(.py")))
+
 # --- run: stop at the first failure -------------------------------------------------
 marker = root / "ran-after-failure"
 status = plan_tests.run(root, [{"command": "exit 3", "why": "w"}, {"command": f"touch {marker}", "why": "w"}])

@@ -125,7 +125,7 @@ check("no harness.toml: rules and machinery are High",
       {"harness.toml", "AGENTS.md", "CLAUDE.md", ".claude/**", ".agents/**", ".codex/**", ".gemini/**",
        ".github/**", "scripts/paths.py", "scripts/harness_config.py", "scripts/jev.py", "scripts/plan_tests.py",
        "scripts/standalone_tests.sh", "scripts/land.sh", "scripts/gate.sh", "scripts/run.sh", "mutants/**",
-       "tests/**"} <= set(d0["tiers"]["high"]))
+       "tests/**", "scripts/harness_env.sh", "scripts/adr.py", "docs/agents/**", "docs/mutation-testing.md"} <= set(d0["tiers"]["high"]))
 mt = Path(tempfile.mkdtemp(prefix="harness-config-mt.")).resolve()
 for rel in ("scripts/test_helper.py", "scripts/plan.py", "tests/test_plan.py", "tests/test_other.py",
             "pkg/scripts/tests/test_mod.py", "pkg/mod.py", "pkg/tests/test_mod.py"):
