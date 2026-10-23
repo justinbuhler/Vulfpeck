@@ -98,7 +98,7 @@ def git(cwd, *args):
         done = subprocess.run(
             ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=10, env=ENV
         )
-    except OSError, subprocess.SubprocessError:
+    except (OSError, subprocess.SubprocessError):
         return None
     return done.stdout.strip() if done.returncode == 0 else None
 
@@ -119,7 +119,7 @@ def load_state(path, fresh):
         data = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(data, dict) and data.get("v") == 1:
             return data, None
-    except OSError, ValueError:
+    except (OSError, ValueError):
         pass
     return (
         fresh(),
@@ -138,7 +138,9 @@ def save_state(path, state):
 def session_key(payload):
     """Return the state key: the session id, plus the agent id inside a subagent."""
     agent = payload.get("agent_id")
-    return session_of(payload) + (f".{agent}" if isinstance(agent, str) and agent else "")
+    return session_of(payload) + (
+        f".{agent}" if isinstance(agent, str) and agent else ""
+    )
 
 
 def loop_path(payload):
@@ -148,15 +150,24 @@ def loop_path(payload):
 
 def fresh_loop():
     """Return the empty loop state: the only counters loop_guard and turn_guard keep."""
-    return {"v": 1, "fp": {}, "runs": {}, "last_failed": None, "pending_edits": 0,
-            "stalled": 0, "strikes": 0, "tripped": None, "turn_blocked": ""}
+    return {
+        "v": 1,
+        "fp": {},
+        "runs": {},
+        "last_failed": None,
+        "pending_edits": 0,
+        "stalled": 0,
+        "strikes": 0,
+        "tripped": None,
+        "turn_blocked": "",
+    }
 
 
 def read_payload():
     """Return the hook payload dict from stdin, or None when it is not a JSON object."""
     try:
         payload = json.load(sys.stdin)
-    except ValueError, UnicodeDecodeError:
+    except (ValueError, UnicodeDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
 
@@ -291,6 +302,8 @@ def exit_status(payload):
     if found:
         return int(found[-1])
     if isinstance(response, str):
+        if not payload.get("transcript_path"):
+            return None
         # Codex sends the output text alone; its rollout may lag the hook, so wait briefly.
         deadline = time.monotonic() + float(os.environ.get("GUARD_ROLLOUT_WAIT", "2.0"))
         while True:
@@ -328,7 +341,9 @@ def volatile_free(line):
 
 def fingerprint(command, error_line):
     """Return the sha1 of the normalised command plus the error line without its volatile parts."""
-    return hashlib.sha1(f"{normalise(command)}\0{volatile_free(error_line)}".encode()).hexdigest()
+    return hashlib.sha1(
+        f"{normalise(command)}\0{volatile_free(error_line)}".encode()
+    ).hexdigest()
 
 
 def failure_items(payload):
@@ -341,7 +356,11 @@ def failure_items(payload):
         text = str(payload.get("error") or "")
     else:
         text = text_of(payload.get("tool_response"))
-    names = list(dict.fromkeys(m.group(1) for m in map(FAILED_ITEM.match, text.splitlines()) if m))
+    names = list(
+        dict.fromkeys(
+            m.group(1) for m in map(FAILED_ITEM.match, text.splitlines()) if m
+        )
+    )
     counted = max((int(n) for n in FAILED_COUNT.findall(text)), default=0)
     if not names and not counted:
         return None
