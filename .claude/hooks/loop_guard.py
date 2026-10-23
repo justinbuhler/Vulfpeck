@@ -26,7 +26,9 @@ Registered as a gate: a crash exits 2 (harness.toml [[hook]]). State: scripts/gu
 """
 
 import json
+import os
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -36,10 +38,39 @@ import guard_lib as g  # noqa: E402
 
 STALLED_CYCLES = 2
 SIGHTINGS = 3
-RESET_SCRIPT = re.compile(r"loop_reset\.py")
+NOT_A_WRITE = re.compile(r"\d*>>?\s*(?:&\d|/dev/null)")
 STATE_TOUCH = re.compile(r"harness/loop\b")
 STATE_MUTATION = re.compile(r"\b(?:rm|mv|truncate|unlink|tee|sed|dd|cp)\b|>")
 TRIPPED_TEXT = re.compile(r'"tripped":\s*\{')
+
+
+def runs_reset(cmd):
+    """Return whether cmd executes scripts/loop_reset.py (not --help, and not a mere mention of it).
+
+    The script is executed when it is a segment's command word, or the script argument of
+    python, python3 or `uv run`; `cd x &&` and other segments are split on first.
+    """
+    for segment in re.split(r"&&|\|\||[;|\n]", cmd):
+        try:
+            words = shlex.split(segment)
+        except ValueError:
+            words = segment.split()
+        while words and re.match(r"\w+=", words[0]):
+            words.pop(0)
+        if words[:2] == ["uv", "run"]:
+            words = words[2:]
+            while words and words[0].startswith("-"):
+                words.pop(0)
+        if words and re.fullmatch(r"python[\d.]*", os.path.basename(words[0])):
+            words.pop(0)
+            while words and words[0].startswith("-"):
+                if words[0] in ("-m", "-c"):
+                    words = []
+                    break
+                words.pop(0)
+        if words and os.path.basename(words[0]) == "loop_reset.py" and not {"-h", "--help"} & set(words):
+            return True
+    return False
 
 
 def jev_advice(fp, attempts, errors):
@@ -120,6 +151,7 @@ def stalled_cycle(state, norm, status, items, fp):
     if status == 0:
         state["runs"].pop(norm, None)
         state["stalled"] = 0
+        state["strikes"] = 0
         return False
     state["runs"][norm] = {"items": items, "fp": fp}
     if before is None or state["pending_edits"] == 0:
@@ -180,9 +212,7 @@ def after_command(state, payload, cmd):
 
 def before_command(state, cmd):
     """Return (reason code, message) to deny this Bash command, or None to allow it."""
-    if RESET_SCRIPT.search(cmd) or (
-        STATE_TOUCH.search(cmd) and STATE_MUTATION.search(cmd)
-    ):
+    if runs_reset(cmd) or (STATE_TOUCH.search(cmd) and STATE_MUTATION.search(NOT_A_WRITE.sub("", cmd))):
         return "loop-state-touch", (
             "loop_guard: denied. The loop state is reset by the owner or the task runner, never by the "
             "agent: do not run scripts/loop_reset.py or edit, move or remove the loop state."

@@ -352,6 +352,59 @@ edit(d)
 rc, out, _ = post_fail(d, T, "E: same")
 check("with no parseable failures the same error twice over blocks", rc == 0 and is_block(out), str(out))
 
+# --- strikes expire when a test run passes -----------------------------------------------------
+R = "./scripts/run.sh --tests"
+d = repo()
+red(d, 1, ["a"], cmd=R)
+edit(d)
+red(d, 2, ["a"], cmd=R)
+edit(d)
+rc, out, _ = red(d, 3, ["a"], cmd=R)
+check("(setup) strike 1 blocks once", rc == 0 and is_block(out) and "blocked once" in reason_of(out), str(out))
+edit(d)
+post_ok(d, R)
+red(d, 4, ["z"], cmd=R)
+edit(d)
+red(d, 5, ["z"], cmd=R)
+edit(d)
+rc, out, _ = red(d, 6, ["z"], cmd=R)
+check("an unrelated stall after a green run is strike 1 again, a block once", rc == 0 and is_block(out) and "blocked once" in reason_of(out), str(out))
+edit(d)
+rc, out, _ = pre(d, R)
+check("and test commands are still allowed (no permanent deny from strikes that expired)", rc == 0 and not is_deny(out), str(out))
+rc, out, _ = pre(d, "uvx ruff check .")
+check("lint is allowed too", rc == 0 and not is_deny(out), str(out))
+
+# --- only an executed loop_reset.py is denied -------------------------------------------------
+d = repo()
+for cmd in ("python3 scripts/loop_reset.py --session s1 --reason x", "cd sub && python3 scripts/loop_reset.py --session s1 --reason x",
+            "./scripts/loop_reset.py --session s1 --reason x", "uv run --no-sync python3 scripts/loop_reset.py --session s1 --reason x",
+            "FOO=1 python3 -u scripts/loop_reset.py --session s1 --reason x", "ls; python3 scripts/loop_reset.py --session s1 --reason x"):
+    rc, out, _ = pre(d, cmd)
+    check(f"an executed loop_reset.py is denied: {cmd[:60]!r}", rc == 0 and is_deny(out), str(out))
+for cmd in ("python3 scripts/loop_reset.py --help", "python3 scripts/loop_reset.py -h", "rg -n loop_reset.py docs",
+            "git log --oneline -- scripts/loop_reset.py", "git commit -m 'docs: explain loop_reset.py'", "cat scripts/loop_reset.py",
+            "python3 -m py_compile scripts/loop_reset.py", "python3 tests/test_loop_guards.py",
+            "cat .git/harness/loop/x.json 2>/dev/null", "cat .git/harness/loop/x.json >/dev/null 2>&1", "ls .git/harness/loop"):
+    rc, out, _ = pre(d, cmd)
+    check(f"a mention or read is allowed: {cmd[:60]!r}", rc == 0 and not is_deny(out), str(out))
+rc, out, _ = pre(d, "cat .git/harness/loop/x.json > /tmp/copy.json")
+check("a redirect to a real file from the state directory is still a write", rc == 0 and is_deny(out), str(out))
+
+# --- no transcript_path: unknown at once, no poll --------------------------------------------
+os.environ["GUARD_ROLLOUT_WAIT"] = "3.0"
+began = time.monotonic()
+none_status = g.exit_status({"hook_event_name": "PostToolUse", "tool_response": "a\nb"})
+fast = time.monotonic() - began
+began = time.monotonic()
+os.environ["GUARD_ROLLOUT_WAIT"] = "0.6"
+missing_status = g.exit_status({"hook_event_name": "PostToolUse", "tool_response": "a\n", "tool_use_id": "nope",
+                                "transcript_path": str(codex_log)})
+slow = time.monotonic() - began
+os.environ["GUARD_ROLLOUT_WAIT"] = "0.2"
+check("no transcript_path is unknown immediately, without the poll", none_status is None and fast < 0.5, f"{fast:.2f}s")
+check("a transcript path whose line is missing is polled for the wait, then unknown", missing_status is None and slow >= 0.6, f"{slow:.2f}s")
+
 # --- an unknown exit changes no counter -----------------------------------------------------
 def post_codex(cwd, cmd, text, session="s1", call="exec-x"):
     return run_hook("loop_guard.py", {"hook_event_name": "PostToolUse", "tool_name": "Bash", "session_id": session,
