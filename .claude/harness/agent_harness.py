@@ -29,7 +29,6 @@ Subcommands:
 import argparse
 import json
 import os
-import pathlib
 import re
 import secrets
 import signal
@@ -38,6 +37,10 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from harness_config import load as load_config
+from harness_inputs import copy_inputs
 
 # The pre-commit gate runs lint only (see .githooks/pre-commit), the lint command
 # from harness.toml, which is seconds once uvx has the tool cached and about a
@@ -236,140 +239,10 @@ def refuse_if_dirty(path):
     die(f"target is an existing clean worktree; provision a new path: {path}")
 
 
-# Ignored paths that must never be cloned into an agent's worktree, whatever
-# git reports. `.claude/worktrees/` holds other agents' worktrees, so copying it
-# would put somebody else's work inside this one - the exact contamination this
-# harness exists to prevent. `.env` holds credentials, and the suite runs with
-# no network and no keys, so a scratch worktree has no reason to carry them.
-# The rest are caches that uv and the interpreter rebuild.
-NEVER_CLONE = (".env", ".claude/worktrees", ".venv", ".git", ".claude-flow")
-CACHE_NAMES = {"__pycache__", ".pytest_cache", ".ruff_cache", ".DS_Store",
-               ".mypy_cache", "node_modules"}
-
-
-def clonable(rel):
-    """Return whether one ignored path should be cloned into a worktree."""
-    parts = pathlib.PurePosixPath(rel).parts
-    if any(name in CACHE_NAMES for name in parts):
-        return False
-    return not any(rel == deny or rel.startswith(deny + "/") for deny in NEVER_CLONE)
-
-
-def ignored_inputs(source):
-    """Return every ignored path in the main checkout worth cloning.
-
-    Guessing which directories a worktree is missing does not work: every
-    hand-written list missed an ignored input that sat somewhere unexpected. Git
-    already knows the answer exactly, so ask it: `--directory` collapses a wholly
-    ignored directory to one entry, which keeps this to a few hundred copies
-    rather than eleven thousand.
-
-    Args:
-        source (Path): the main checkout.
-
-    Returns:
-        (list): absolute paths, each an ignored file or directory to clone.
-    """
-    listed = git_ok("-C", str(source), "ls-files", "--others", "--ignored",
-                    "--exclude-standard", "--directory")
-    paths = []
-    for line in listed.splitlines():
-        rel = line.strip().rstrip("/")
-        if rel and clonable(rel):
-            paths.append(source / rel)
-    return paths
-
-
-def missing_after_clone(src, dst):
-    """Return up to 21 regular files present under `src` but absent under `dst`.
-
-    Only regular files count. `.codegraph/daemon.sock` is a live Unix socket:
-    `cp` cannot copy it and a worktree has no use for it, so treating its
-    absence as an incomplete clone would fail every provision for no reason.
-    """
-    missing = []
-    for root, _, files in os.walk(src):
-        base = Path(root).relative_to(src)
-        for name in files:
-            source_file = Path(root) / name
-            if not source_file.is_file() or source_file.is_symlink():
-                continue
-            if not os.path.lexists(dst / base / name):
-                missing.append(str(base / name))
-                if len(missing) > 20:
-                    return missing
-    return missing
-
-
-def clone_argv(*flags):
-    """Return the `cp` argv prefix that clones rather than copies, for this platform.
-
-    macOS clones with `-c` (APFS copy-on-write). GNU cp has no `-c` and rejects it,
-    so a Linux runner copied nothing and every provision died on the comparison
-    below; `--reflink=auto` clones on Btrfs or XFS and falls back to a plain copy.
-    """
-    if sys.platform == "darwin":
-        return ["/bin/cp", "-c" + "".join(f.lstrip("-") for f in flags)]
-    return ["cp", *flags, "--reflink=auto"]
-
-
 def clone_ignored_inputs(worktree):
-    """Clone the gitignored inputs into a fresh worktree, and verify they arrived.
-
-    `git worktree add` carries tracked files only, and `.gitignore` excludes
-    every function's raw inputs and the whole of `output/`, so a new worktree
-    fails the pre-commit gate on missing files rather than on the agent's
-    change. A gate that fails for a reason the agent did not cause teaches
-    agents to bypass it.
-
-    On macOS `/bin/cp` is named in full: GNU cp earlier on PATH (coreutils) rejects `-c`, and
-    a failed clone looked like a clean one until the file-by-file comparison below.
-    `clone_argv` picks the flags for the platform.
-
-    On APFS `cp -c` is a copy-on-write clone: gigabytes cost seconds and no
-    disk, and each worktree still gets its own inodes, so a writer in one
-    worktree cannot reach another's inputs.
-
-    Some of these directories are partly tracked - one tracked file beside
-    ignored ones - so the destination already exists
-    after the checkout. Skipping it left the three behind silently, which is why
-    this merges with `-n` instead: existing files are kept, missing ones are
-    cloned in. `cp -n` exits 1 whenever it skips an existing file, on macOS and
-    in GNU coreutils 9.2 to 9.4 (Ubuntu 24.04), so the
-    exit code cannot tell a skip from a real failure. The file-by-file
-    comparison below is the check that can.
-
-    Args:
-        worktree (Path): the newly created worktree.
-
-    Returns:
-        (list): repository-relative directories cloned in.
-    """
-    source = main_checkout()
-    cloned = []
-    for src in ignored_inputs(source):
-        rel = src.relative_to(source)
-        dst = worktree / rel
-        if src.is_dir():
-            dst.mkdir(parents=True, exist_ok=True)
-            subprocess.run([*clone_argv("-R", "-n"), f"{src}/.", f"{dst}/"],
-                           capture_output=True, text=True, timeout=900,
-                           env=clean_env())
-            missing = missing_after_clone(src, dst)
-            if missing:
-                die(f"cloning {rel} left {len(missing)} file(s) behind, "
-                    f"first: {missing[0]}")
-        elif src.is_file():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            if not os.path.lexists(dst):
-                subprocess.run([*clone_argv(), str(src), str(dst)],
-                               capture_output=True, text=True, timeout=900)
-            if not os.path.lexists(dst):
-                die(f"cloning {rel} into the worktree produced no file")
-        else:
-            continue
-        cloned.append(str(rel))
-    return cloned
+    """Copy the task baseline's declared inputs and return their paths."""
+    return [item["path"] for item in copy_inputs(
+        main_checkout(), worktree, load_config(worktree)["land"]["copy_untracked"])]
 
 
 def cmd_provision(args):
@@ -392,15 +265,13 @@ def cmd_provision(args):
     if proc.returncode:
         die(f"git worktree add failed ({proc.returncode}): {proc.stderr.strip()}")
 
-    cloned = clone_ignored_inputs(path)
+    try:
+        cloned = clone_ignored_inputs(path)
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        die(str(exc))
 
-    # Cloning ignored content can leave the worktree dirty, because some of the
-    # rules that make it ignored live in untracked files. `.claude-flow/` is the
-    # case that proved it: its own nested `.gitignore` is untracked, so copying
-    # `.claude-flow/logs/` without that file made every worktree read ORPHANED
-    # forever. A freshly provisioned worktree must be clean, so check rather
-    # than assume - the agent has not touched anything yet, and any dirt here is
-    # the provisioner's.
+    # An input can depend on an untracked ignore rule in main. Refuse a task
+    # worktree made dirty by that missing rule before handing it to a writer.
     dirt = porcelain(path) or []
     if dirt:
         die(f"provisioning left {len(dirt)} untracked path(s) in {path}; the "
@@ -447,7 +318,7 @@ def cmd_provision(args):
     print(f"  worktree  {path}")
     print(f"  branch    {branch}")
     print(f"  baseline  {args.baseline} -> {baseline_sha}")
-    print(f"  inputs    {len(cloned)} ignored paths cloned from {source}")
+    print(f"  inputs    {len(cloned)} declared files copied from {source}")
     if source_head != baseline_sha:
         print(f"  WARNING   inputs come from {source_head[:9]}, "
               f"not the baseline {baseline_sha[:9]}")
