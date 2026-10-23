@@ -74,11 +74,16 @@ DEFAULTS = {
         "timeout": 8.0,
     },
     "tiers": {
-        # Floor globs per consequence tier (scripts/jev.py consequence). A changed
-        # path matching none is Medium; a change's floor is its highest path.
-        "low": ["**/*.md", "docs/**"],
-        "high": [".claude/hooks/**", ".githooks/**", "scripts/land.sh", "scripts/gate.sh",
-                 "scripts/run.sh", "mutants/runner.py"],
+        # Floor globs per consequence tier (scripts/jev.py consequence). A path
+        # matching none is Medium; a change's floor is its highest path. Checked
+        # critical, high, medium, low. Rules and machinery files are High.
+        "low": ["README.md", "ENGINEERING_LOG.md", "HARNESS.md", "docs/**"],
+        "medium": ["docs/adr/**"],
+        "high": [".claude/**", ".agents/**", ".codex/**", ".gemini/**", ".github/**", ".githooks/**",
+                 "AGENTS.md", "CLAUDE.md", "**/AGENTS.md", "**/CLAUDE.md", "harness.toml",
+                 "scripts/paths.py", "scripts/harness_config.py", "scripts/jev.py", "scripts/plan_tests.py",
+                 "scripts/standalone_tests.sh", "scripts/land.sh", "scripts/gate.sh", "scripts/run.sh",
+                 "mutants/**", "tests/**"],
         "critical": [],
     },
     "hooks": {
@@ -96,7 +101,7 @@ DEFAULTS = {
     "mapped_tests": [
         {
             "match": "*.py",
-            "self": "test_*.py",
+            "self": "*tests/test_*.py",
             "tests": ["{dir}/tests/test_{name}", "tests/test_{name}"],
             "command": "uv run --no-sync python3 {test}",
         },
@@ -105,7 +110,7 @@ DEFAULTS = {
 
 STRING_LISTS = {("land", "copy_untracked"), ("roles", "read_only"), ("adr", "require_for"), ("adr", "exempt"), ("hooks", "watched_files"),
                 ("hooks", "watched_dirs"), ("hooks", "skip_dirs"),
-                ("tiers", "low"), ("tiers", "high"), ("tiers", "critical")}
+                ("tiers", "low"), ("tiers", "medium"), ("tiers", "high"), ("tiers", "critical")}
 RULE_KEYS = {"match": str, "self": str, "tests": list, "command": str}
 
 
@@ -173,7 +178,7 @@ def merge(raw):
         if set("*?[") & set(entry.strip("/").split("/")[0]):
             raise ConfigError(f"adr.require_for: {entry!r} must start with a fixed directory or "
                               "file name, not a glob")
-    for tier, globs in ((k, config["tiers"][k]) for k in ("low", "high", "critical")):
+    for tier, globs in ((k, config["tiers"][k]) for k in ("low", "medium", "high", "critical")):
         for entry in globs:
             safe_relative(entry, f"tiers.{tier}")
     for entry in config["adr"]["exempt"]:
@@ -241,7 +246,8 @@ def mapped_test(config, root, edited):
     for rule in config["mapped_tests"]:
         if not fnmatch(name, rule["match"]):
             continue
-        if rule["self"] and fnmatch(name, rule["self"]):
+        # A `self` pattern with a "/" matches the repository-relative path, else the name.
+        if rule["self"] and fnmatch(rel.as_posix() if "/" in rule["self"] else name, rule["self"]):
             test = root / rel
         else:
             fields = {"dir": rel.parent.as_posix(), "name": name,

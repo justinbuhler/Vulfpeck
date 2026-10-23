@@ -315,20 +315,20 @@ RULES = (
 
 
 def floor_tier(paths, tiers):
-    """Highest tier any path reaches by the `[tiers]` globs; a path matching none is Medium.
+    """Highest tier any path reaches by the `[tiers]` globs; a path matching none, and an empty change, is Medium.
 
     Returns:
         (tuple): the tier name and the sorted paths that set it.
     """
 
     def rank(path):
-        for tier, number in (("critical", 3), ("high", 2), ("low", 0)):
+        for tier, number in (("critical", 3), ("high", 2), ("medium", 1), ("low", 0)):
             if any(glob_match(g, path) for g in tiers[tier]):
                 return number
         return 1
 
     ranks = {p: rank(p) for p in paths}
-    top = max(ranks.values(), default=0)
+    top = max(ranks.values(), default=1)  # an empty change is Medium, never Low
     return TIERS[top], sorted(p for p, r in ranks.items() if r == top)
 
 
@@ -375,7 +375,7 @@ def consequence(paths, description, *, stats=None, symbols=None, tiers=None):
     shown = [p for p in paths if not is_protected_path(p)]
     state = {
         "paths": shown,
-        "stats": list(stats or []),
+        "stats": [st for st in (stats or []) if not any(is_protected_path(t) for t in st.split())],
         "symbols": list(symbols or []),
         "description": (description or "")[:2000],
         "rules": RULES,

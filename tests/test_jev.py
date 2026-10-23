@@ -31,7 +31,7 @@ for seam in ("settings", "_urlopen"):
     assert hasattr(jev, seam), seam
 jev.settings = lambda: {"enabled": True, "timeout": 1.0}
 
-TIERS = {"low": ["**/*.md", "docs/**"], "high": ["scripts/gate.sh", ".claude/hooks/**"], "critical": ["scripts/destroy.py"]}
+TIERS = {"low": ["**/*.md", "docs/**"], "medium": ["docs/adr/**"], "high": ["scripts/gate.sh", ".claude/hooks/**"], "critical": ["scripts/destroy.py"]}
 
 
 class Reply:
@@ -79,6 +79,24 @@ check("a hook anywhere under the hooks dir is High", jev.floor_tier([".claude/ho
 check("the highest path sets the floor and is named",
       jev.floor_tier(["README.md", "scripts/x.py", "scripts/gate.sh"], TIERS) == ("High", ["scripts/gate.sh"]))
 check("a critical glob outranks a high one", jev.floor_tier(["scripts/gate.sh", "scripts/destroy.py"], TIERS)[0] == "Critical")
+
+check("an empty change is Medium, never Low", jev.floor_tier([], TIERS) == ("Medium", []))
+check("an ADR is Medium though docs/** is Low", jev.floor_tier(["docs/adr/0016-x.md"], TIERS)[0] == "Medium")
+check("a medium glob outranks the low glob that also matches", jev.floor_tier(["docs/adr/a.md", "docs/b.md"], TIERS) == ("Medium", ["docs/adr/a.md"]))
+
+# The shipped harness.toml: every rule and machinery file is at least High, plain docs are Low.
+SHIPPED = jev.harness_config.load(jev.REPO)["tiers"]
+for path, want in {
+        "AGENTS.md": "High", "CLAUDE.md": "High", "harness.toml": "High", ".claude/agents/reviewer-code.md": "High",
+        ".claude/skills/land/SKILL.md": "High", ".claude/settings.json": "High", ".claude/hooks/x.py": "High",
+        ".agents/skills/testing/SKILL.md": "High", ".codex/config.toml": "High", ".gemini/settings.json": "High",
+        "scripts/paths.py": "High", "scripts/harness_config.py": "High", "scripts/jev.py": "High",
+        "scripts/plan_tests.py": "High", "scripts/standalone_tests.sh": "High", "scripts/gate.sh": "High",
+        "mutants/runner.py": "High", "mutants/patches/M001.patch": "High", "tests/test_jev.py": "High",
+        ".github/workflows/tests.yml": "High", ".githooks/pre-commit": "High", "docs/adr/0016-x.md": "Medium",
+        "scripts/adr.py": "Medium", "tests/AGENTS.md": "High", "docs/AGENTS.md": "High", "docs/mutation-testing.md": "Low",
+        "README.md": "Low", "ENGINEERING_LOG.md": "Low", "HARNESS.md": "Low"}.items():
+    check(f"shipped floor: {path} is {want}", jev.floor_tier([path], SHIPPED)[0] == want, jev.floor_tier([path], SHIPPED)[0])
 
 # --- Jev proposes, code decides ------------------------------------------------
 serve({"tier": tier_answers(Low=0.95, Medium=0.05), "alters_values": {"noul": 0.05}})
@@ -173,7 +191,8 @@ secret_text = ("fix Authorization: Bearer abcdef1234567890XYZ and password=hunte
 content = "UNIQUE_FILE_CONTENT_9f3a"
 src = Path(tempfile.mkdtemp()) / "mod.py"
 src.write_text(f"x = '{content}'\n")
-cons([str(src), ".env", ".ssh/id_rsa", "scripts/x.py"], secret_text, stats=["scripts/x.py +1 -0"], symbols=["load"])
+cons([str(src), ".env", ".ssh/id_rsa", "scripts/x.py"], secret_text,
+     stats=["scripts/x.py +1 -0", ".env +3 -0", "keys/server.pem +9 -9", "old.txt => .ssh/id_rsa +1 -0"], symbols=["load"])
 req = sent[0]
 raw = req.data.decode()
 body = json.loads(raw)
@@ -189,6 +208,7 @@ check("the state holds only paths, stats, symbols, description and rules",
 check("file contents are never in the request", content not in raw)
 check("credential-file paths are withheld, other paths kept",
       body["state"]["paths"] == [str(src), "scripts/x.py"], str(body["state"]["paths"]))
+check("credential paths are withheld from the stats too", body["state"]["stats"] == ["scripts/x.py +1 -0"], str(body["state"]["stats"]))
 check("both typed questions are sent", {k: v["type"] for k, v in body["questions"].items()} == {"tier": "choice", "alters_values": "noul"})
 
 sent = serve({"tier": tier_answers(Medium=0.9), "alters_values": {"noul": 0.1}})
