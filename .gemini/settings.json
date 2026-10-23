@@ -25,6 +25,12 @@
             "name": "queue_guard_PreToolUse",
             "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --timeout 10 --runtime gemini --event BeforeTool -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/queue_guard.py\" || true' || true",
             "timeout": 10000
+          },
+          {
+            "type": "command",
+            "name": "verify_commit_landed_PreToolUse",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --timeout 10 --runtime gemini --event BeforeTool -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_commit_landed.py\" || true' || true",
+            "timeout": 10000
           }
         ]
       }

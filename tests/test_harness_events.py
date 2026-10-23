@@ -160,20 +160,30 @@ with tempfile.TemporaryDirectory() as raw:
     subprocess.run(["git", "init", "-q", "-b", "work"], cwd=repo, env=genv, check=True)
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
                     "commit", "-q", "--allow-empty", "-m", "base"], cwd=repo, env=genv, check=True)
+    base_head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo, env=genv,
+                               capture_output=True, text=True).stdout.strip()
+    log = fresh("commits")
+    hook_env = {**genv, "HARNESS_EVENTS_LOG": str(log)}
+
+    def commit_event(name, command, response=None):
+        event = {"hook_event_name": name, "session_id": "s", "tool_input": {"command": command}}
+        if response is not None:
+            event["tool_response"] = {"stdout": response}
+        subprocess.run([sys.executable, str(HOOKS / "verify_commit_landed.py")], input=json.dumps(event),
+                       capture_output=True, text=True, cwd=repo, env=hook_env)
+
+    commit_event("PreToolUse", "git commit -m x")
+    commit_event("PostToolUse", "git commit -m x", "nothing to commit")
+    commit_event("PreToolUse", "git commit -m y")
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                    "commit", "-q", "--allow-empty", "-m", "y"], cwd=repo, env=genv, check=True)
     head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo, env=genv,
                           capture_output=True, text=True).stdout.strip()
-    log = fresh("commits")
-    for response in ("nothing to commit", f"[work {head}] base"):
-        subprocess.run([sys.executable, str(HOOKS / "verify_commit_landed.py")],
-                       input=json.dumps({"tool_input": {"command": "git commit -m x"},
-                                         "tool_response": {"stdout": response}}),
-                       capture_output=True, text=True, cwd=repo, env={**genv, "HARNESS_EVENTS_LOG": str(log)})
-    subprocess.run([sys.executable, str(HOOKS / "verify_commit_landed.py")],
-                   input=json.dumps({"tool_input": {"command": "ls"}, "tool_response": {}}),
-                   capture_output=True, text=True, cwd=repo, env={**genv, "HARNESS_EVENTS_LOG": str(log)})
+    commit_event("PostToolUse", "git commit -m y", "")
+    commit_event("PostToolUse", "ls", "")
     seen = [(r["decision"], r["reason"], r["subject"]) for r in rows(log)]
     check("verify_commit_landed records a blocked and a verified commit, and nothing else",
-          seen == [("block", "not-landed", head), ("pass", "landed", head)], str(seen))
+          seen == [("block", "not-landed", base_head), ("pass", "landed", head)], str(seen))
 
 # --- the record CLI used by land.sh exits 0 whatever happens -----------------------
 done = subprocess.run([sys.executable, str(ROOT / "scripts" / "harness_events.py"), "record",

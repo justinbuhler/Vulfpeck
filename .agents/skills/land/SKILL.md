@@ -35,10 +35,8 @@ of every artifact generated this session and say which fall outside the repo roo
 2. Read `git diff --cached` before committing.
 3. Put `git commit` alone in the invocation. No trailing `echo`, no `&& ...`, no
    `| tail` - a later command in the same invocation masks git's exit code and has
-   hidden an index.lock race.
-   No `-q`/`--quiet` either: `.claude/hooks/verify_commit_landed.py` reads the
-   `[branch sha]` line git prints, and a quiet commit that landed is reported as
-   not landed.
+   hidden an index.lock race. `.claude/hooks/verify_commit_landed.py` compares HEAD
+   before and after the call, so `-q` is fine.
 4. `.githooks/pre-commit` runs lint only (decided 2026-09-05). The suite gates the
    land, on the merged tree with untracked inputs provisioned. `--no-verify` is no
    longer the norm here: a failure at commit is a lint failure, so fix it rather than

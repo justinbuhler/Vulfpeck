@@ -14,4 +14,4 @@ Several sessions share one checkout. Peers leave uncommitted work, move branch r
 
 ## Consequences
 
-Local `main` only ever holds trees that passed the gate. Landing to `origin/main` is a separate publish step. `git commit -q` trips the commit check because it prints no sha, so the land skill forbids it.
+Local `main` only ever holds trees that passed the gate. Landing to `origin/main` is a separate publish step.

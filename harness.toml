@@ -97,6 +97,14 @@ timeout = 10
 command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/queue_guard.py\" || true"
 
 [[hook]]
+name = "verify_commit_landed_PreToolUse"
+event = "PreToolUse"
+matcher = "Bash"
+kind = "advisory"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_commit_landed.py\" || true"
+
+[[hook]]
 name = "verify_commit_landed_PostToolUse"
 event = "PostToolUse"
 matcher = "Bash"

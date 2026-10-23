@@ -480,26 +480,34 @@ with tempfile.TemporaryDirectory() as raw:
         capture_output=True,
         text=True,
     ).stdout.strip()
-    for runtime, event, name, response in (
-        ("codex", "PostToolUse", "Bash", lambda text: {"stdout": text}),
-        ("gemini", "AfterTool", "run_shell_command", lambda text: {"llmContent": text}),
+    for runtime, pre_event, event, name, response in (
+        ("codex", "PreToolUse", "PostToolUse", "Bash", lambda text: {"stdout": text}),
+        ("gemini", "BeforeTool", "AfterTool", "run_shell_command", lambda text: {"llmContent": text}),
     ):
-        for text, want, label in (
-            ("nothing to commit", True, "blocks a commit that did not land"),
-            (f"[work {head}] base", False, "passes a commit at HEAD"),
+        for text, moves, want, label in (
+            ("[work 1234567] base", False, True, "blocks a commit that did not move HEAD, whatever git printed"),
+            ("", True, False, "passes a commit that moved HEAD and printed nothing"),
         ):
             native = {
                 "tool_name": name,
+                "session_id": f"{runtime}-{moves}",
                 "cwd": str(repo),
-                "tool_input": {"command": "git commit -m x"},
-                "tool_response": response(text),
+                "tool_input": {"command": "git commit -q -m x"},
             }
+            matcher = "Bash" if runtime == "codex" else "run_shell_command"
+            run(runtime, pre_event, matcher, "verify_commit_landed.py", native)
+            if moves:
+                subprocess.run(
+                    ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                     "commit", "-q", "--allow-empty", "-m", "moved"],
+                    cwd=repo, env=env, check=True, capture_output=True,
+                )
             rc, out, err = run(
                 runtime,
                 event,
-                "Bash" if runtime == "codex" else "run_shell_command",
+                matcher,
                 "verify_commit_landed.py",
-                native,
+                {**native, "tool_response": response(text)},
             )
             check(
                 f"{runtime}: verify_commit_landed {label}",
@@ -576,6 +584,10 @@ with tempfile.TemporaryDirectory() as raw:
         )
 
     # Failure direction: a guard that crashes blocks (gate) on every runtime; an advisory fails open.
+    # verify_commit_landed.py is a gate after the call and an advisory (it only records HEAD) before it.
+    def is_gate(event, script):
+        return script in gates and not (script == "verify_commit_landed.py" and event in ("PreToolUse", "BeforeTool"))
+
     gates = {
         "require_agent_model.py",
         "model_router.py",
@@ -601,7 +613,7 @@ with tempfile.TemporaryDirectory() as raw:
                 )
             finally:
                 target.write_text(original)
-            if script in gates:
+            if is_gate(event, script):
                 check(
                     f"{runtime} {event} gate {script} blocks when the guard crashes",
                     denied(runtime, out) or rc == 2,
@@ -626,7 +638,7 @@ with tempfile.TemporaryDirectory() as raw:
                     {"cwd": str(project)},
                     project=project,
                 )
-                if script in gates:
+                if is_gate(event, script):
                     check(
                         f"{runtime} {event} gate {script} exits 2 when the adapter crashes",
                         rc == 2,

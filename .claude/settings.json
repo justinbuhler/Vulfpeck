@@ -33,6 +33,11 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/queue_guard.py\" || true",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_commit_landed.py\" || true",
+            "timeout": 10
           }
         ]
       }

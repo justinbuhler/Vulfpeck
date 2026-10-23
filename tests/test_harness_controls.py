@@ -43,6 +43,7 @@ EXPECTED = {
     ("PreToolUse", "Agent", "require_agent_model.py", "gate"),
     ("PreToolUse", "Agent", "model_router.py", "gate"),
     ("PreToolUse", "Edit|Write", "blast_radius_advisory.py", "advisory"),
+    ("PreToolUse", "Bash", "verify_commit_landed.py", "advisory"),
     ("PostToolUse", "Bash", "verify_commit_landed.py", "gate"),
     ("PostToolUse", "Edit|Write", "test_for_edited_module.py", "gate"),
     ("UserPromptSubmit", "", "codegraph_freshness.py", "advisory"),
@@ -54,7 +55,7 @@ EXPECTED = {
     ("Stop", "", "session_guard.py", "advisory"),
     ("SessionEnd", "", "session_guard.py", "advisory"),
 }
-GATES = {script for _, _, script, kind in EXPECTED if kind == "gate"}
+GATES = {(event, script) for event, _, script, kind in EXPECTED if kind == "gate"}
 
 GIT_ENV = ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_PREFIX",
            "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -118,6 +119,7 @@ CODEX_EXPECTED = {
     ("PreToolUse", "spawn_agent", "require_agent_model.py", "gate"),
     ("PreToolUse", "spawn_agent", "model_router.py", "gate"),
     ("PreToolUse", "apply_patch|Bash", "blast_radius_advisory.py", "advisory"),
+    ("PreToolUse", "Bash", "verify_commit_landed.py", "advisory"),
     ("PostToolUse", "Bash", "verify_commit_landed.py", "gate"),
     ("PostToolUse", "apply_patch|Bash", "test_for_edited_module.py", "gate"),
     ("UserPromptSubmit", "", "codegraph_freshness.py", "advisory"),
@@ -131,6 +133,7 @@ CODEX_EXPECTED = {
 }
 GEMINI_EXPECTED = {
     ("BeforeTool", "replace|write_file", "blast_radius_advisory.py", "advisory"),
+    ("BeforeTool", "run_shell_command", "verify_commit_landed.py", "advisory"),
     ("AfterTool", "run_shell_command", "verify_commit_landed.py", "gate"),
     ("AfterTool", "replace|write_file", "test_for_edited_module.py", "gate"),
     ("BeforeAgent", "", "codegraph_freshness.py", "advisory"),
@@ -243,18 +246,23 @@ with tempfile.TemporaryDirectory() as raw:
         subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True)
     head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo, env=env,
                           capture_output=True, text=True).stdout.strip()
+    pre_cmd, _ = command("PreToolUse", "Bash", "verify_commit_landed.py")
     cmd, timeout = command("PostToolUse", "Bash", "verify_commit_landed.py")
 
-    def bash_event(response):
-        return json.dumps({"hook_event_name": "PostToolUse", "tool_name": "Bash",
-                           "tool_input": {"command": "git commit -m x"},
+    def bash_event(event, response=""):
+        return json.dumps({"hook_event_name": event, "session_id": "canary", "tool_name": "Bash",
+                           "tool_input": {"command": "git commit -q -m x"},
                            "tool_response": {"stdout": response}})
 
-    rc, out, err, secs = run(cmd, bash_event("nothing to commit"), cwd=repo)
-    check("canary: registered verify_commit_landed.py blocks a commit that did not land",
+    run(pre_cmd, bash_event("PreToolUse"), cwd=repo)
+    rc, out, err, secs = run(cmd, bash_event("PostToolUse", "[work 1234567] base"), cwd=repo)
+    check("canary: registered verify_commit_landed.py blocks a commit that did not move HEAD, whatever git printed",
           rc == 0 and denied(out), out + err)
-    rc, out, err, _ = run(cmd, bash_event(f"[work {head}] base"), cwd=repo)
-    check("canary: registered verify_commit_landed.py passes a commit at HEAD",
+    run(pre_cmd, bash_event("PreToolUse"), cwd=repo)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                    "commit", "-q", "--allow-empty", "-m", "two"], cwd=repo, env=env, check=True)
+    rc, out, err, _ = run(cmd, bash_event("PostToolUse", ""), cwd=repo)
+    check("canary: registered verify_commit_landed.py passes a `git commit -q` that moved HEAD and printed nothing",
           rc == 0 and not denied(out), out + err)
 
 with tempfile.TemporaryDirectory() as raw:
@@ -352,7 +360,7 @@ with tempfile.TemporaryDirectory() as raw:
             rc, out, err, _ = run(cmd, "{}", project=project)
         finally:
             target.write_text(original)
-        if script in GATES:
+        if (event, script) in GATES:
             check(f"{event} gate {script} fails closed on a crash (exit 2)", rc == 2, f"rc={rc} {err}")
             check(f"{event} gate {script} says it failed closed", "failing closed" in err, err)
         else:
@@ -362,7 +370,7 @@ with tempfile.TemporaryDirectory() as raw:
             rc, _, err, _ = run(cmd, "{}", project=project)
         finally:
             target.write_text(original)
-        if script in GATES:
+        if (event, script) in GATES:
             check(f"{event} gate {script} fails closed when its file is missing", rc == 2, f"rc={rc}")
         else:
             check(f"{event} advisory {script} fails open when its file is missing", rc == 0, f"rc={rc} {err}")

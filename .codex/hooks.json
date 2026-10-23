@@ -33,6 +33,11 @@
             "type": "command",
             "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --timeout 10 --runtime codex --event PreToolUse -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/queue_guard.py\" || true' || true",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hook_adapter.py\" --timeout 10 --runtime codex --event PreToolUse -- 'python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_commit_landed.py\" || true' || true",
+            "timeout": 10
           }
         ]
       }
