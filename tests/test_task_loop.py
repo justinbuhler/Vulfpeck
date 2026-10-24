@@ -44,7 +44,7 @@ echo "gh $*" >> "$SHIM_LOG"
 case "$1 $2" in
   "issue list") cat "$FAKE_ISSUES" ;;
   "pr create") echo "https://github.com/o/r/pull/42" ;;
-  "pr view") echo "${FAKE_HEAD_OID:-$("$REAL_GIT" -C "$SHIM_REPO" for-each-ref --sort=-committerdate --format='%(objectname)' --count=1 refs/heads/agent/)}" ;;
+  "pr view") echo "${FAKE_HEAD_OID:-$("$REAL_GIT" -C "$SHIM_REPO" for-each-ref --sort=-refname --sort=-committerdate --format='%(objectname)' --count=1 refs/heads/agent/)}" ;;
   "api graphql") cat "${FAKE_TIMELINE_FILE:-$SHIM_DIR/timeline.json}" || exit 1 ;;
   "pr checks") case "$*" in
       *--json*) if [ -n "$FAKE_CHECKS_JSON" ]; then echo "$FAKE_CHECKS_JSON"; else echo '[{"name":"tests","bucket":"pass"}]'; fi; exit "${FAKE_CHECKS_JSON_RC:-0}" ;;
