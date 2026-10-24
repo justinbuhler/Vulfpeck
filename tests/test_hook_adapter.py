@@ -1,0 +1,1043 @@
+"""scripts/hook_adapter.py runs the Claude-shaped guards unchanged under Codex and Gemini.
+
+Unit checks cover the translation (apply_patch, tool and event names, results the
+target cannot express). End-to-end checks run the command string rendered into
+.codex/hooks.json and .gemini/settings.json through a shell, as each CLI does,
+with that CLI's payload on stdin, and look for that CLI's own deny shape.
+Every expectation is a literal written here (CLAUDE.md Rule 11).
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import hook_adapter as ha  # noqa: E402
+import render_hooks  # noqa: E402
+
+os.environ["HARNESS_EVENTS_LOG"] = str(
+    Path(tempfile.mkdtemp(prefix="harness-events.")) / "events.jsonl"
+)
+
+PASS, FAIL = [], []
+
+
+def check(name, cond, detail=""):
+    (PASS if cond else FAIL).append(name)
+    print(
+        ("  PASS  " if cond else "  FAIL  ")
+        + name
+        + (("\n          " + detail) if detail and not cond else "")
+    )
+
+
+def raises(fn, kind=ha.AdapterError):
+    try:
+        fn()
+    except kind:
+        return True
+    except Exception:
+        return False
+    return False
+
+
+GIT_ENV = (
+    "GIT_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_WORK_TREE",
+    "GIT_PREFIX",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_CEILING_DIRECTORIES",
+)
+
+
+def patch(*ops):
+    return "*** Begin Patch\n" + "\n".join(ops) + "\n*** End Patch"
+
+
+# --- translation ----------------------------------------------------------------
+two = patch("*** Add File: a.py", "+x", "*** Update File: b.py", "@@", "-old", "+new")
+events = ha.to_claude(
+    "codex",
+    "PreToolUse",
+    {"tool_name": "apply_patch", "cwd": "/w", "tool_input": {"command": two}},
+)
+check("apply_patch with 2 files yields 2 events", len(events) == 2, str(events))
+check(
+    "apply_patch events are one Write and one Edit, in patch order",
+    [e["tool_name"] for e in events] == ["Write", "Edit"],
+)
+check(
+    "apply_patch file paths are made absolute from cwd",
+    [e["tool_input"]["file_path"] for e in events] == ["/w/a.py", "/w/b.py"],
+)
+check(
+    "an Edit event carries the old and new text",
+    events[1]["tool_input"]["old_string"] == "old\n"
+    and events[1]["tool_input"]["new_string"] == "new\n",
+)
+moved = ha.to_claude(
+    "codex",
+    "PreToolUse",
+    {
+        "tool_name": "apply_patch",
+        "cwd": "/w",
+        "tool_input": {
+            "command": patch(
+                "*** Update File: a.py", "*** Move to: c.py", "@@", "-x", "+y"
+            )
+        },
+    },
+)
+check(
+    "a move is an Edit of the old path and a Write of the new one",
+    [(e["tool_name"], Path(e["tool_input"]["file_path"]).name) for e in moved]
+    == [("Edit", "a.py"), ("Write", "c.py")],
+)
+check(
+    "a patch without End marker is refused",
+    raises(lambda: ha.parse_apply_patch("*** Begin Patch\n*** Add File: a\n+x")),
+)
+check(
+    "an unknown patch operation is refused",
+    raises(lambda: ha.parse_apply_patch(patch("*** Frob File: a"))),
+)
+check(
+    "apply_patch on a Stop event is refused",
+    raises(
+        lambda: ha.to_claude(
+            "codex",
+            "Stop",
+            {"tool_name": "apply_patch", "tool_input": {"command": two}},
+        )
+    ),
+)
+shell = ha.to_claude(
+    "codex",
+    "PreToolUse",
+    {"tool_name": "exec_command", "tool_input": {"command": "ls"}},
+)[0]
+check(
+    "a Codex shell tool becomes Bash",
+    shell["tool_name"] == "Bash" and shell["tool_input"]["command"] == "ls",
+)
+spawn = ha.to_claude(
+    "codex",
+    "PreToolUse",
+    {"tool_name": "spawn_agent", "tool_input": {"agent_type": "Explore"}},
+)[0]
+check(
+    "spawn_agent becomes Agent with subagent_type",
+    spawn["tool_name"] == "Agent" and spawn["tool_input"]["subagent_type"] == "Explore",
+)
+for native, claude in (
+    ("run_shell_command", "Bash"),
+    ("write_file", "Write"),
+    ("replace", "Edit"),
+):
+    got = ha.to_claude(
+        "gemini",
+        "PreToolUse",
+        {"tool_name": native, "tool_input": {"file_path": "/w/x"}},
+    )[0]
+    check(f"Gemini {native} becomes {claude}", got["tool_name"] == claude)
+after = ha.to_claude(
+    "gemini",
+    "PostToolUse",
+    {
+        "tool_name": "run_shell_command",
+        "tool_input": {"command": "git commit"},
+        "tool_response": {"llmContent": "[work abc123] msg"},
+    },
+)[0]
+check(
+    "a Gemini tool result becomes a Claude tool_response with stdout",
+    after["tool_response"]["stdout"] == "[work abc123] msg",
+)
+
+# --- results ----------------------------------------------------------------------
+check(
+    "guard exit 2 is a deny carrying stderr", ha.interpret(2, "", "no\n").deny == "no"
+)
+check(
+    "guard exit 1 raises (a crash is not an answer)",
+    raises(lambda: ha.interpret(1, "", "boom")),
+)
+deny_json = json.dumps(
+    {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "why",
+        }
+    }
+)
+check(
+    "a permissionDecision deny is a deny", ha.interpret(0, deny_json, "").deny == "why"
+)
+check(
+    "a decision block is a deny",
+    ha.interpret(0, json.dumps({"decision": "block", "reason": "r"}), "").deny == "r",
+)
+check("plain stdout is context", ha.interpret(0, "hello\n", "").context == ["hello"])
+check(
+    "text before a JSON line is kept as context",
+    ha.interpret(0, 'note\n{"systemMessage": "m"}', "").context == ["note"],
+)
+check(
+    "updatedInput cannot be carried and raises",
+    raises(
+        lambda: ha.interpret(
+            0, json.dumps({"hookSpecificOutput": {"updatedInput": {}}}), ""
+        ),
+        ha.OutputNormalizationError,
+    ),
+)
+check(
+    "continue=false cannot be carried and raises",
+    raises(
+        lambda: ha.interpret(0, json.dumps({"continue": False}), ""),
+        ha.OutputNormalizationError,
+    ),
+)
+check(
+    "a deny on SessionStart raises for Codex",
+    raises(
+        lambda: ha.emit("codex", "SessionStart", ha.Result(deny="x")),
+        ha.OutputNormalizationError,
+    ),
+)
+check(
+    "a deny on SessionStart raises for Gemini",
+    raises(
+        lambda: ha.emit("gemini", "SessionStart", ha.Result(deny="x")),
+        ha.OutputNormalizationError,
+    ),
+)
+check(
+    "a deny on SubagentStart raises for Codex",
+    raises(
+        lambda: ha.emit("codex", "SubagentStart", ha.Result(deny="x")),
+        ha.OutputNormalizationError,
+    ),
+)
+check(
+    "Codex PreToolUse deny is a permissionDecision",
+    ha.emit("codex", "PreToolUse", ha.Result(deny="x"))["hookSpecificOutput"][
+        "permissionDecision"
+    ]
+    == "deny",
+)
+check(
+    "Codex Stop deny is a block",
+    ha.emit("codex", "Stop", ha.Result(deny="x"))
+    == {"decision": "block", "reason": "x"},
+)
+check(
+    "Gemini AfterAgent deny is a deny",
+    ha.emit("gemini", "Stop", ha.Result(deny="x"))
+    == {"decision": "deny", "reason": "x"},
+)
+check(
+    "Gemini BeforeTool context goes to systemMessage (no additionalContext there)",
+    ha.emit("gemini", "PreToolUse", ha.Result(context=["c"])) == {"systemMessage": "c"},
+)
+check(
+    "Gemini SessionStart context is additionalContext",
+    ha.emit("gemini", "SessionStart", ha.Result(context=["c"]))["hookSpecificOutput"]
+    == {"hookEventName": "SessionStart", "additionalContext": "c"},
+)
+check(
+    "an event the runtime lacks is refused",
+    raises(lambda: ha.handle("gemini", "SubagentStart", "{}", "true")),
+)
+check(
+    "a payload that is not JSON is refused",
+    raises(lambda: ha.handle("codex", "Stop", "not json", "true")),
+)
+check(
+    "any deny among per-file results wins",
+    ha.merge([ha.Result(), ha.Result(deny="d"), ha.Result()]).deny == "d",
+)
+
+
+# --- registered commands, run as each CLI runs them ---------------------------------
+def load(runtime):
+    """Return {(event, matcher, script): (command, timeout)} from the rendered file."""
+    path = ROOT / (
+        ".codex/hooks.json" if runtime == "codex" else ".gemini/settings.json"
+    )
+    out = {}
+    for event, groups in json.loads(path.read_text())["hooks"].items():
+        for group in groups:
+            for hook in group["hooks"]:
+                scripts = [
+                    s
+                    for s in __import__("re").findall(r"[\w.-]+\.py\b", hook["command"])
+                    if s != "hook_adapter.py"
+                ]
+                out[(event, group.get("matcher", ""), scripts[0])] = hook["command"]
+    return out
+
+
+REG = {"codex": load("codex"), "gemini": load("gemini")}
+
+# adr_gate.py is not registered in this repository (adr.require_for is empty), but a
+# project that opts in registers it. These literal entries stand in for that
+# registration, rendered through the same code, and OPT_IN is such a project.
+ADR_GATE = (
+    'python3 "${CLAUDE_PROJECT_DIR}/.claude/hooks/adr_gate.py" || { rc=$?; [ "$rc" = 2 ] || '
+    'echo "adr_gate.py crashed (rc=$rc); failing closed" >&2; exit 2; }'
+)
+for _runtime in ("codex", "gemini"):
+    _entries = [
+        {
+            "name": f"adr_gate_{e}",
+            "event": e,
+            "matcher": "Edit|Write",
+            "kind": "gate",
+            "timeout": 10,
+            "command": ADR_GATE,
+        }
+        for e in ("PreToolUse", "PostToolUse")
+    ]
+    for _event, _groups in render_hooks.build(_entries, _runtime).items():
+        for _group in _groups:
+            REG[_runtime][(_event, _group["matcher"], "adr_gate.py")] = _group["hooks"][
+                0
+            ]["command"]
+
+OPT_IN = Path(tempfile.mkdtemp(prefix="opt-in."))
+_genv = {k: v for k, v in os.environ.items() if k not in GIT_ENV}
+subprocess.run(["git", "init", "-q"], cwd=OPT_IN, env=_genv, check=True)
+(OPT_IN / "harness.toml").write_text('[adr]\nrequire_for = ["scripts/**"]\n')
+(OPT_IN / "docs" / "adr").mkdir(parents=True)
+(OPT_IN / ".claude" / "hooks").mkdir(parents=True)
+shutil.copy2(ROOT / ".claude" / "hooks" / "adr_gate.py", OPT_IN / ".claude" / "hooks")
+(OPT_IN / "scripts").mkdir()
+for _name in (
+    "adr.py",
+    "harness_config.py",
+    "harness_events.py",
+    "hook_adapter.py",
+    "paths.py",
+):
+    shutil.copy2(ROOT / "scripts" / _name, OPT_IN / "scripts")
+
+
+def run(runtime, event, matcher, script, native, project=ROOT, cwd=None):
+    """Run one rendered registration; return (rc, stdout, stderr).
+
+    `matcher` is only the caller's label: the CLIs name tools differently, so the
+    registration is found by event and script.
+    """
+    command = next(
+        c for (e, _, sc), c in REG[runtime].items() if (e, sc) == (event, script)
+    )
+    env = {k: v for k, v in os.environ.items() if k not in GIT_ENV}
+    done = subprocess.run(
+        ["bash", "-c", command],
+        input=json.dumps(native),
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(cwd or project),
+        timeout=180,
+    )
+    return done.returncode, done.stdout, done.stderr
+
+
+def denied(runtime, stdout):
+    try:
+        out = json.loads(stdout)
+    except ValueError:
+        return False
+    if runtime == "codex":
+        return (
+            out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+            or out.get("decision") == "block"
+        )
+    return out.get("decision") == "deny"
+
+
+def codex_patch(cwd, *ops):
+    return {
+        "hook_event_name": "x",
+        "tool_name": "apply_patch",
+        "cwd": str(cwd),
+        "tool_input": {"command": patch(*ops)},
+    }
+
+
+# Agent gates: Codex only (Gemini has no Agent tool matcher; a recorded gap).
+def spawn(agent, model):
+    tool_input = {"agent_type": agent, "message": "y"}
+    if model:
+        tool_input["model"] = model
+    return {"tool_name": "spawn_agent", "tool_input": tool_input, "cwd": str(ROOT)}
+
+
+for script, bad, good in (
+    (
+        "require_agent_model.py",
+        spawn("python-general-engineer", None),
+        spawn("python-general-engineer", "sonnet"),
+    ),
+    ("model_router.py", spawn("Explore", "opus"), spawn("Explore", "haiku")),
+):
+    rc, out, err = run("codex", "PreToolUse", "spawn_agent", script, bad)
+    check(
+        f"codex: {script} denies a bad spawn_agent",
+        rc == 0 and denied("codex", out),
+        out + err,
+    )
+    rc, out, err = run("codex", "PreToolUse", "spawn_agent", script, good)
+    check(
+        f"codex: {script} allows a good spawn_agent",
+        rc == 0 and not denied("codex", out),
+        out + err,
+    )
+
+# adr_gate in a project that opts in: governed and ungoverned paths, both runtimes.
+for event in ("PreToolUse",):
+    rc, out, err = run(
+        "codex",
+        event,
+        "apply_patch",
+        "adr_gate.py",
+        codex_patch(OPT_IN, "*** Add File: scripts/zzz_canary.py", "+x"),
+        project=OPT_IN,
+    )
+    check(
+        "codex: adr_gate denies an apply_patch adding a governed file no ADR names",
+        rc == 0 and denied("codex", out),
+        out + err,
+    )
+    rc, out, err = run(
+        "codex",
+        event,
+        "apply_patch",
+        "adr_gate.py",
+        codex_patch(OPT_IN, "*** Add File: notes_canary.md", "+x"),
+        project=OPT_IN,
+    )
+    check(
+        "codex: adr_gate allows an apply_patch adding an ungoverned file",
+        rc == 0 and not denied("codex", out),
+        out + err,
+    )
+    rc, out, err = run(
+        "codex",
+        event,
+        "apply_patch",
+        "adr_gate.py",
+        codex_patch(
+            OPT_IN,
+            "*** Add File: notes_canary.md",
+            "+x",
+            "*** Add File: scripts/zzz_canary.py",
+            "+y",
+        ),
+        project=OPT_IN,
+    )
+    check(
+        "codex: one denied file in a two-file patch denies the patch",
+        rc == 0 and denied("codex", out),
+        out + err,
+    )
+    for path, want, label in (
+        ("scripts/zzz_canary.py", True, "denies a governed file no ADR names"),
+        ("notes_canary.md", False, "allows an ungoverned file"),
+    ):
+        native = {
+            "tool_name": "write_file",
+            "cwd": str(OPT_IN),
+            "tool_input": {"file_path": str(OPT_IN / path), "content": "x"},
+        }
+        rc, out, err = run(
+            "gemini", "BeforeTool", "write_file", "adr_gate.py", native, project=OPT_IN
+        )
+        check(
+            f"gemini: adr_gate {label}",
+            rc == 0 and denied("gemini", out) == want,
+            out + err,
+        )
+
+# verify_commit_landed (PostToolUse Bash), both runtimes, in a scratch repository.
+with tempfile.TemporaryDirectory() as raw:
+    repo = Path(raw)
+    env = {k: v for k, v in os.environ.items() if k not in GIT_ENV}
+    for args in (
+        ["init", "-q", "-b", "work"],
+        [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+    ):
+        subprocess.run(
+            ["git", *args], cwd=repo, env=env, check=True, capture_output=True
+        )
+    head = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    for runtime, pre_event, event, name, response in (
+        ("codex", "PreToolUse", "PostToolUse", "Bash", lambda text: {"stdout": text}),
+        (
+            "gemini",
+            "BeforeTool",
+            "AfterTool",
+            "run_shell_command",
+            lambda text: {"llmContent": text},
+        ),
+    ):
+        for text, moves, want, label in (
+            (
+                "[work 1234567] base",
+                False,
+                True,
+                "blocks a commit that did not move HEAD, whatever git printed",
+            ),
+            ("", True, False, "passes a commit that moved HEAD and printed nothing"),
+        ):
+            native = {
+                "tool_name": name,
+                "session_id": f"{runtime}-{moves}",
+                "cwd": str(repo),
+                "tool_input": {"command": "git commit -q -m x"},
+            }
+            matcher = "Bash" if runtime == "codex" else "run_shell_command"
+            run(runtime, pre_event, matcher, "verify_commit_landed.py", native)
+            if moves:
+                subprocess.run(
+                    [
+                        "git",
+                        "-c",
+                        "user.name=t",
+                        "-c",
+                        "user.email=t@t",
+                        "-c",
+                        "commit.gpgsign=false",
+                        "commit",
+                        "-q",
+                        "--allow-empty",
+                        "-m",
+                        "moved",
+                    ],
+                    cwd=repo,
+                    env=env,
+                    check=True,
+                    capture_output=True,
+                )
+            rc, out, err = run(
+                runtime,
+                event,
+                matcher,
+                "verify_commit_landed.py",
+                {**native, "tool_response": response(text)},
+            )
+            check(
+                f"{runtime}: verify_commit_landed {label}",
+                rc == 0 and denied(runtime, out) == want,
+                out + err,
+            )
+
+# test_for_edited_module, both runtimes, in a scratch project that carries the adapter.
+with tempfile.TemporaryDirectory() as raw:
+    project = Path(raw)
+    env = {k: v for k, v in os.environ.items() if k not in GIT_ENV}
+    shutil.copytree(
+        ROOT / "scripts",
+        project / "scripts",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    shutil.copytree(
+        ROOT / ".claude" / "hooks",
+        project / ".claude" / "hooks",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    (project / "harness.toml").write_text(
+        '[[mapped_tests]]\nmatch = "*.txt"\ntests = ["{dir}/check_{stem}.sh"]\ncommand = "bash {test}"\n'
+    )
+    (project / "a.txt").write_text("x\n")
+    (project / "check_a.sh").write_text("echo canary-failed; exit 1\n")
+    (project / "b.txt").write_text("x\n")
+    (project / "check_b.sh").write_text("exit 0\n")
+    subprocess.run(["git", "init", "-q"], cwd=project, env=env, check=True)
+    for runtime, event, matcher, native in (
+        (
+            "codex",
+            "PostToolUse",
+            "apply_patch",
+            lambda n: codex_patch(project, f"*** Update File: {n}", "@@", "-x", "+y"),
+        ),
+        (
+            "gemini",
+            "AfterTool",
+            "write_file|replace",
+            lambda n: {
+                "tool_name": "write_file",
+                "cwd": str(project),
+                "tool_input": {"file_path": str(project / n), "content": "y"},
+                "tool_response": {"llmContent": "ok"},
+            },
+        ),
+    ):
+        rc, out, err = run(
+            runtime,
+            event,
+            matcher,
+            "test_for_edited_module.py",
+            native("a.txt"),
+            project=project,
+        )
+        check(
+            f"{runtime}: test_for_edited_module blocks on a failing mapped test",
+            rc == 0 and denied(runtime, out) and "canary-failed" in out,
+            f"rc={rc} {out}{err}",
+        )
+        rc, out, err = run(
+            runtime,
+            event,
+            matcher,
+            "test_for_edited_module.py",
+            native("b.txt"),
+            project=project,
+        )
+        check(
+            f"{runtime}: test_for_edited_module passes a passing mapped test",
+            rc == 0 and not denied(runtime, out),
+            f"rc={rc} {out}{err}",
+        )
+
+    # Failure direction: a guard that crashes blocks (gate) on every runtime; an advisory fails open.
+    # verify_commit_landed.py is a gate after the call and an advisory (it only records HEAD) before it.
+    def is_gate(event, script):
+        return script in gates and not (
+            script == "verify_commit_landed.py"
+            and event in ("PreToolUse", "BeforeTool")
+        )
+
+    gates = {
+        "require_agent_model.py",
+        "model_router.py",
+        "verify_commit_landed.py",
+        "test_for_edited_module.py",
+        "adr_gate.py",
+        "loop_guard.py",
+        "scope_guard.py",
+        "budget_guard.py",
+        "turn_guard.py",
+    }
+    for runtime in ("codex", "gemini"):
+        for (event, matcher, script), command in sorted(REG[runtime].items()):
+            target = project / ".claude" / "hooks" / script
+            if not target.is_file():
+                target = project / "scripts" / script
+            original = target.read_text()
+            target.write_text("raise RuntimeError('simulated crash')\n")
+            try:
+                rc, out, err = run(
+                    runtime,
+                    event,
+                    matcher,
+                    script,
+                    {"cwd": str(project)},
+                    project=project,
+                )
+            finally:
+                target.write_text(original)
+            if is_gate(event, script):
+                check(
+                    f"{runtime} {event} gate {script} blocks when the guard crashes",
+                    denied(runtime, out) or rc == 2,
+                    f"rc={rc} {out}{err}",
+                )
+            else:
+                check(
+                    f"{runtime} {event} advisory {script} does not block when the guard crashes",
+                    rc == 0 and not denied(runtime, out),
+                    f"rc={rc} {out}{err}",
+                )
+        adapter = project / "scripts" / "hook_adapter.py"
+        original = adapter.read_text()
+        adapter.write_text("raise RuntimeError('adapter crash')\n")
+        try:
+            for (event, matcher, script), command in sorted(REG[runtime].items()):
+                rc, out, err = run(
+                    runtime,
+                    event,
+                    matcher,
+                    script,
+                    {"cwd": str(project)},
+                    project=project,
+                )
+                if is_gate(event, script):
+                    check(
+                        f"{runtime} {event} gate {script} exits 2 when the adapter crashes",
+                        rc == 2,
+                        f"rc={rc} {err}",
+                    )
+                else:
+                    check(
+                        f"{runtime} {event} advisory {script} exits 0 when the adapter crashes",
+                        rc == 0,
+                        f"rc={rc} {err}",
+                    )
+        finally:
+            adapter.write_text(original)
+
+
+# --- a guard or a stdin that outlives the hook timeout must block a gate -------------
+import time  # noqa: E402
+
+import render_hooks  # noqa: E402
+
+check(
+    "the adapter's budget is about 1s under the registered timeout",
+    ha.budget(10) == 9.0 and ha.budget(2) == 1.0,
+)
+check("no --timeout means no deadline", ha.budget(None) is None)
+env = {k: v for k, v in os.environ.items() if k not in GIT_ENV}
+for runtime, event in (("codex", "PreToolUse"), ("gemini", "BeforeTool")):
+    for kind, want_rc in (("gate", 2), ("advisory", 0)):
+        entry = {"command": "sleep 30", "kind": kind, "timeout": 3}
+        command = render_hooks.adapted(entry, runtime, event)
+        began = time.monotonic()
+        done = subprocess.run(
+            ["bash", "-c", command],
+            input="{}",
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(ROOT),
+            timeout=20,
+        )
+        took = time.monotonic() - began
+        check(
+            f"{runtime} {kind}: a guard that sleeps past the timeout ends the hook with rc {want_rc} before it",
+            done.returncode == want_rc and took < 3.0,
+            f"rc={done.returncode} {took:.1f}s {done.stderr}",
+        )
+        check(
+            f"{runtime} {kind}: the timeout is reported",
+            "before the hook timeout" in done.stderr or kind == "advisory",
+            done.stderr,
+        )
+    entry = {"command": "true", "kind": "gate", "timeout": 3}
+    proc = subprocess.Popen(
+        ["bash", "-c", render_hooks.adapted(entry, runtime, event)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        cwd=str(ROOT),
+    )
+    began = time.monotonic()
+    try:
+        proc.wait(timeout=10)
+        err = proc.stderr.read()
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        err = "HUNG"
+    check(
+        f"{runtime} gate: a stdin that never closes ends the hook with rc 2 before the timeout",
+        proc.returncode == 2
+        and time.monotonic() - began < 3.0
+        and "stdin was not closed" in err,
+        f"rc={proc.returncode} {err}",
+    )
+
+
+# --- a patch sent through the shell is a patch (observed: Codex reports it as Bash) ----
+heredoc = (
+    "apply_patch <<'EOF'\n"
+    + patch("*** Add File: scripts/x.py", "+x", "*** Add File: y.md", "+y")
+    + "\nEOF"
+)
+shell_events = ha.to_claude(
+    "codex",
+    "PreToolUse",
+    {"tool_name": "Bash", "cwd": "/w", "tool_input": {"command": heredoc}},
+    edits=True,
+)
+check(
+    "an edit guard turns a shell apply_patch into one event per file",
+    [(e["tool_name"], e["tool_input"]["file_path"]) for e in shell_events]
+    == [("Write", "/w/scripts/x.py"), ("Write", "/w/y.md")],
+    str(shell_events),
+)
+check(
+    "a Bash guard still sees the Bash call itself",
+    [
+        e["tool_name"]
+        for e in ha.to_claude(
+            "codex",
+            "PreToolUse",
+            {"tool_name": "Bash", "tool_input": {"command": heredoc}},
+        )
+    ]
+    == ["Bash"],
+)
+check(
+    "an edit guard gets no event for an ordinary Bash call",
+    ha.to_claude(
+        "codex",
+        "PreToolUse",
+        {"tool_name": "Bash", "tool_input": {"command": "git status"}},
+        edits=True,
+    )
+    == [],
+)
+check(
+    "a Begin Patch with no End Patch raises",
+    raises(
+        lambda: ha.to_claude(
+            "codex",
+            "PreToolUse",
+            {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: a\n+x\nEOF"
+                },
+            },
+            edits=True,
+        )
+    ),
+)
+check(
+    "a compound command that ends in a patch is still found",
+    len(
+        ha.to_claude(
+            "codex",
+            "PreToolUse",
+            {
+                "tool_name": "Bash",
+                "cwd": "/w",
+                "tool_input": {"command": "cd /w && " + heredoc},
+            },
+            edits=True,
+        )
+    )
+    == 2,
+)
+rc, out, err = run(
+    "codex",
+    "PreToolUse",
+    "apply_patch|Bash",
+    "adr_gate.py",
+    {
+        "tool_name": "Bash",
+        "cwd": str(OPT_IN),
+        "tool_input": {
+            "command": "apply_patch <<'EOF'\n"
+            + patch("*** Add File: scripts/zzz_canary.py", "+x")
+            + "\nEOF"
+        },
+    },
+    project=OPT_IN,
+)
+check(
+    "codex: adr_gate denies a governed file added by a shell apply_patch",
+    rc == 0 and denied("codex", out),
+    out + err,
+)
+rc, out, err = run(
+    "codex",
+    "PreToolUse",
+    "apply_patch|Bash",
+    "adr_gate.py",
+    {"tool_name": "Bash", "cwd": str(OPT_IN), "tool_input": {"command": "git status"}},
+    project=OPT_IN,
+)
+check(
+    "codex: adr_gate stays silent on an ordinary Bash call",
+    rc == 0 and out.strip() == "{}",
+    out + err,
+)
+
+
+# --- which shell commands are patches (scope reset) ---------------------------------------
+def files_of(command):
+    """Return the file names the edit guards would see for a Bash command, in order."""
+    events = ha.to_claude(
+        "codex",
+        "PreToolUse",
+        {"tool_name": "Bash", "cwd": "/w", "tool_input": {"command": command}},
+        edits=True,
+    )
+    return [Path(e["tool_input"]["file_path"]).name for e in events]
+
+
+one = lambda name: patch(f"*** Add File: {name}", "+x")  # noqa: E731
+two_patches = f"apply_patch <<'EOF'\n{one('first.py')}\nEOF\napply_patch <<'EOF'\n{one('second.py')}\nEOF"
+check(
+    "two apply_patch heredocs in one command are both gated",
+    files_of(two_patches) == ["first.py", "second.py"],
+    str(files_of(two_patches)),
+)
+check(
+    "two patch blocks in one heredoc are both gated",
+    files_of(f"apply_patch <<'EOF'\n{one('a.py')}\n{one('b.py')}\nEOF")
+    == ["a.py", "b.py"],
+)
+decoy = (
+    f"echo '{one('decoy.py')}' >/dev/null; apply_patch <<'EOF'\n{one('real.py')}\nEOF"
+)
+check(
+    "a decoy patch in an echo does not hide the real one: only the real file is gated",
+    files_of(decoy) == ["real.py"],
+    str(files_of(decoy)),
+)
+check(
+    "rg -F with both markers is not a patch and does not raise",
+    files_of("rg -F '*** Begin Patch' x # apply_patch") == [],
+)
+check(
+    "a commit message naming apply_patch and holding both markers is not a patch",
+    files_of(f'git commit -m "fix apply_patch: {one("m.py")}"') == [],
+)
+check(
+    "an unclosed Begin marker in an rg command does not raise",
+    files_of("rg 'apply_patch|*** Begin Patch' .") == [],
+)
+check(
+    "a cat heredoc holding a patch example is not an edit of the example's path",
+    files_of(f"cat > notes.md <<'EOF'\nexample:\n{one('example.py')}\nEOF") == [],
+)
+check(
+    "text after a cat heredoc is still scanned, so a real patch there is gated",
+    files_of(
+        f"cat > notes.md <<'EOF'\n{one('example.py')}\nEOF\napply_patch <<'EOF'\n{one('real.py')}\nEOF"
+    )
+    == ["real.py"],
+)
+check(
+    "bash -c with an apply_patch heredoc is gated",
+    files_of("bash -c \"apply_patch <<'EOF'\n" + one("viabash.py") + '\nEOF"')
+    == ["viabash.py"],
+)
+check(
+    "apply_patch after && or ; or a pipe's left side is a command word and is gated",
+    files_of(f"cd x && apply_patch <<'EOF'\n{one('c.py')}\nEOF") == ["c.py"],
+)
+check(
+    "apply_patch given the patch as an argument is gated",
+    files_of('apply_patch "' + one("arg.py") + '"') == ["arg.py"],
+)
+check(
+    "an env assignment before apply_patch does not hide it",
+    files_of(f"FOO=1 apply_patch <<'EOF'\n{one('env.py')}\nEOF") == ["env.py"],
+)
+check(
+    "a malformed patch to a real apply_patch invocation still raises",
+    raises(
+        lambda: files_of(
+            "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: a\n+x\nEOF"
+        )
+    ),
+)
+check(
+    "a heredoc to apply_patch with no patch at all raises",
+    raises(lambda: files_of("apply_patch <<'EOF'\nhello\nEOF")),
+)
+check(
+    "apply_patch < file and cat p | apply_patch are left alone (no patch text in the command)",
+    files_of("apply_patch < p.txt") == [] and files_of("cat p.txt | apply_patch") == [],
+)
+check(
+    "a quoted << in an echo does not swallow the next lines",
+    files_of(f"echo '<<X'\napply_patch <<'EOF'\n{one('after.py')}\nEOF")
+    == ["after.py"],
+)
+
+# --- the adapter takes its guard down with it ---------------------------------------------
+import signal  # noqa: E402
+
+check(
+    "Codex SessionEnd is capped at its 3s limit",
+    ha.effective_timeout("codex", "SessionEnd", 20) == 3.0,
+)
+check(
+    "other events keep the registered timeout",
+    ha.effective_timeout("codex", "PreToolUse", 10) == 10
+    and ha.effective_timeout("gemini", "SessionEnd", 20) == 20,
+)
+check(
+    "a capped SessionEnd budget is 2s",
+    ha.budget(ha.effective_timeout("codex", "SessionEnd", 20)) == 2.0,
+)
+with tempfile.TemporaryDirectory() as raw:
+    pidfile = Path(raw) / "guard.pid"
+    entry = {
+        "command": f"echo $$ > {pidfile}; exec sleep 60",
+        "kind": "gate",
+        "timeout": 120,
+    }
+    proc = subprocess.Popen(
+        ["bash", "-c", render_hooks.adapted(entry, "codex", "PreToolUse")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        cwd=str(ROOT),
+        start_new_session=True,
+    )
+    proc.stdin.write("{}")
+    proc.stdin.flush()
+    proc.stdin.close()
+    for _ in range(100):
+        if pidfile.is_file() and pidfile.read_text().strip():
+            break
+        time.sleep(0.1)
+    guard_pid = int(pidfile.read_text().strip())
+    # signal the adapter itself (the python child of the registration shell), as the runtime would
+    adapter_pid = None
+    for _ in range(50):  # the adapter is the registration shell's child
+        kids = subprocess.run(
+            ["pgrep", "-P", str(proc.pid)], capture_output=True, text=True
+        ).stdout.split()
+        if kids:
+            adapter_pid = int(kids[0])
+            break
+        time.sleep(0.1)
+    os.kill(adapter_pid, signal.SIGTERM)
+    proc.wait(timeout=10)
+    time.sleep(0.3)
+    try:
+        os.kill(guard_pid, 0)
+        alive = True
+    except OSError:
+        alive = False
+    check(
+        "SIGTERM to the adapter leaves no live guard",
+        not alive and proc.returncode == 2,
+        f"alive={alive} rc={proc.returncode}",
+    )
+    if alive:
+        os.kill(guard_pid, signal.SIGKILL)
+
+print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
+sys.exit(1 if FAIL else 0)

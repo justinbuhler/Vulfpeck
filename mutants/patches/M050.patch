@@ -1,0 +1,15 @@
+# mutant_id: M050
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: a worker that times out has its container deleted, so the VM does not keep the key
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -720,7 +720,7 @@
+             sh(plans["worker"][1], wt, WORKER_TIMEOUT, untrusted=root, extra_env=env),
+             secret,
+         )
+-        if done.returncode == 124 and cfg["sandbox"] == "container":
++        if False:
+             sh(["container", "delete", "--force", box_name(wt)])
+         if (wt / ".git").read_text() != link:
+             raise Halt("failed", "the worker changed the worktree's .git link")

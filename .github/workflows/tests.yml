@@ -25,4 +25,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
+      # plan_tests.py finds the tests that name a changed module with rg, which the runner image lacks.
+      - run: sudo apt-get install -y ripgrep
       - run: ./scripts/gate.sh

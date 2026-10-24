@@ -15,6 +15,7 @@ number arrives before the claim, not that the edit is hard to make.
 Scope is deliberately a handful of paths. A hook that fires on every edit is one nobody
 reads, and these are the files whose reach is not visible from the edit itself.
 """
+
 import json
 import os
 import re
@@ -24,9 +25,15 @@ from pathlib import Path
 
 # Used when scripts/harness_config.py is absent or harness.toml is unreadable;
 # otherwise harness.toml [hooks] watched_files / watched_dirs decide.
-WATCHED_FILES = ("harness.toml", "scripts/paths.py", "scripts/harness_config.py",
-                 "scripts/gate.sh", "scripts/land.sh", "scripts/run.sh",
-                 ".claude/settings.json")
+WATCHED_FILES = (
+    "harness.toml",
+    "scripts/paths.py",
+    "scripts/harness_config.py",
+    "scripts/gate.sh",
+    "scripts/land.sh",
+    "scripts/run.sh",
+    ".claude/settings.json",
+)
 WATCHED_DIRS = (".githooks/",)
 CODEGRAPH_TIMEOUT = 8
 GIT_TIMEOUT = 3
@@ -46,6 +53,7 @@ def watched_paths(root):
     try:
         sys.path.insert(0, str(root / "scripts"))
         import harness_config
+
         hooks = harness_config.load(root)["hooks"]
         return tuple(hooks["watched_files"]), tuple(hooks["watched_dirs"])
     except Exception:
@@ -75,10 +83,16 @@ def candidates(text):
     Returns:
         (tuple): (path literals, constant names), each ordered and deduplicated.
     """
-    literals = [v for v in dict.fromkeys(LITERAL.findall(text))
-                if "/" in v or re.search(r"\.\w{2,5}$", v)]
-    constants = [c for c in dict.fromkeys(CONSTANT.findall(text))
-                 if c not in ("TRUE", "FALSE", "NULL", "NONE")]
+    literals = [
+        v
+        for v in dict.fromkeys(LITERAL.findall(text))
+        if "/" in v or re.search(r"\.\w{2,5}$", v)
+    ]
+    constants = [
+        c
+        for c in dict.fromkeys(CONSTANT.findall(text))
+        if c not in ("TRUE", "FALSE", "NULL", "NONE")
+    ]
     return literals[:4], constants[:5]
 
 
@@ -97,9 +111,13 @@ def tracked_hits(value, root, exclude):
         (tuple): (code and declaration paths, prose paths), excluding the edited file.
     """
     try:
-        out = subprocess.run(["git", "grep", "-l", "-F", value, "--", "."],
-                             cwd=root, capture_output=True, text=True,
-                             timeout=GIT_TIMEOUT).stdout.split()
+        out = subprocess.run(
+            ["git", "grep", "-l", "-F", value, "--", "."],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT,
+        ).stdout.split()
     except (subprocess.TimeoutExpired, OSError):
         return [], []
     hits = [f for f in out if f != exclude]
@@ -125,16 +143,22 @@ def blast_radius(names, root):
     if not names:
         return []
     try:
-        out = subprocess.run(["codegraph", "explore", " ".join(names)],
-                             cwd=root, capture_output=True, text=True,
-                             timeout=CODEGRAPH_TIMEOUT).stdout
+        out = subprocess.run(
+            ["codegraph", "explore", " ".join(names)],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=CODEGRAPH_TIMEOUT,
+        ).stdout
     except (subprocess.TimeoutExpired, OSError, FileNotFoundError):
         return []
     wanted = {n.lower() for n in names}
     kept = []
     for line in out.splitlines():
         stripped = line.strip()
-        if not stripped.startswith("-") or ("caller" not in line and "tests:" not in line):
+        if not stripped.startswith("-") or (
+            "caller" not in line and "tests:" not in line
+        ):
             continue
         symbol = re.search(r"`([^`]+)`", stripped)
         if symbol and symbol.group(1).lower() in wanted:
@@ -170,22 +194,36 @@ def main():
     literals, constants = candidates(changing)
     # The control's own name first: who reaches this file is the question an edit
     # inside it cannot answer, and it is the one that was missed on .githooks/.
-    literals = [rel, Path(rel).name] + [v for v in literals if v not in (rel, Path(rel).name)]
+    literals = [rel, Path(rel).name] + [
+        v for v in literals if v not in (rel, Path(rel).name)
+    ]
 
-    lines = [f"BLAST RADIUS — {rel} is a shared control; measure before you call this cheap."]
+    lines = [
+        f"BLAST RADIUS — {rel} is a shared control; measure before you call this cheap."
+    ]
     for value in literals:
         code, prose = tracked_hits(value, root, rel)
         if code:
-            shown = ", ".join(code[:4]) + (f" +{len(code) - 4} more" if len(code) > 4 else "")
+            shown = ", ".join(code[:4]) + (
+                f" +{len(code) - 4} more" if len(code) > 4 else ""
+            )
             tail = f"  (+{len(prose)} in prose)" if prose else ""
-            lines.append(f"  {len(code):>3} code/decl file(s) also spell {value!r}: {shown}{tail}")
+            lines.append(
+                f"  {len(code):>3} code/decl file(s) also spell {value!r}: {shown}{tail}"
+            )
         elif prose:
-            lines.append(f"  {len(prose):>3} prose file(s) mention {value!r}; no code spells it")
+            lines.append(
+                f"  {len(prose):>3} prose file(s) mention {value!r}; no code spells it"
+            )
     for line in blast_radius(constants, root):
         lines.append(f"  {line}")
 
-    lines.append("  Before claiming a cost: git grep -cF '<current value>' for every literal you move.")
-    lines.append("  Start now, not after:  ./scripts/run.sh --tests   (a subset is not a result)")
+    lines.append(
+        "  Before claiming a cost: git grep -cF '<current value>' for every literal you move."
+    )
+    lines.append(
+        "  Start now, not after:  ./scripts/run.sh --tests   (a subset is not a result)"
+    )
     advisory = "\n".join(lines)
     # stderr on exit 0 reaches the transcript but not the model, which makes an
     # advisory nobody acts on. additionalContext is the channel that puts it in
@@ -197,13 +235,17 @@ def main():
     # reaches the transcript, additionalContext is what puts it in front of the
     # reader about to make the claim. No permissionDecision - this must never
     # approve an edit that would otherwise have been asked about.
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "additionalContext": advisory,
-        },
-        "systemMessage": advisory,
-    }))
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "additionalContext": advisory,
+                },
+                "systemMessage": advisory,
+            }
+        )
+    )
     print(advisory, file=sys.stderr)
     return 0
 

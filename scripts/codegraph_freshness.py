@@ -70,8 +70,10 @@ WORKTREE_TIMEOUT = 5
 
 # In a linked worktree the index describes main, so neither `codegraph sync` nor
 # `codegraph init .` is a remedy there (rule 3); the report must not tell an agent to run them.
-READ_ONLY_REMEDY = ("the index describes main and is read-only in a worktree - "
-                    "read the files your branch changed directly")
+READ_ONLY_REMEDY = (
+    "the index describes main and is read-only in a worktree - "
+    "read the files your branch changed directly"
+)
 
 
 def evaluate(status, repo=REPO, main_checkout=True):
@@ -90,12 +92,14 @@ def evaluate(status, repo=REPO, main_checkout=True):
         detail = ", ".join(f"{pending.get(k) or 0} {k}" for k in PENDING_KINDS)
         violations.append(
             f"CG-02 codegraph reports {total} uningested change(s) ({detail}) - "
-            + ("run `codegraph sync`" if main_checkout else READ_ONLY_REMEDY))
+            + ("run `codegraph sync`" if main_checkout else READ_ONLY_REMEDY)
+        )
 
     if status.get("worktreeMismatch"):
         violations.append(
             f"CG-03 index was built against a different worktree: "
-            f"{status['worktreeMismatch']!r}")
+            f"{status['worktreeMismatch']!r}"
+        )
 
     # Derived here rather than read out of the status document. Asking codegraph
     # whether codegraph indexed the wrong tree makes this control depend on the
@@ -111,7 +115,12 @@ def evaluate(status, repo=REPO, main_checkout=True):
     elif Path(indexed).resolve() != Path(repo).resolve():
         violations.append(
             f"CG-03 the index describes {str(indexed)!r}, not {str(repo)!r} - "
-            + ("run `codegraph init .` in this worktree" if main_checkout else READ_ONLY_REMEDY))
+            + (
+                "run `codegraph init .` in this worktree"
+                if main_checkout
+                else READ_ONLY_REMEDY
+            )
+        )
 
     if not status.get("lastIndexed"):
         violations.append("CG-04 the index does not record when it was built")
@@ -130,8 +139,12 @@ def status_or_reason(root=None, timeout=STATUS_TIMEOUT_S):
     """Return (status document, None) or (None, why it is unavailable)."""
     root = root or REPO
     try:
-        out = subprocess.run(["codegraph", "status", "--json", str(root)],
-                             capture_output=True, text=True, timeout=timeout)
+        out = subprocess.run(
+            ["codegraph", "status", "--json", str(root)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
     except subprocess.TimeoutExpired:
         return None, f"codegraph status timed out after {timeout}s"
     except OSError:
@@ -156,14 +169,18 @@ def is_main_checkout(repo=REPO):
     False, because a wrong True syncs an index from a tree it does not describe.
     """
     try:
-        out = subprocess.run(["git", "-C", str(repo), "worktree", "list", "--porcelain"],
-                             capture_output=True, text=True, timeout=WORKTREE_TIMEOUT)
+        out = subprocess.run(
+            ["git", "-C", str(repo), "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=WORKTREE_TIMEOUT,
+        )
     except (OSError, subprocess.TimeoutExpired):
         return False
     first = out.stdout.splitlines()[0] if out.returncode == 0 and out.stdout else ""
     if not first.startswith("worktree "):
         return False
-    return Path(first[len("worktree "):]).resolve() == Path(repo).resolve()
+    return Path(first[len("worktree ") :]).resolve() == Path(repo).resolve()
 
 
 def acquire_sync_lock(repo=REPO):
@@ -190,7 +207,9 @@ def acquire_sync_lock(repo=REPO):
 def sync_if_stale(repo=REPO, sync_timeout=SYNC_TIMEOUT):
     """Run one `codegraph sync` iff CG-02 is raised in the main checkout; return one line."""
     if not is_main_checkout(repo):
-        return "codegraph sync skipped: not the main checkout (the index describes main)"
+        return (
+            "codegraph sync skipped: not the main checkout (the index describes main)"
+        )
     status = read_status(repo, timeout=STATUS_TIMEOUT_S)
     if status is None:
         return "codegraph unavailable or not initialised - no sync"
@@ -200,8 +219,12 @@ def sync_if_stale(repo=REPO, sync_timeout=SYNC_TIMEOUT):
     if lock is None:
         return "codegraph sync skipped: another sync holds the lock"
     try:
-        done = subprocess.run(["codegraph", "sync", "--quiet", str(repo)],
-                              capture_output=True, text=True, timeout=sync_timeout)
+        done = subprocess.run(
+            ["codegraph", "sync", "--quiet", str(repo)],
+            capture_output=True,
+            text=True,
+            timeout=sync_timeout,
+        )
     except subprocess.TimeoutExpired:
         return f"codegraph sync timed out after {sync_timeout}s - index still stale"
     except OSError as exc:
@@ -243,8 +266,10 @@ def main():
     if violations and not is_main_checkout():
         violations = evaluate(status, main_checkout=False)
     if not violations:
-        print(f"codegraph fresh: {status.get('fileCount')} files indexed at "
-              f"{status.get('lastIndexed')}")
+        print(
+            f"codegraph fresh: {status.get('fileCount')} files indexed at "
+            f"{status.get('lastIndexed')}"
+        )
         return 0
 
     print("codegraph freshness failed:")

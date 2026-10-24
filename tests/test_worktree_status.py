@@ -3,6 +3,7 @@ subprocess for the same reason test_land.py scrubs it: this suite runs inside th
 pre-commit hook, which exports GIT_DIR and GIT_INDEX_FILE, and an unscrubbed call
 would act on the repository being committed to rather than the fixture.
 """
+
 import os
 import subprocess
 import sys
@@ -16,12 +17,24 @@ PASS, FAIL = [], []
 
 def check(name, cond, detail=""):
     (PASS if cond else FAIL).append(name)
-    print(("  PASS  " if cond else "  FAIL  ") + name + (("\n          " + detail) if detail and not cond else ""))
+    print(
+        ("  PASS  " if cond else "  FAIL  ")
+        + name
+        + (("\n          " + detail) if detail and not cond else "")
+    )
 
 
-GIT_ENV = ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_PREFIX",
-           "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-           "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES")
+GIT_ENV = (
+    "GIT_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_WORK_TREE",
+    "GIT_PREFIX",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_CEILING_DIRECTORIES",
+)
 
 
 def scrubbed_env(**extra):
@@ -31,8 +44,13 @@ def scrubbed_env(**extra):
 
 
 def git(cwd, *args, check_rc=True):
-    r = subprocess.run(("git",) + args, cwd=str(cwd), capture_output=True, text=True,
-                       env=scrubbed_env())
+    r = subprocess.run(
+        ("git",) + args,
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        env=scrubbed_env(),
+    )
     if check_rc and r.returncode:
         raise AssertionError(f"git {' '.join(args)} failed in {cwd}: {r.stderr}")
     return r.stdout.strip()
@@ -40,16 +58,28 @@ def git(cwd, *args, check_rc=True):
 
 def assert_contained(d):
     """Refuse to touch anything unless git resolves to this fixture's own repo."""
-    got = subprocess.run(["git", "rev-parse", "--absolute-git-dir"], cwd=str(d),
-                         capture_output=True, text=True, env=scrubbed_env()).stdout.strip()
+    got = subprocess.run(
+        ["git", "rev-parse", "--absolute-git-dir"],
+        cwd=str(d),
+        capture_output=True,
+        text=True,
+        env=scrubbed_env(),
+    ).stdout.strip()
     want = str((Path(d) / ".git").resolve())
     if got != want:
-        raise AssertionError(f"fixture escaped its sandbox: git resolves to {got!r}, expected {want!r}.")
+        raise AssertionError(
+            f"fixture escaped its sandbox: git resolves to {got!r}, expected {want!r}."
+        )
 
 
 def status(cwd, *args):
-    return subprocess.run(["bash", str(SCRIPT), *args], cwd=str(cwd), capture_output=True,
-                          text=True, env=scrubbed_env())
+    return subprocess.run(
+        ["bash", str(SCRIPT), *args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        env=scrubbed_env(),
+    )
 
 
 # An origin remote so origin/main means something - a bare clone of the fixture
@@ -102,13 +132,22 @@ git(d, "worktree", "add", "-q", str(wt_dirty), "landed2")
 (wt_dirty / "scratch.txt").write_text("uncommitted\n")
 
 r_report = status(d)
-check("report mode exits 0", r_report.returncode == 0, r_report.stdout + r_report.stderr)
-check("a fully-landed worktree is flagged STALE",
-      "wt-landed" in r_report.stdout and "STALE" in r_report.stdout.split("wt-landed")[1].splitlines()[0])
-check("a live worktree with unpushed commits is not flagged",
-      "STALE" not in r_report.stdout.split("wt-live")[1].splitlines()[0])
-check("a landed-but-dirty worktree is not flagged",
-      "STALE" not in r_report.stdout.split("wt-dirty")[1].splitlines()[0])
+check(
+    "report mode exits 0", r_report.returncode == 0, r_report.stdout + r_report.stderr
+)
+check(
+    "a fully-landed worktree is flagged STALE",
+    "wt-landed" in r_report.stdout
+    and "STALE" in r_report.stdout.split("wt-landed")[1].splitlines()[0],
+)
+check(
+    "a live worktree with unpushed commits is not flagged",
+    "STALE" not in r_report.stdout.split("wt-live")[1].splitlines()[0],
+)
+check(
+    "a landed-but-dirty worktree is not flagged",
+    "STALE" not in r_report.stdout.split("wt-dirty")[1].splitlines()[0],
+)
 check("report mode does not remove anything", wt_landed.is_dir())
 
 # Without lsof every worktree would read as idle, so --prune must remove none.
@@ -117,9 +156,18 @@ for _dir in os.environ["PATH"].split(os.pathsep):
     for _exe in Path(_dir).glob("*") if Path(_dir).is_dir() else ():
         if _exe.name != "lsof" and not os.path.lexists(nolsof / _exe.name):
             (nolsof / _exe.name).symlink_to(_exe)
-r_nolsof = subprocess.run(["bash", str(SCRIPT), "--prune"], cwd=str(d), capture_output=True,
-                          text=True, env=scrubbed_env(PATH=str(nolsof)))
-check("prune without lsof exits 0", r_nolsof.returncode == 0, r_nolsof.stdout + r_nolsof.stderr)
+r_nolsof = subprocess.run(
+    ["bash", str(SCRIPT), "--prune"],
+    cwd=str(d),
+    capture_output=True,
+    text=True,
+    env=scrubbed_env(PATH=str(nolsof)),
+)
+check(
+    "prune without lsof exits 0",
+    r_nolsof.returncode == 0,
+    r_nolsof.stdout + r_nolsof.stderr,
+)
 check("prune without lsof removes nothing", wt_landed.is_dir(), r_nolsof.stdout)
 
 # lsof exits 1 for both "idle" and its own errors; only exit 1 with no output is idle.
@@ -137,24 +185,50 @@ fi
 exit 1
 """)
 (badlsof / "lsof").chmod(0o755)
-r_bad = subprocess.run(["bash", str(SCRIPT), "--prune"], cwd=str(d), capture_output=True,
-                       text=True, env=scrubbed_env(PATH=f"{badlsof}{os.pathsep}{os.environ['PATH']}",
-                                                  LSOF_TEST_DIAGNOSTIC="error"))
-check("prune with an erroring lsof exits 0", r_bad.returncode == 0, r_bad.stdout + r_bad.stderr)
+r_bad = subprocess.run(
+    ["bash", str(SCRIPT), "--prune"],
+    cwd=str(d),
+    capture_output=True,
+    text=True,
+    env=scrubbed_env(
+        PATH=f"{badlsof}{os.pathsep}{os.environ['PATH']}", LSOF_TEST_DIAGNOSTIC="error"
+    ),
+)
+check(
+    "prune with an erroring lsof exits 0",
+    r_bad.returncode == 0,
+    r_bad.stdout + r_bad.stderr,
+)
 check("prune with an erroring lsof removes nothing", wt_landed.is_dir(), r_bad.stdout)
-r_warning = subprocess.run(["bash", str(SCRIPT), "--prune"], cwd=str(d), capture_output=True,
-                           text=True, env=scrubbed_env(PATH=f"{badlsof}{os.pathsep}{os.environ['PATH']}",
-                                                      LSOF_TEST_DIAGNOSTIC="warning"))
-check("prune with a warning from lsof exits 0", r_warning.returncode == 0,
-      r_warning.stdout + r_warning.stderr)
-check("prune with a warning from lsof removes nothing", wt_landed.is_dir(), r_warning.stdout)
+r_warning = subprocess.run(
+    ["bash", str(SCRIPT), "--prune"],
+    cwd=str(d),
+    capture_output=True,
+    text=True,
+    env=scrubbed_env(
+        PATH=f"{badlsof}{os.pathsep}{os.environ['PATH']}",
+        LSOF_TEST_DIAGNOSTIC="warning",
+    ),
+)
+check(
+    "prune with a warning from lsof exits 0",
+    r_warning.returncode == 0,
+    r_warning.stdout + r_warning.stderr,
+)
+check(
+    "prune with a warning from lsof removes nothing",
+    wt_landed.is_dir(),
+    r_warning.stdout,
+)
 
 r_prune = status(d, "--prune")
 check("prune mode exits 0", r_prune.returncode == 0, r_prune.stdout + r_prune.stderr)
 check("the fully-landed worktree is removed", not wt_landed.exists(), r_prune.stdout)
 check("the live worktree survives", wt_live.is_dir())
-check("the landed-but-dirty worktree survives (git refuses to remove a dirty tree)",
-      wt_dirty.is_dir())
+check(
+    "the landed-but-dirty worktree survives (git refuses to remove a dirty tree)",
+    wt_dirty.is_dir(),
+)
 check("the live branch is untouched", git(d, "rev-parse", "live"))
 
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")

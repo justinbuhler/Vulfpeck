@@ -1,0 +1,15 @@
+# mutant_id: M032
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: a watch exit other than 0 or 1, such as pending or a timeout, is never merged
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -532,7 +532,7 @@
+     ]
+     if not_passing:
+         return "not passing: " + ", ".join(not_passing)
+-    if watch.returncode:
++    if watch.returncode == 1:
+         return f"gh pr checks --watch exited {watch.returncode}"
+     return None
+ 

@@ -4,12 +4,12 @@
 # behaviour: copy_untracked refuses paths outside the repository
 --- a/scripts/harness_config.py
 +++ b/scripts/harness_config.py
-@@ -84,7 +84,7 @@
+@@ -218,7 +218,7 @@
  
  def safe_relative(value, where):
      """Refuse a path that is absolute or climbs out of the repository."""
 -    if not value or value.startswith("/") or ".." in Path(value).parts:
 +    if not value:
-         raise ConfigError(f"{where}: {value!r} must be a relative path inside the repository")
-     return value
- 
+         raise ConfigError(
+             f"{where}: {value!r} must be a relative path inside the repository"
+         )

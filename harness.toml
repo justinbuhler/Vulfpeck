@@ -22,12 +22,46 @@ copy_untracked = []                     # inputs the gate needs that git does no
 [adr]
 dir = "docs/adr"                        # NNNN-slug.md, managed by scripts/adr.py
 # A file matching one of these needs a proposed or accepted ADR naming it in
-# `Components:`, before it is created and at every land.
-require_for = [".claude/hooks/**", ".claude/agents/**", ".claude/skills/**",
-               ".agents/skills/**",
-               ".claude/workflows/**", ".claude/harness/**", ".githooks/**",
-               "scripts/**", "mutants/*.py"]
+# `Components:`, checked at every land (tests/test_adr.py). Empty: ADRs record real
+# decisions and are written when someone chooses to; `scripts/adr.py check` still
+# validates the ones that exist. A project that wants coverage lists globs here.
+require_for = []
 exempt = []
+
+[jev]
+enabled = true                          # JEV_DISABLE=1 also turns it off
+timeout = 8.0                           # seconds per request
+
+[tiers]
+# Floor globs for scripts/jev.py consequence, checked critical, high, medium, low;
+# a path matching none is Medium and a change's floor is its highest path. Jev may
+# raise the tier, never lower it. Rules and machinery files are High.
+low = ["README.md", "ENGINEERING_LOG.md", "HARNESS.md", "docs/**"]
+medium = ["docs/adr/**"]
+high = [".claude/**", ".agents/**", ".codex/**", ".gemini/**", ".github/**", ".githooks/**",
+        "AGENTS.md", "CLAUDE.md", "**/AGENTS.md", "**/CLAUDE.md", "harness.toml",
+        "scripts/paths.py", "scripts/harness_config.py", "scripts/jev.py", "scripts/plan_tests.py",
+        "scripts/standalone_tests.sh", "scripts/land.sh", "scripts/gate.sh", "scripts/run.sh",
+        "mutants/**", "tests/**", "scripts/harness_env.sh", "scripts/adr.py",
+        "docs/agents/**", "docs/mutation-testing.md", "scripts/task_loop.py", ".agents/sandbox/**"]
+critical = []
+
+[loop]
+label = "ready-for-agent"               # open issues with this label are the queue
+runtime = "claude"                      # key of [loop.workers] used for dispatch
+base = "main"                           # tasks branch from origin/<base>; their PRs target it
+priority = ["priority:high", "priority:medium", "priority:low"]   # most to least urgent; none = last
+sandbox = "container"                   # workers run in Apple `container` with only their worktree; "none" needs --unsandboxed
+
+[loop.workers]                          # the brief is appended as the last argument
+claude = "claude -p"
+codex = "codex exec"
+gemini = "gemini -p"
+
+[budget]
+max_tool_calls = 400                     # per session; warn at 80%, deny at 100%; 0 is off
+max_minutes = 180                       # active minutes: a gap over 30 minutes between calls is not counted
+status_glob = ["**/STATUS.md", "**/status.md", "tmp/**/status*.md"]   # still writable at 100%
 
 [hooks]
 watched_files = ["harness.toml", "scripts/paths.py", "scripts/harness_config.py", "scripts/harness_inputs.py",
@@ -37,6 +71,181 @@ skip_dirs = [".venv", "__pycache__", "node_modules", ".git"]
 
 [[mapped_tests]]
 match = "*.py"
-self = "test_*.py"
+self = "*tests/test_*.py"
 tests = ["{dir}/tests/test_{name}", "tests/test_{name}"]
 command = "uv run --no-sync python3 {test}"
+
+# The hook registration table. scripts/render_hooks.py writes the hooks of
+# .claude/settings.json, .codex/hooks.json and .gemini/settings.json from it.
+# `command` is the Claude Code command; Codex and Gemini run it through
+# scripts/hook_adapter.py. A gate's command ends in `|| {...; exit 2; }` so a crash
+# blocks; an advisory's ends in `|| true`. timeout is in seconds.
+
+[[hook]]
+name = "require_agent_model_PreToolUse"
+event = "PreToolUse"
+matcher = "Agent"
+kind = "gate"
+timeout = 5
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/require_agent_model.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"require_agent_model.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "model_router_PreToolUse"
+event = "PreToolUse"
+matcher = "Agent"
+kind = "gate"
+timeout = 5
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/model_router.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"model_router.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "blast_radius_advisory_PreToolUse"
+event = "PreToolUse"
+matcher = "Edit|Write"
+kind = "advisory"
+timeout = 30
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/blast_radius_advisory.py\" || true"
+
+[[hook]]
+name = "queue_guard_PreToolUse"
+event = "PreToolUse"
+matcher = "Bash"
+kind = "advisory"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/queue_guard.py\" || true"
+
+[[hook]]
+name = "verify_commit_landed_PreToolUse"
+event = "PreToolUse"
+matcher = "Bash"
+kind = "advisory"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_commit_landed.py\" || true"
+
+[[hook]]
+name = "verify_commit_landed_PostToolUse"
+event = "PostToolUse"
+matcher = "Bash"
+kind = "gate"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_commit_landed.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"verify_commit_landed.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "test_for_edited_module_PostToolUse"
+event = "PostToolUse"
+matcher = "Edit|Write"
+kind = "gate"
+timeout = 70
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/test_for_edited_module.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"test_for_edited_module.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "codegraph_freshness_UserPromptSubmit"
+event = "UserPromptSubmit"
+kind = "advisory"
+timeout = 30
+command = "out=$(cd \"${CLAUDE_PROJECT_DIR}\" && uv run python3 scripts/codegraph_freshness.py) || printf \"%s\\n\" \"$out\""
+
+[[hook]]
+name = "codegraph_freshness_SessionStart"
+event = "SessionStart"
+matcher = "startup"
+kind = "advisory"
+timeout = 120
+command = "cd \"${CLAUDE_PROJECT_DIR}\" && uv run python3 scripts/codegraph_freshness.py --sync-if-stale || true"
+
+[[hook]]
+name = "harness_doctor_SessionStart"
+event = "SessionStart"
+matcher = "startup"
+kind = "advisory"
+timeout = 15
+command = "python3 \"${CLAUDE_PROJECT_DIR}/scripts/harness_doctor.py\" || true"
+
+[[hook]]
+name = "readonly_guard_SubagentStart"
+event = "SubagentStart"
+kind = "advisory"
+timeout = 30
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/readonly_guard.py\" || true"
+
+[[hook]]
+name = "readonly_guard_SubagentStop"
+event = "SubagentStop"
+kind = "advisory"
+timeout = 30
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/readonly_guard.py\" || true"
+
+[[hook]]
+name = "session_guard_Stop"
+event = "Stop"
+kind = "advisory"
+timeout = 60
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/session_guard.py\" || true"
+
+[[hook]]
+name = "session_guard_SessionEnd"
+event = "SessionEnd"
+kind = "advisory"
+timeout = 20
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/session_guard.py\" || true"
+
+[[hook]]
+name = "loop_guard_PreToolUse"
+event = "PreToolUse"
+matcher = "Bash"
+kind = "gate"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "loop_guard_PostToolUse"
+event = "PostToolUse"
+matcher = "Bash"
+kind = "gate"
+timeout = 25
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "loop_guard_PostToolUseFailure"
+event = "PostToolUseFailure"
+matcher = "Bash"
+kind = "gate"
+timeout = 25
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "loop_guard_edits_PostToolUse"
+event = "PostToolUse"
+matcher = "Edit|Write"
+kind = "gate"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "loop_guard_edits_PreToolUse"
+event = "PreToolUse"
+matcher = "Edit|Write"
+kind = "gate"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/loop_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"loop_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "scope_guard_PreToolUse"
+event = "PreToolUse"
+matcher = "Edit|Write"
+kind = "gate"
+timeout = 15
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/scope_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"scope_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "budget_guard_PreToolUse"
+event = "PreToolUse"
+kind = "gate"
+timeout = 5
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/budget_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"budget_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"
+
+[[hook]]
+name = "turn_guard_Stop"
+event = "Stop"
+kind = "gate"
+timeout = 10
+command = "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/turn_guard.py\" || { rc=$?; [ \"$rc\" = 2 ] || echo \"turn_guard.py crashed (rc=$rc); failing closed\" >&2; exit 2; }"

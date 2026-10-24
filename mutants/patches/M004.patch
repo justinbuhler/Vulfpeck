@@ -4,12 +4,12 @@
 # behaviour: a misspelt harness.toml key is an error
 --- a/scripts/harness_config.py
 +++ b/scripts/harness_config.py
-@@ -119,7 +119,7 @@
+@@ -293,7 +293,7 @@
              raise ConfigError(f"[{section}] must be a table")
          for key, value in body.items():
              if key not in DEFAULTS[section]:
 -                raise ConfigError(f"unknown key {section}.{key}")
 +                continue
              if (section, key) in STRING_LISTS:
-                 if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-                     raise ConfigError(f"{section}.{key} must be a list of strings")
+                 if not isinstance(value, list) or not all(
+                     isinstance(v, str) for v in value

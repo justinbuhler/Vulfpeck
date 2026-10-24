@@ -1,0 +1,15 @@
+# mutant_id: M037
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: AGENTS.md, CLAUDE.md, HARNESS.md and docs/agents are never merged unattended
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -447,7 +447,7 @@
+         p
+         for p in paths
+         if not any(glob_match(g, p) for g in ALLOW)
+-        or any(glob_match(g, p) for g in EXCEPT)
++        or False
+     ]
+ 
+ 

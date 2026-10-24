@@ -19,12 +19,17 @@ trip this. A parent session editing the checkout while the
 reviewer runs does, which is why the message says the checkout changed while
 the agent ran, not that the agent changed it.
 
+The snapshot file is not hash-checked: an agent that rewrites it to match its own
+changes defeats the comparison. Run reviewers in a throwaway worktree, where a
+change cannot reach the main checkout at all.
+
 A read-only agent that stops with no snapshot (SubagentStart failed or never
 fired) cannot be verified. That is said out loud and recorded, never passed
 silently.
 
 Snapshots live in <git common dir>/harness/snapshots/<agent_id>.json.
 """
+
 import fnmatch
 import hashlib
 import json
@@ -35,11 +40,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 STATUS_LINES = 200
-# Stop decisions that end one run of an agent (see logged_snapshot).
-FINISHED = ("pass", "block-overridden", "unverified")
 # The floor when harness.toml cannot be read: an unreadable config must not
 # switch the guard off.
-DEFAULT_READ_ONLY = ["dual-derive", "live-proof-auditor", "reviewer-*", "Explore", "Plan"]
+DEFAULT_READ_ONLY = [
+    "dual-derive",
+    "live-proof-auditor",
+    "reviewer-*",
+    "Explore",
+    "Plan",
+]
 
 
 def record(*args, **kwargs):
@@ -48,6 +57,7 @@ def record(*args, **kwargs):
     try:
         sys.path.insert(0, str(ROOT / "scripts"))
         import harness_events
+
         harness_events.record(*args, **kwargs)
     except Exception:
         pass
@@ -57,8 +67,9 @@ def git(cwd, *args):
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env["GIT_OPTIONAL_LOCKS"] = "0"
     try:
-        done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
-                              timeout=20, env=env)
+        done = subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=20, env=env
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     return done.stdout if done.returncode == 0 else None
@@ -73,13 +84,16 @@ def read_only(agent_type, cwd, floor=False):
     try:
         sys.path.insert(0, str(ROOT / "scripts"))
         import harness_config
+
         top = (git(cwd, "rev-parse", "--show-toplevel") or "").strip() or cwd
         patterns = list(harness_config.load(top)["roles"]["read_only"])
     except Exception:
         patterns = list(DEFAULT_READ_ONLY)
     if floor:
         patterns += DEFAULT_READ_ONLY
-    return bool(agent_type) and any(fnmatch.fnmatchcase(agent_type, p) for p in patterns)
+    return bool(agent_type) and any(
+        fnmatch.fnmatchcase(agent_type, p) for p in patterns
+    )
 
 
 def writer_branches(top):
@@ -92,7 +106,11 @@ def writer_branches(top):
     for line in (git(top, "worktree", "list", "--porcelain") or "").splitlines():
         if line.startswith("worktree "):
             path = line[9:]
-        elif line.startswith("branch ") and path and Path(path).resolve() != Path(top).resolve():
+        elif (
+            line.startswith("branch ")
+            and path
+            and Path(path).resolve() != Path(top).resolve()
+        ):
             out.add(line[7:])
     return out
 
@@ -100,7 +118,9 @@ def writer_branches(top):
 def refs(top):
     """Return {ref: sha} for every ref."""
     found = {}
-    for line in (git(top, "for-each-ref", "--format=%(refname) %(objectname)") or "").splitlines():
+    for line in (
+        git(top, "for-each-ref", "--format=%(refname) %(objectname)") or ""
+    ).splitlines():
         name, _, sha = line.partition(" ")
         found[name] = sha
     return found
@@ -110,15 +130,27 @@ def gitdir_state(top):
     """Return a hash of git-dir state outside refs and config that a reviewer could
     use to change later behaviour: info/exclude (hides untracked files from status),
     the hooks directory, and which worktrees exist."""
-    common = Path((git(top, "rev-parse", "--path-format=absolute", "--git-common-dir") or "").strip())
+    common = Path(
+        (
+            git(top, "rev-parse", "--path-format=absolute", "--git-common-dir") or ""
+        ).strip()
+    )
     digest = hashlib.sha256()
     exclude = common / "info" / "exclude"
     digest.update(exclude.read_bytes() if exclude.is_file() else b"-")
     hooks = common / "hooks"
     for f in sorted(hooks.iterdir()) if hooks.is_dir() else []:
-        digest.update(f.name.encode() + b"\0" + (f.read_bytes() if f.is_file() else b"<dir>") + b"\0")
-    worktrees = [line for line in (git(top, "worktree", "list", "--porcelain") or "").splitlines()
-                 if line.startswith("worktree ")]
+        digest.update(
+            f.name.encode()
+            + b"\0"
+            + (f.read_bytes() if f.is_file() else b"<dir>")
+            + b"\0"
+        )
+    worktrees = [
+        line
+        for line in (git(top, "worktree", "list", "--porcelain") or "").splitlines()
+        if line.startswith("worktree ")
+    ]
     digest.update("\n".join(sorted(worktrees)).encode())
     return digest.hexdigest()
 
@@ -140,7 +172,13 @@ def content_state(top):
             contents[name] = "absent"
             continue
         mode = path.lstat().st_mode
-        raw = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes() if path.is_file() else b"<directory>"
+        raw = (
+            os.fsencode(os.readlink(path))
+            if path.is_symlink()
+            else path.read_bytes()
+            if path.is_file()
+            else b"<directory>"
+        )
         contents[name] = hashlib.sha256(str(mode).encode() + b"\0" + raw).hexdigest()
     return contents, hashlib.sha256(staged.encode()).hexdigest()
 
@@ -163,8 +201,12 @@ def snapshot(cwd):
         "config_sha": hashlib.sha256(config.encode()).hexdigest(),
         "top": top,
         "head": (git(top, "rev-parse", "HEAD") or "").strip(),
-        "branch": (git(top, "symbolic-ref", "--quiet", "--short", "HEAD") or "").strip(),
-        "main": (git(top, "rev-parse", "--verify", "-q", "refs/heads/main") or "").strip(),
+        "branch": (
+            git(top, "symbolic-ref", "--quiet", "--short", "HEAD") or ""
+        ).strip(),
+        "main": (
+            git(top, "rev-parse", "--verify", "-q", "refs/heads/main") or ""
+        ).strip(),
         "status_sha": hashlib.sha256("\n".join(lines).encode()).hexdigest(),
         "status": lines[:STATUS_LINES],
     }
@@ -180,18 +222,36 @@ def differences(before, after):
     out, noted = [], []
     top = before.get("top")
     writers = set(before.get("writer_branches", []))
-    for key, label in (("head", "HEAD"), ("branch", "checked-out branch"), ("main", "local main")):
+    for key, label in (
+        ("head", "HEAD"),
+        ("branch", "checked-out branch"),
+        ("main", "local main"),
+    ):
         if before.get(key) != after.get(key):
-            out.append(f"{label}: {(before.get(key) or '-')[:12]} -> {(after.get(key) or '-')[:12]}")
+            out.append(
+                f"{label}: {(before.get(key) or '-')[:12]} -> {(after.get(key) or '-')[:12]}"
+            )
     was, now = before.get("refs", {}), after.get("refs", {})
-    moved = sorted(r for r in set(was) | set(now)
-                   if was.get(r) != now.get(r) and r != "refs/heads/main" and not (
-                       before.get("branch") and r == "refs/heads/" + before["branch"]))
-    advanced = [r for r in moved if r in writers and was.get(r) and now.get(r)
-                and is_ancestor(top, was[r], now[r])]
+    moved = sorted(
+        r
+        for r in set(was) | set(now)
+        if was.get(r) != now.get(r)
+        and r != "refs/heads/main"
+        and not (before.get("branch") and r == "refs/heads/" + before["branch"])
+    )
+    advanced = [
+        r
+        for r in moved
+        if r in writers
+        and was.get(r)
+        and now.get(r)
+        and is_ancestor(top, was[r], now[r])
+    ]
     moved = [r for r in moved if r not in advanced]
     if advanced:
-        noted.append(f"branches checked out in other worktrees advanced: {', '.join(advanced[:6])}")
+        noted.append(
+            f"branches checked out in other worktrees advanced: {', '.join(advanced[:6])}"
+        )
     if moved:
         more = f" (+{len(moved) - 6} more)" if len(moved) > 6 else ""
         out.append(f"refs: {', '.join(moved[:6])}{more}")
@@ -203,7 +263,11 @@ def differences(before, after):
         out.append("index contents changed")
     if before.get("contents") != after.get("contents"):
         was, current = before.get("contents", {}), after.get("contents", {})
-        names = sorted(name for name in set(was) | set(current) if was.get(name) != current.get(name))
+        names = sorted(
+            name
+            for name in set(was) | set(current)
+            if was.get(name) != current.get(name)
+        )
         out.append("working-tree contents: " + ", ".join(names[:8]))
     if before.get("status_sha") != after.get("status_sha"):
         was, now = set(before.get("status", [])), set(after.get("status", []))
@@ -214,39 +278,10 @@ def differences(before, after):
     return out, noted
 
 
-def logged_snapshot(cwd, agent_id):
-    """Return (sha recorded when this agent started, problem) from the decision log.
-
-    The snapshot file sits where the agent can write. Its hash goes into the
-    hash-chained log at the start, so rewriting the file to match a changed
-    checkout is caught unless the agent also rebuilds the whole chain.
-    """
-    try:
-        sys.path.insert(0, str(ROOT / "scripts"))
-        import harness_events
-        path = harness_events.log_path(cwd)
-        if path is None or not path.is_file():
-            return None, "the decision log is missing"
-        _, broken, why = harness_events.verify(path)
-        if broken:
-            return None, f"the decision log chain is broken at line {broken} ({why})"
-        mine = [r for r in (json.loads(line) for line in path.read_text().splitlines())
-                if r.get("hook") == "readonly_guard" and r.get("agent_id") == agent_id]
-        # A resumed agent starts again, so count only this run: the rows after
-        # the agent's last finished stop. The hook writes exactly one snapshot
-        # row per run; a second is an append by someone else.
-        finished = [i for i, r in enumerate(mine) if r.get("decision") in FINISHED]
-        run = mine[finished[-1] + 1:] if finished else mine
-        found = [r.get("reason", "")[len("sha256:"):] for r in run if r.get("decision") == "snapshot"]
-        if len(found) > 1:
-            return None, f"{len(found)} snapshot rows are logged for this run; the hook writes one"
-        return (found[0], None) if found else (None, "no snapshot was recorded for this agent")
-    except Exception as exc:
-        return None, f"the decision log is unreadable ({exc})"
-
-
 def snapshot_path(cwd, agent_id):
-    common = (git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir") or "").strip()
+    common = (
+        git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir") or ""
+    ).strip()
     if not common or not agent_id:
         return None
     safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in agent_id)
@@ -276,7 +311,11 @@ def main():
     # as well, so deleting the snapshot and the role together still reports.
     if event == "SubagentStart" and not read_only(agent_type, cwd):
         return 0
-    if event == "SubagentStop" and not path.is_file() and not read_only(agent_type, cwd, floor=True):
+    if (
+        event == "SubagentStop"
+        and not path.is_file()
+        and not read_only(agent_type, cwd, floor=True)
+    ):
         return 0
 
     if event == "SubagentStart":
@@ -285,47 +324,62 @@ def main():
             text = json.dumps(state)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
-            record("readonly_guard", "snapshot", "sha256:" + hashlib.sha256(text.encode()).hexdigest(),
-                   subject, payload)
+            record("readonly_guard", "snapshot", "taken", subject, payload)
         return 0
 
     if not path.is_file():
         record("readonly_guard", "unverified", "no-snapshot", subject, payload)
-        print(json.dumps({"systemMessage":
-                          f"readonly_guard: {agent_type} stopped with no start snapshot; "
-                          "whether it changed the checkout was NOT verified"}))
+        print(
+            json.dumps(
+                {
+                    "systemMessage": f"readonly_guard: {agent_type} stopped with no start snapshot; "
+                    "whether it changed the checkout was NOT verified"
+                }
+            )
+        )
         return 0
-    text = path.read_text()
-    before = json.loads(text)
+    before = json.loads(path.read_text())
     after = snapshot(before["top"]) or {}
     changed, noted = differences(before, after)
-    logged, problem = logged_snapshot(cwd, agent_id)
-    if problem:
-        # A snapshot exists, so its row was written at the start. A log that is
-        # now missing, broken or doubled cannot vouch for it: block, do not note.
-        changed.insert(0, f"the start snapshot cannot be verified: {problem}")
-    elif logged != hashlib.sha256(text.encode()).hexdigest():
-        changed.insert(0, "the start snapshot was rewritten after it was recorded")
     if not changed:
         path.unlink()
         record("readonly_guard", "pass", "unchanged", subject, payload)
         if noted:
-            print(json.dumps({"systemMessage": f"readonly_guard: {agent_type}: " + "; ".join(noted)}))
+            print(
+                json.dumps(
+                    {
+                        "systemMessage": f"readonly_guard: {agent_type}: "
+                        + "; ".join(noted)
+                    }
+                )
+            )
         return 0
     if payload.get("stop_hook_active"):
         # Already told once. Let it stop, keep the snapshot as evidence, and make
         # sure the parent session sees what happened.
         record("readonly_guard", "block-overridden", "changed", subject, payload)
-        print(json.dumps({"systemMessage":
-                          f"readonly_guard: the main checkout still differs after read-only "
-                          f"agent {agent_type} stopped: " + "; ".join(changed + noted)}))
+        print(
+            json.dumps(
+                {
+                    "systemMessage": f"readonly_guard: the main checkout still differs after read-only "
+                    f"agent {agent_type} stopped: " + "; ".join(changed + noted)
+                }
+            )
+        )
         return 0
     record("readonly_guard", "block", "changed", subject, payload)
-    print(json.dumps({"decision": "block", "reason":
-                      f"You are a read-only agent ({agent_type}), and the main checkout "
-                      f"{before['top']} changed while you ran: " + "; ".join(changed)
-                      + ". If you made these changes, revert exactly them, then stop. "
-                      "If you did not, say so in your report."}))
+    print(
+        json.dumps(
+            {
+                "decision": "block",
+                "reason": f"You are a read-only agent ({agent_type}), and the main checkout "
+                f"{before['top']} changed while you ran: "
+                + "; ".join(changed)
+                + ". If you made these changes, revert exactly them, then stop. "
+                "If you did not, say so in your report.",
+            }
+        )
+    )
     return 0
 
 

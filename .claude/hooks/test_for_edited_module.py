@@ -20,6 +20,7 @@ A harness.toml that cannot be read is reported with exit 2, not skipped: a hook
 that goes quiet on a broken config is indistinguishable from one with nothing
 to say.
 """
+
 import json
 import os
 import subprocess
@@ -31,16 +32,30 @@ TIMEOUT = 60
 # git exports these into hook processes and they override cwd for every git
 # command a test runs, so a test that builds a throwaway repo would operate on
 # THIS repository instead. .githooks/pre-commit scrubs them for the same reason.
-GIT_LEAKS = ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_PREFIX",
-             "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-             "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES")
+GIT_LEAKS = (
+    "GIT_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_WORK_TREE",
+    "GIT_PREFIX",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_CEILING_DIRECTORIES",
+)
 
 
 def git_path(path, query):
     env = {k: v for k, v in os.environ.items() if k not in GIT_LEAKS}
     try:
-        done = subprocess.run(["git", "rev-parse", "--path-format=absolute", query],
-                              cwd=path, capture_output=True, text=True, timeout=5, env=env)
+        done = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", query],
+            cwd=path,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=env,
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     return done.stdout.strip() if done.returncode == 0 else None
@@ -62,6 +77,7 @@ def load_config(root):
     """Return (harness_config module, config) for one repository root."""
     sys.path.insert(0, str(root / "scripts"))
     import harness_config
+
     return harness_config, harness_config.load(root)
 
 
@@ -104,19 +120,31 @@ def main():
     # The mapped test may run real hooks; keep its decisions out of the real record.
     env.setdefault("HARNESS_EVENTS_LOG", os.devnull)
     try:
-        proc = subprocess.run(["bash", "-c", command], cwd=root, env=env,
-                              capture_output=True, text=True, timeout=TIMEOUT)
+        proc = subprocess.run(
+            ["bash", "-c", command],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT,
+        )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         print(f"{test.name} not completed: {type(exc).__name__}", file=sys.stderr)
         return 2
 
-    name = test.relative_to(root.resolve()) if test.is_relative_to(root.resolve()) else test
+    name = (
+        test.relative_to(root.resolve())
+        if test.is_relative_to(root.resolve())
+        else test
+    )
     if proc.returncode == 0:
         print(f"✓ {name}")
         return 0
     tail = "\n".join(f"{proc.stdout}{proc.stderr}".strip().splitlines()[-15:])
-    print(f"✗ {name} fails after editing {Path(raw).name} (rc={proc.returncode})\n{tail}",
-          file=sys.stderr)
+    print(
+        f"✗ {name} fails after editing {Path(raw).name} (rc={proc.returncode})\n{tail}",
+        file=sys.stderr,
+    )
     return 2
 
 

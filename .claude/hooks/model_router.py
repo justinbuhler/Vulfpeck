@@ -57,6 +57,7 @@ def record(*args, **kwargs):
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
         import harness_events
+
         harness_events.record(*args, **kwargs)
     except Exception:
         pass
@@ -84,8 +85,14 @@ def reason(payload: dict[str, Any]) -> str | None:
     expected = tier(subagent_type)
     model = str(tool_input.get("model") or "").strip().lower()
     # Missing/inherit is require_agent_model.py's denial; full ids like claude-opus-4 contain the family.
-    accepted = (expected, "fable") if expected == "opus" else (expected,)  # fable is accepted wherever Opus is
-    if expected is None or model in INHERIT or any(family in model for family in accepted):
+    accepted = (
+        (expected, "fable") if expected == "opus" else (expected,)
+    )  # fable is accepted wherever Opus is
+    if (
+        expected is None
+        or model in INHERIT
+        or any(family in model for family in accepted)
+    ):
         return None
     return (
         f"Agent type `{subagent_type}` belongs on {expected}, but model is `{model}`. "
@@ -106,18 +113,32 @@ def main() -> int:
     if payload.get("tool_name") != "Agent":
         return 0
     denial = reason(payload)
-    tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    tool_input = (
+        payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    )
     kind = str(tool_input.get("subagent_type") or "").strip()
     subject = f"{kind or '-'}/{tool_input.get('model') or '-'}"
     if denial:
-        print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": denial,
-        }}))
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": denial,
+                    }
+                }
+            )
+        )
         record("model_router", "deny", "tier-mismatch", subject, payload)
     else:
-        record("model_router", "allow", "tier-match" if tier(kind) else "unlisted", subject, payload)
+        record(
+            "model_router",
+            "allow",
+            "tier-match" if tier(kind) else "unlisted",
+            subject,
+            payload,
+        )
     return 0
 
 

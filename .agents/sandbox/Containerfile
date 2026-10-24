@@ -1,0 +1,24 @@
+# The worker sandbox for scripts/task_loop.py (ADR 0018). Build from the repo root:
+#   container build -t vulfpeck-worker -f .agents/sandbox/Containerfile .agents/sandbox
+# The loop mounts only the task worktree at /work; nothing else from the host is visible.
+FROM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ripgrep python3 ca-certificates curl bash \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff /uv /uvx /usr/local/bin/
+
+# The official packages of the three worker runtimes, pinned to the versions the proof ran with.
+RUN npm install -g @anthropic-ai/claude-code@2.1.310 @openai/codex@0.164.0 @google/gemini-cli@0.65.0 \
+ && npm cache clean --force
+
+COPY entrypoint.sh /usr/local/bin/sandbox-entry
+RUN chmod 0755 /usr/local/bin/sandbox-entry
+
+# Git inside the sandbox uses a private, throwaway git dir (made by the entrypoint), never the
+# host's: the worktree's own .git link points at a host path that does not exist here.
+ENV GIT_DIR=/gitdir GIT_WORK_TREE=/work HOME=/home/node
+WORKDIR /work
+USER node
+ENTRYPOINT ["/usr/local/bin/sandbox-entry"]

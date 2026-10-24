@@ -1,0 +1,15 @@
+# mutant_id: M031
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: a pull request whose checks did not pass is never merged
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -741,7 +741,7 @@
+             raise Halt("blocked", f"needs-review: {review}")
+         watch = sh(pr_plans["checks"], root, CHECKS_TIMEOUT)
+         problem = check_problem(watch, sh(pr_plans["list"], root))
+-        if problem:
++        if problem and False:
+             comment(root, pr, f"checks did not pass: {problem}")
+             raise Halt("failed", f"checks on PR #{pr}: {problem}")
+         stage(pr_plans["merge"], root, "gh pr merge")
