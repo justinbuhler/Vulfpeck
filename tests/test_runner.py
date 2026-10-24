@@ -24,10 +24,12 @@ ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 PASS, FAIL = [], []
 
 
-def check(name: str, condition: bool) -> None:
+def check(name: str, condition: bool, detail: str = "") -> None:
     """Record one independent restoration expectation."""
     (PASS if condition else FAIL).append(name)
     print(f"{'PASS' if condition else 'FAIL'} {name}")
+    if not condition and detail:
+        print(detail)
 
 
 def git(repo: Path, *args: str) -> str:
@@ -94,6 +96,43 @@ with tempfile.TemporaryDirectory() as directory:
         specimen.unlink()
         specimen.symlink_to(external)
         check("file kind differs even when permissions and serialized bytes agree", fingerprint() != regular)
+        nested = repo / "nested/deeper"
+        nested.mkdir(parents=True)
+        nested.chmod(0o755)
+        leaf = nested / "victim.txt"
+        leaf.write_bytes(b"same bytes\n")
+        leaf.chmod(0o644)
+        git(repo, "add", "nested/deeper/victim.txt")
+        nested_baseline = fingerprint()
+        nested.chmod(0o700)
+        check("tracked ancestor directory permissions change identity", fingerprint() != nested_baseline)
+        nested.chmod(0o755)
+        check("restored directory permissions restore identity", fingerprint() == nested_baseline)
+        outside = area / "outside-directory"
+        (outside / "deeper").mkdir(parents=True)
+        (outside / "deeper/victim.txt").write_bytes(b"same bytes\n")
+        (outside / "deeper/victim.txt").chmod(0o644)
+        (repo / "nested").rename(repo / ".git/nested-saved")
+        (repo / "nested").symlink_to(outside, target_is_directory=True)
+        read_bytes = Path.read_bytes
+        leaf_reads = []
+
+        def guarded_read(path: Path) -> bytes:
+            """Expose a byte read through the unexpected ancestor alias."""
+            if path == leaf:
+                leaf_reads.append(path)
+                raise AssertionError("tracked leaf reached through an ancestor link")
+            return read_bytes(path)
+
+        rejected = False
+        with patch.object(Path, "read_bytes", guarded_read):
+            try:
+                fingerprint()
+            except SystemExit as exc:
+                rejected = "tree not" in str(exc)
+            except AssertionError:
+                pass
+        check("ancestor links are rejected before reading leaf bytes", rejected and not leaf_reads)
     finally:
         R.ROOT, R.LEDGER = original_root, original_ledger
 
@@ -114,7 +153,16 @@ def run_specimen(scenario: str, interrupt: int | None = None) -> dict[str, objec
         other = area / "other.txt"
         external.write_text("base\n")
         other.write_text("base\n")
-        victim = repo / "victim.txt"
+        nested = repo / "nested"
+        if scenario.startswith("ancestor"):
+            nested.mkdir()
+            nested.chmod(0o755)
+        victim = nested / "victim.txt" if scenario.startswith("ancestor") else repo / "victim.txt"
+        external_directory = area / "external-directory"
+        external_directory.mkdir()
+        external_leaf = external_directory / "victim.txt"
+        external_leaf.write_text("base\n")
+        external_leaf.chmod(0o644)
         if scenario == "link-target":
             victim.symlink_to(external)
         elif scenario == "broken-target":
@@ -131,7 +179,7 @@ if phase == "next":
     Path(".git/next-mutant").write_text("ran")
 if active:
     Path(".git/first-mutant").write_text("ran")
-    victim = Path("victim.txt")
+    victim = Path("nested/victim.txt" if scenario.startswith("ancestor") else "victim.txt")
     if scenario in ("pass-mode", "fail-mode", "interrupt-mode", "baseline-mode", "baseline-fail-mode", "baseline-interrupt"):
         victim.chmod(0o600)
     elif scenario in ("fail-kind", "link-target", "broken-target"):
@@ -140,12 +188,19 @@ if active:
     elif scenario == "target-link":
         Path("target.txt").unlink()
         Path("target.txt").symlink_to({str(external)!r})
+    elif scenario == "ancestor-link":
+        Path("nested").rename(".git/nested-saved")
+        Path("nested").symlink_to({str(external_directory)!r}, target_is_directory=True)
+    elif scenario in ("ancestor-mode", "ancestor-restored"):
+        Path("nested").chmod(0o700)
+        if scenario == "ancestor-restored":
+            Path("nested").chmod(0o755)
     if scenario.startswith("interrupt") or scenario == "baseline-interrupt":
         Path(".git/ready").write_text("ready")
         deadline = time.monotonic() + 5
         while not Path(".git/release").exists() and time.monotonic() < deadline:
             time.sleep(0.01)
-    if scenario in ("fail-clean", "fail-mode", "fail-kind", "link-target", "broken-target", "target-link", "baseline-fail-mode"):
+    if scenario in ("fail-clean", "fail-mode", "fail-kind", "link-target", "broken-target", "target-link", "baseline-fail-mode", "ancestor-link", "ancestor-mode"):
         print("FAIL fixture test failure")
         print("0 passed, 1 failed")
         sys.exit(1)
@@ -222,25 +277,27 @@ sys.exit(runner.main())
                     process.kill()
                     process.communicate()
         rows = [json.loads(line) for line in ledger.read_text().splitlines()] if ledger.exists() else []
-        return {"code": code, "stdout": stdout, "stderr": stderr, "rows": rows,
+        return {"command": command, "cwd": str(repo), "code": code, "stdout": stdout, "stderr": stderr, "rows": rows,
                 "target_restored": not target.is_symlink() and target.read_text() == "base\n",
                 "next_ran": (repo / ".git/next-mutant").exists(), "reached": reached,
                 "victim_mode": stat.S_IMODE(victim.lstat().st_mode),
                 "victim_link": os.readlink(victim) if victim.is_symlink() else None,
-                "external_unchanged": external.read_text() == "base\n" and other.read_text() == "base\n"}
+                "ancestor_is_link": nested.is_symlink(),
+                "external_unchanged": external.read_text() == "base\n" and other.read_text() == "base\n"
+                and external_leaf.read_text() == "base\n" and stat.S_IMODE(external_leaf.stat().st_mode) == 0o644}
 
 
-for scenario in ("clean", "fail-clean"):
+for scenario in ("clean", "fail-clean", "ancestor-clean", "ancestor-restored"):
     outcome = run_specimen(scenario)
     verified = [row for row in outcome["rows"] if row.get("tree_verified")]
     check(f"{scenario}: successful reversals retain valid results", outcome["code"] == 0
           and {row["mutant_id"] for row in verified} == {"M101", "M102"} and outcome["target_restored"])
 
 for scenario in ("pass-mode", "fail-mode", "fail-kind", "link-target", "broken-target", "target-link",
-                 "baseline-mode", "baseline-fail-mode", "apply-failure", "cleanup-interrupt"):
+                 "baseline-mode", "baseline-fail-mode", "apply-failure", "cleanup-interrupt", "ancestor-link", "ancestor-mode"):
     outcome = run_specimen(scenario)
     check(f"{scenario}: unexpected restoration changes fail loudly", outcome["code"] != 0
-          and "tree not" in outcome["stderr"])
+          and "tree not" in outcome["stderr"], json.dumps(outcome))
     check(f"{scenario}: poisoned specimens receive no verified result",
           not any(row.get("tree_verified") for row in outcome["rows"]))
     check(f"{scenario}: no later mutant is attempted", not outcome["next_ran"]
@@ -250,6 +307,8 @@ for scenario in ("pass-mode", "fail-mode", "fail-kind", "link-target", "broken-t
         check(f"{scenario}: unexpected permissions are reported without force-reset", outcome["victim_mode"] == 0o600)
     if scenario == "cleanup-interrupt":
         check("bytecode interruption still reverses the applied patch", outcome["target_restored"])
+    if scenario == "ancestor-link":
+        check("ancestor-link: the unexpected link remains available for diagnosis", outcome["ancestor_is_link"])
 
 for scenario, received in (("interrupt-clean", signal.SIGTERM), ("interrupt-clean", signal.SIGINT),
                            ("interrupt-mode", signal.SIGTERM), ("baseline-interrupt", signal.SIGTERM)):

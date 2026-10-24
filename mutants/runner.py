@@ -61,6 +61,8 @@ def tree_digest() -> str:
     A per-file revert that leaves a stray byte anywhere else in the tree would
     make the next mutant's result a lie, so the check covers the whole tracked
     tree rather than only the file the patch names.
+    Ancestors are checked before their children and fingerprinted once, so a
+    directory replaced by a link cannot disguise an unrestored specimen.
 
     The ledger is the one exclusion, and only because it is this runner's own
     output. It is appended to between mutants, so once it became a tracked file
@@ -68,21 +70,30 @@ def tree_digest() -> str:
     mutant after the first. The instrument's log is not part of the specimen.
     """
     accumulator = hashlib.sha256()
+    seen = set()
     for name in sorted(git("ls-files", "-z").split("\0")):
         if not name or name == LEDGER.relative_to(ROOT).as_posix():
             continue
-        path = ROOT / name
-        try:
-            mode = path.lstat().st_mode
-        except FileNotFoundError:
-            mode = 0
-        payload = b""
-        if stat.S_ISLNK(mode):
-            payload = os.fsencode(os.readlink(path))
-        elif stat.S_ISREG(mode):
-            payload = path.read_bytes()
-        accumulator.update(os.fsencode(name) + b"\0" + str(mode).encode() + b"\0")
-        accumulator.update(hashlib.sha256(payload).digest())
+        parts = pathlib.Path(name).parts
+        for length in range(1, len(parts) + 1):
+            relative = pathlib.Path(*parts[:length])
+            if relative in seen:
+                continue
+            path = ROOT / relative
+            try:
+                mode = path.lstat().st_mode
+            except FileNotFoundError:
+                mode = 0
+            if length < len(parts) and not stat.S_ISDIR(mode):
+                raise SystemExit(f"tree not identical: tracked ancestor {relative} is not a directory")
+            payload = b""
+            if stat.S_ISLNK(mode):
+                payload = os.fsencode(os.readlink(path))
+            elif stat.S_ISREG(mode):
+                payload = path.read_bytes()
+            accumulator.update(os.fsencode(relative) + b"\0" + str(mode).encode() + b"\0")
+            accumulator.update(hashlib.sha256(payload).digest())
+            seen.add(relative)
     return accumulator.hexdigest()
 
 
