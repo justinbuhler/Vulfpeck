@@ -441,7 +441,7 @@ def _group_gone(pgid):
     return False
 
 
-def kill_group(pgid):
+def kill_group(pgid, proc=None):
     """Signal a whole process group, escalating to SIGKILL if it lingers.
 
     This never raises. It is called from `finally` blocks and from a signal
@@ -455,8 +455,12 @@ def kill_group(pgid):
     killed the runner's own shell. No group this module starts has a pgid of 1
     or less, so those are refused rather than signalled.
 
+    Linux keeps a group signalable while its leader is an unreaped zombie, so a
+    leader this process started must be reaped for the group to read as gone.
+
     Args:
         pgid (int): the group to kill, or None for nothing to do.
+        proc (subprocess.Popen): the group's leader, reaped while waiting.
 
     Returns:
         (bool): whether this process has stopped trying - the group is gone, or
@@ -473,6 +477,8 @@ def kill_group(pgid):
             return False
         for _ in range(20):
             time.sleep(0.1)
+            if proc is not None:
+                proc.poll()
             if _group_gone(pgid):
                 return True
     return False
@@ -502,7 +508,7 @@ def run_in_group(argv, timeout):
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        kill_group(_child_pgid)
+        kill_group(_child_pgid, proc)
         out, err = proc.communicate()
         raise subprocess.TimeoutExpired(argv, timeout, output=out, stderr=err)
     finally:

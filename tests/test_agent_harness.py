@@ -669,7 +669,35 @@ check("and it was killed with the rest of the tree, not orphaned",
       not H.alive(grandchild), f"pid {grandchild} still running")
 check("kill_group reports success on a group that is already gone",
       H.kill_group(int(grandchild)) is True)
+_killpg = H.os.killpg
 check("kill_group on None is a no-op rather than an error", H.kill_group(None) is True)
+# Linux keeps a group signalable while its leader is an unreaped zombie, and
+# run_in_group only reaps after kill_group returns. Simulate that: the probe
+# succeeds until the Popen has been reaped. Expectation by hand: the timeout (1s)
+# plus a prompt kill (~0.1s), under the 2s one unreaped polling round costs.
+_Popen, _procs = H.subprocess.Popen, []
+class _Tracked(_Popen):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        _procs.append(self)
+def _linux_probe(pgid, sig):
+    if sig == 0:
+        if _procs[-1].returncode is None:
+            return
+        raise ProcessLookupError(3, "no such process")
+    return _killpg(pgid, sig)
+try:
+    H.subprocess.Popen, H.os.killpg = _Tracked, _linux_probe
+    _t0 = time.monotonic()
+    try:
+        H.run_in_group(["sleep", "30"], 1)
+    except subprocess.TimeoutExpired:
+        pass
+    _elapsed = time.monotonic() - _t0
+finally:
+    H.subprocess.Popen, H.os.killpg = _Popen, _killpg
+check("a timed-out gate whose leader is a zombie is not waited on for 4s more",
+      _elapsed < 2, f"{_elapsed:.1f}s")
 # On Linux killpg(1) is kill(-1): every process this user owns, the test runner
 # included. Group 1 must be refused before any signal is sent, on every platform,
 # so no check here may pass it to the real killpg.
