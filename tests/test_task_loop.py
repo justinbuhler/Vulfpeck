@@ -1088,8 +1088,22 @@ check("IGNORE: a path cloned in from the main checkout is refused even when the 
 # base with the same tree, which passes the parent and path checks.
 real_ledger = task_loop.agent_harness.read_ledger
 repo, log, ev = scenario([])
-twin = subprocess.run([REAL_GIT, "-C", str(repo), "commit-tree", "HEAD^{tree}", "-p", "origin/main", "-m", "twin"],
-                      capture_output=True, text=True, check=True).stdout.strip()  # fmt: skip
+index = str(repo.parent / "twin-index")
+twin_env = {**os.environ, "GIT_INDEX_FILE": index}
+twin_git = lambda *argv, **kw: subprocess.run(
+    [REAL_GIT, "-C", str(repo), *argv],
+    capture_output=True,
+    text=True,
+    check=True,
+    env=twin_env,
+    **kw,
+).stdout.strip()  # noqa: E731
+twin_git("read-tree", "origin/main")
+blob = twin_git("hash-object", "-w", "--stdin", input="twin\n")
+twin_git("update-index", "--add", "--cacheinfo", f"100644,{blob},docs/twin.md")
+twin = twin_git(
+    "commit-tree", twin_git("write-tree"), "-p", "origin/main", "-m", "twin"
+)
 os.environ["FAKE_HEAD_OID"] = twin
 task_loop.agent_harness.read_ledger = lambda d: [
     {**r, "sha": twin} if r.get("status") == "LANDED" else r for r in real_ledger(d)
