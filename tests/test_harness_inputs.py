@@ -55,6 +55,14 @@ with tempfile.TemporaryDirectory() as directory:
         "config/.env",
         "private/service.key",
         "tmp/worktrees/task",
+        ".claude/worktrees/other",
+        ".venv/lib/x.py",
+        ".claude-flow/logs/x.log",
+        "node_modules/pkg/index.js",
+        "a/__pycache__/b.pyc",
+        "a/.pytest_cache/x",
+        "a/.ruff_cache/x",
+        "a/.mypy_cache/x",
     ):
         check(f"credential/scratch path rejected: {name}", not inputs.safe_input(name))
     (source / "data/.env.local").write_text("fixture secret")
