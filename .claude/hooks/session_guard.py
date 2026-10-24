@@ -4,8 +4,8 @@
 Stop fires after every reply of the main agent, not once per session, so this
 stays quiet unless something changed:
 
-    Stop        if HEAD or the working tree changed since this session's last
-                check, run harness.toml commands.lint. A failure blocks the stop
+    Stop        if the tree is dirty or HEAD or status changed since this
+                session's last check, run harness.toml commands.lint. A failure blocks the stop
                 once with the output; on the continuation (stop_hook_active) the
                 session may stop and is told lint still fails. Uncommitted or
                 unlanded work gets a one-line notice when that state changed since
@@ -110,7 +110,8 @@ def on_stop(payload, top):
     now = state(top)
     out = {}
 
-    if now["tree"] != memo.get("linted_tree") or memo.get("lint_failed"):
+    # Porcelain labels do not change when an already-dirty file is edited again.
+    if now["dirty"] or now["tree"] != memo.get("linted_tree") or memo.get("lint_failed"):
         command = lint_command(top)
         if command.startswith("__unreadable__:"):
             out["systemMessage"] = f"session_guard: lint not run, harness.toml unreadable: {command[15:]}"
