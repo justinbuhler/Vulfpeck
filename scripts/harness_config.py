@@ -65,7 +65,7 @@ DEFAULTS = {
         # the `Components:` of a proposed or accepted ADR: before it is created
         # (.claude/hooks/adr_gate.py) and at every land (tests/test_adr.py).
         "require_for": [".claude/hooks/**", ".claude/agents/**", ".claude/skills/**",
-                        ".claude/workflows/**", ".claude/harness/**", ".githooks/**"],
+                        ".agents/skills/**", ".claude/workflows/**", ".claude/harness/**", ".githooks/**"],
         "exempt": [],           # literal paths, each one named
     },
     "hooks": {

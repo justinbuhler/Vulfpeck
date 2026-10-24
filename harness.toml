@@ -24,6 +24,7 @@ dir = "docs/adr"                        # NNNN-slug.md, managed by scripts/adr.p
 # A file matching one of these needs a proposed or accepted ADR naming it in
 # `Components:`, before it is created and at every land.
 require_for = [".claude/hooks/**", ".claude/agents/**", ".claude/skills/**",
+               ".agents/skills/**",
                ".claude/workflows/**", ".claude/harness/**", ".githooks/**",
                "scripts/**", "mutants/*.py"]
 exempt = []

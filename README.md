@@ -26,6 +26,7 @@ git config core.hooksPath .githooks     # lint at commit, no commits or merge co
 | `AGENTS.md` | The one rules source for Claude Code, Codex and Gemini CLI: commands, invariants, delegation rules ORCH-01..12, consequence-to-review table, scope, stop-and-reassess and testing rules |
 | `CLAUDE.md` | Imports `AGENTS.md`; Claude-only notes on hooks, model routing and workflows |
 | `.gemini/settings.json` | Points Gemini CLI at `AGENTS.md` as its context file |
+| `.agents/skills/`, `.codex/` | Skills for every runtime (`.claude/skills` is a symlink to them); Codex role declarations |
 | `harness.toml` | Setup, lint and test commands, untracked inputs, watched controls, mapped tests |
 | `HARNESS.md` | What each control enforces, adopting it in another repository, open gaps |
 | `tests/AGENTS.md` | Test conventions (standalone scripts, not pytest) |
