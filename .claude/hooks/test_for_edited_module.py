@@ -36,10 +36,10 @@ GIT_LEAKS = ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_PREFIX",
              "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES")
 
 
-def common_dir(path):
+def git_path(path, query):
     env = {k: v for k, v in os.environ.items() if k not in GIT_LEAKS}
     try:
-        done = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        done = subprocess.run(["git", "rev-parse", "--path-format=absolute", query],
                               cwd=path, capture_output=True, text=True, timeout=5, env=env)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -54,8 +54,8 @@ def trusted(root):
     must not execute that repository's code.
     """
     project = os.environ.get("CLAUDE_PROJECT_DIR")
-    mine = common_dir(project) if project else None
-    return bool(mine) and mine == common_dir(root)
+    mine = git_path(project, "--git-common-dir") if project else None
+    return bool(mine) and mine == git_path(root, "--git-common-dir")
 
 
 def load_config(root):
@@ -69,7 +69,7 @@ def main():
     """Run the mapped test for the edited file and report a failure.
 
     Returns:
-        (int): 2 when the mapped test failed or the config is unreadable, else 0.
+        (int): 2 when the mapped test fails, cannot complete, or the config is unreadable, else 0.
     """
     try:
         payload = json.load(sys.stdin)
@@ -78,17 +78,24 @@ def main():
     raw = (payload.get("tool_input") or {}).get("file_path")
     if not raw:
         return 0
-    root = Path(payload.get("cwd") or os.getcwd())
-    if not (root / "scripts" / "harness_config.py").is_file():
+    cwd = Path(payload.get("cwd") or os.getcwd())
+    top = git_path(cwd, "--show-toplevel")
+    if not top:
         return 0
+    root = Path(top)
     if not trusted(root):
+        return 0
+    if not (root / "scripts" / "harness_config.py").is_file():
         return 0
     try:
         harness_config, config = load_config(root)
     except Exception as exc:  # the reader's own error, or an import failure
         print(f"mapped test not run: harness.toml unreadable: {exc}", file=sys.stderr)
         return 2
-    found = harness_config.mapped_test(config, root, Path(raw))
+    edited = Path(raw)
+    if not edited.is_absolute():
+        edited = cwd / edited
+    found = harness_config.mapped_test(config, root, edited)
     if found is None:
         return 0
     test, command = found
@@ -100,8 +107,8 @@ def main():
         proc = subprocess.run(["bash", "-c", command], cwd=root, env=env,
                               capture_output=True, text=True, timeout=TIMEOUT)
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        print(f"{test.name} not run: {type(exc).__name__}", file=sys.stderr)
-        return 0
+        print(f"{test.name} not completed: {type(exc).__name__}", file=sys.stderr)
+        return 2
 
     name = test.relative_to(root.resolve()) if test.is_relative_to(root.resolve()) else test
     if proc.returncode == 0:
