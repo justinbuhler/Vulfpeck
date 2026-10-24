@@ -18,7 +18,8 @@
 # `uv sync` it would otherwise repeat every time.
 #
 # Exits 0 only after re-reading main and proving the reviewed candidate is
-# reachable from it. Anything else exits non-zero and writes nothing.
+# reachable from it. Anything else exits non-zero without landing; it may already
+# have pruned landers and synced with origin, which happen before the gate.
 set -uo pipefail
 
 # git reads these from the environment and ignores the directory it is run from.
@@ -146,36 +147,9 @@ unlock(){ rm -rf "$LOCK"; LOCK_HELD=0; }
 # Nothing is copied unless it is listed. Guessing at what a suite needs copied
 # another session's live state into the gate.
 provision(){
-  [ "${#HARNESS_COPY_UNTRACKED[@]}" -gt 0 ] || return 0
-  n=0
-  TRACKED=$(mktemp "${TMPDIR:-/tmp}/harness-land-tracked.XXXXXX")
-  trap 'rm -f "$TRACKED"; [ "$LOCK_HELD" = 1 ] && rm -rf "$LOCK"' EXIT
-  for rel in "${HARNESS_COPY_UNTRACKED[@]}"; do
-    src="$MAIN/$rel"
-    if [ ! -e "$src" ]; then
-      say "⚠ land.copy_untracked lists $rel, which is absent from $MAIN; not copied"
-      continue
-    fi
-    if [ -d "$src" ]; then
-      mkdir -p "$LWT/$rel"
-      # Anchored ("/name") so a tracked file excludes only itself, not every
-      # file of the same name deeper in the tree.
-      git -C "$LWT" -c core.quotePath=false ls-files -- "$rel" \
-        | sed "s|^$rel/|/|" >"$TRACKED"
-      rsync -a --exclude-from="$TRACKED" "$src/" "$LWT/$rel/" \
-        || die "could not copy $rel into the lander worktree"
-    else
-      if git -C "$LWT" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
-        say "⚠ land.copy_untracked lists $rel, which the candidate tracks; not copied"
-        continue
-      fi
-      mkdir -p "$LWT/$(dirname "$rel")"
-      cp "$src" "$LWT/$rel" || die "could not copy $rel into the lander worktree"
-    fi
-    n=$((n + 1))
-  done
-  say "▶ copied $n untracked input(s) from $MAIN"
-  return 0
+  "${HARNESS_PY[@]}" "$HARNESS_SCRIPTS/harness_inputs.py" \
+    --source "$MAIN" --target "$LWT" --config-root "$(git rev-parse --show-toplevel)" \
+    >/dev/null || die "explicit input provisioning failed"
 }
 
 # Move local main to $1, keeping whatever worktree holds it in step. $2, when
@@ -235,8 +209,9 @@ sync_with_origin(){
     # lander - the one path ORCH-12 sanctions to move it.
     merr=$(git -C "$mw" -c user.name=land -c user.email=land@local \
            merge --no-verify --no-edit origin/main 2>&1) \
-      || die "merging origin/main into main conflicts; main is unchanged:
-$(printf '%s\n' "$merr" | sed 's/^/       /')"
+      || { git -C "$mw" merge --abort >/dev/null 2>&1
+           die "merging origin/main into main conflicts; main is unchanged:
+$(printf '%s\n' "$merr" | sed 's/^/       /')"; }
     merged_main=$(git rev-parse main)
   else
     mtmp=$(mktemp -d)/wt

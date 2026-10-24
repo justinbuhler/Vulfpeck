@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -157,6 +158,8 @@ check("a project decision may govern no files",
 # --- the dated index and the change-set view ------------------------------------------
 git(r, "add", "-A")
 git(r, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "base")
+# adr new stamps date.today(); pin it so the index expectation below stays a hand-written literal
+created.write_text(created.read_text().replace(f"Date: {date.today().isoformat()}", "Date: 2026-10-22"))
 records, _ = adr.load_all(r / "docs" / "adr")
 adr.write_index(r / "docs" / "adr", records)
 readme = (r / "docs" / "adr" / "README.md").read_text()

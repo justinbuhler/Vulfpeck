@@ -290,5 +290,36 @@ other = repo()
 rc, out = bash("git commit -m x", other)
 check("a repository with no task manifests passes", out == {}, str(out))
 
+for kind in ("dirty", "staged", "index-only", "untracked", "symlink", "mode"):
+    r = repo()
+    path = r / ("new.txt" if kind == "untracked" else "a.txt")
+    if kind == "symlink":
+        path.unlink()
+        path.symlink_to("first-target")
+    else:
+        path.write_text("first dirty bytes\n")
+    if kind in ("staged", "index-only"):
+        git(r, "add", "a.txt")
+    if kind == "index-only":
+        path.write_text("working bytes remain\n")
+    before_status = git(r, "status", "--porcelain=v1", "--untracked-files=all")
+    sub("SubagentStart", r, agent_id="same-status-" + kind)
+    if kind == "symlink":
+        path.unlink()
+        path.symlink_to("second-target")
+    elif kind == "mode":
+        path.chmod(0o755)
+    else:
+        path.write_text("second dirty bytes\n")
+        if kind in ("staged", "index-only"):
+            git(r, "add", "a.txt")
+        if kind == "index-only":
+            path.write_text("working bytes remain\n")
+    check(f"{kind} regression keeps the same porcelain status",
+          git(r, "status", "--porcelain=v1", "--untracked-files=all") == before_status)
+    _, outcome = sub("SubagentStop", r, agent_id="same-status-" + kind)
+    check(f"same-status {kind} change blocks review completion",
+          outcome.get("decision") == "block", str(outcome))
+
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

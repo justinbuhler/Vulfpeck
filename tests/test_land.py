@@ -378,7 +378,7 @@ if FAIL:
 COPY_CONFIG = (
     "[land]\n"
     'copy_untracked = ["fn/sources", "fn/generated.json", "fn/generated\u2013v1.1.json",'
-    ' "fn/absent.json", "fn/tracked.json"]\n'
+    ' "fn/tracked.json"]\n'
 )
 d14 = repo()
 (d14 / "fn" / "sources").mkdir(parents=True)
@@ -429,10 +429,8 @@ for relative in ("fn/sources/untracked.txt", "fn/sources/deep/tracked.txt",
           copied.exists() and not source.samefile(copied))
 check("an unlisted ignored file is NOT copied", not (lwt14 / "fn" / "unlisted.json").exists())
 check("another session's live state is NOT copied", not (lwt14 / ".omc").exists())
-check("a listed path absent from main is reported, not fatal",
-      "fn/absent.json" in r14.stdout and r14.returncode == 0, r14.stdout)
 check("a listed path the candidate tracks is reported and not copied",
-      "fn/tracked.json, which the candidate tracks" in r14.stdout, r14.stdout)
+      "tracked input excluded: fn/tracked.json" in r14.stderr, r14.stderr)
 check("gate writes leave the primary untracked input unchanged",
       (d14 / "fn/sources/untracked.txt").read_text() == "provision me\n")
 check("gate writes leave the primary ignored input unchanged",
@@ -453,9 +451,8 @@ r14b = land(agent(d14b, "mike-b"))
 check("with no harness.toml nothing is copied", r14b.returncode == 0
       and not (Path(LANDER_ROOT) / "mike-b" / "generated.json").exists(), r14b.stdout + r14b.stderr)
 
-# A failed transfer must stop before the gate or main can move. Shadow only
-# the transfer command; the real lander and its Git operations still execute.
-for command in ("rsync", "cp"):
+# Invalid declared inputs must stop before the gate or main can move.
+for command in ("missing", "symlink"):
     with tempfile.TemporaryDirectory() as td:
         fixture = repo()
         (fixture / "fn/sources").mkdir(parents=True)
@@ -468,9 +465,9 @@ for command in ("rsync", "cp"):
         (fixture / "fn/generated.json").write_text("generated\n")
         candidate = agent(fixture, f"failed-{command}")
         original_main = git(fixture, "rev-parse", "main")
-        stub = Path(td) / command
-        stub.write_text("#!/bin/sh\nexit 23\n")
-        stub.chmod(0o755)
+        (fixture / "fn/generated.json").unlink()
+        if command == "symlink":
+            (fixture / "fn/generated.json").symlink_to(fixture / "fn/sources/raw.txt")
         gate_marker = Path(td) / "gate-ran"
         result = land(candidate, gate=f"touch {shlex.quote(str(gate_marker))}",
                       PATH=f"{td}:{os.environ['PATH']}")
@@ -718,6 +715,11 @@ r23 = land(wt23)
 check("a conflicting divergence fails the land", r23.returncode != 0, r23.stdout + r23.stderr)
 check("main is untouched after a conflicting divergence",
       git(d23, "rev-parse", "main") == before23)
+check("a conflicting divergence leaves no merge in progress in the main checkout",
+      not (d23 / ".git" / "MERGE_HEAD").exists())
+check("a conflicting divergence leaves the main checkout clean",
+      git(d23, "status", "--porcelain", "--untracked-files=no") == "",
+      git(d23, "status", "--porcelain"))
 
 # --- a merge commit on main is a hole the pre-commit hook cannot see -------
 # pre-commit does not run for merges; git runs pre-merge-commit instead. So
