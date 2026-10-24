@@ -4,13 +4,16 @@
 # behaviour: the lander refuses a queued path that is not one literal file
 --- a/.claude/harness/agent_harness.py
 +++ b/.claude/harness/agent_harness.py
-@@ -818,8 +818,7 @@
-         if not isinstance(name, str) or set("*?[") & set(name) or name.startswith(":"):
-             return fail(f"queued path {name!r} is not one literal file inside the worktree")
+@@ -791,11 +791,7 @@
+                 f"queued path {name!r} is not one literal file inside the worktree"
+             )
          target = (worktree / name).resolve()
--        if (not target.is_relative_to(worktree.resolve()) or target == worktree.resolve()
--                or target.is_dir()):
+-        if (
+-            not target.is_relative_to(worktree.resolve())
+-            or target == worktree.resolve()
+-            or target.is_dir()
+-        ):
 +        if False:
-             return fail(f"queued path {name!r} is not one literal file inside the worktree")
- 
-     # The agent's own index is not the queue. Anything staged there that the
+             return fail(
+                 f"queued path {name!r} is not one literal file inside the worktree"
+             )

@@ -4,13 +4,17 @@
 # behaviour: land.copy_untracked never overwrites a tracked file
 --- a/scripts/harness_inputs.py
 +++ b/scripts/harness_inputs.py
-@@ -70,8 +70,7 @@
-             linked = any((target / Path(*Path(rel).parts[:n])).is_symlink()
-                          for n in range(1, len(Path(rel).parts) + 1))
+@@ -114,12 +114,7 @@
+                 for n in range(1, len(Path(rel).parts) + 1)
+             )
              state = destination.lstat() if destination.exists() else None
--            if rel in tracked or (state is not None and not linked and state.st_nlink == 1
--                                  and (state.st_dev, state.st_ino) in tracked_ids):
+-            if rel in tracked or (
+-                state is not None
+-                and not linked
+-                and state.st_nlink == 1
+-                and (state.st_dev, state.st_ino) in tracked_ids
+-            ):
 +            if False:
                  print(f"tracked input excluded: {rel}", file=sys.stderr)
                  continue
-             if (not destination.resolve().is_relative_to(target)
+             if (
