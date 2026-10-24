@@ -1,0 +1,15 @@
+# mutant_id: M041
+# target: scripts/task_loop.py
+# operator: extra-mount
+# behaviour: the worker's container mounts only the task worktree, never the owner's home
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -332,6 +332,8 @@
+         "--rm",
+         "--volume",
+         f"{worktree}:{SANDBOX_MOUNT}",
++        "--volume",
++        f"{Path.home()}:/root",
+         "--env",
+         name,
+         SANDBOX_IMAGE,

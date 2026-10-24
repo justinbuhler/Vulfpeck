@@ -38,6 +38,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import os
 import re
 import shlex
 import shutil
@@ -94,6 +95,16 @@ UNTRUSTED_ENV_DROP = (
     "GH_ENTERPRISE_TOKEN",
     "SSH_AUTH_SOCK",
 )
+# `[loop] sandbox = "container"` runs the worker in Apple `container` with only the task worktree
+# mounted, at SANDBOX_MOUNT, and one model API key: read on the host from the first name, passed
+# under the second, which is the name the runtime's CLI expects. Nothing else crosses over.
+SANDBOX_IMAGE = "vulfpeck-worker"
+SANDBOX_MOUNT = "/work"
+SANDBOX_KEYS = {
+    "claude": ("LOOP_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
+    "codex": ("LOOP_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    "gemini": ("LOOP_GEMINI_API_KEY", "GEMINI_API_KEY"),
+}
 
 
 class IllegalTransition(ValueError):
@@ -108,14 +119,15 @@ class Halt(Exception):
         self.state, self.reason = state, reason
 
 
-def sh(argv, cwd=None, timeout=None, untrusted=None):
+def sh(argv, cwd=None, timeout=None, untrusted=None, extra_env=None):
     """Run one external command and return its CompletedProcess; the only exit from this script.
 
     A timeout or a missing program becomes a non-zero result rather than an exception, so the
     stage that called it reports the failure. A `--dangerously-*` argument raises: no runtime
     is ever started with its safety checks off. `untrusted` is the repo root when the command
     runs worker-controlled code: it gets no GitHub or ssh credentials, an empty `gh` config
-    directory and no system git config.
+    directory and no system git config. `extra_env` is added last, for the one secret a
+    sandboxed worker is given.
     """
     if any(str(a).startswith("--dangerously") for a in argv):
         raise ValueError(
@@ -127,6 +139,7 @@ def sh(argv, cwd=None, timeout=None, untrusted=None):
         empty = Path(untrusted) / "tmp" / "loop" / "gh-empty"
         empty.mkdir(parents=True, exist_ok=True)
         env.update(GH_CONFIG_DIR=str(empty), GIT_CONFIG_NOSYSTEM="1")
+    env.update(extra_env or {})
     try:
         return subprocess.run(
             [str(a) for a in argv],
@@ -307,7 +320,48 @@ def next_issue(root, cfg, ask_jev=True):
 # --- the commands one task runs ----------------------------------------------
 
 
-def brief(issue, worktree):
+def sandbox_argv(cfg, worktree, worker_argv):
+    """`container run` for one worker: the worktree is the only volume, the key is inherited by name.
+
+    The value of the key is never in this argv; `sandbox_env` supplies it to the process.
+    """
+    name = SANDBOX_KEYS[cfg["runtime"]][1]
+    return [
+        "container",
+        "run",
+        "--rm",
+        "--volume",
+        f"{worktree}:{SANDBOX_MOUNT}",
+        "--env",
+        name,
+        SANDBOX_IMAGE,
+        *worker_argv,
+    ]
+
+
+def sandbox_env(cfg):
+    """(environment for the container process, the secret to redact); blocks the task when the key is unset."""
+    source, name = SANDBOX_KEYS[cfg["runtime"]]
+    key = os.environ.get(source)
+    if not key:
+        raise Halt(
+            "blocked",
+            f"{source} is not set; the sandboxed {cfg['runtime']} worker needs it",
+        )
+    return {name: key}, key
+
+
+def redact(done, secret):
+    """The CompletedProcess with every copy of `secret` removed from its output."""
+    if not secret:
+        return done
+    clean = lambda text: text.replace(secret, "[redacted]")  # noqa: E731
+    return subprocess.CompletedProcess(
+        done.args, done.returncode, clean(done.stdout), clean(done.stderr)
+    )
+
+
+def brief(issue, worktree, sandboxed=False):
     """The worker's structured brief (AGENTS.md "Dispatch and report").
 
     The issue text is someone else's writing: it sits between markers carrying a hash of the
@@ -324,8 +378,12 @@ def brief(issue, worktree):
         "FORBIDDEN: git commit, git add, git push, merging, spawning agents or worktrees, "
         "any --dangerously-* flag, commit trailers or attribution, files outside the worktree, "
         "user-level config, running scripts/task_loop.py.\n"
-        "DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --run` exits 0.\n"
-        "REPORT: finish with one line `STATUS: DONE`, `STATUS: DONE_WITH_CONCERNS <concerns>`, "
+        + (
+            "DONE WHEN: the issue's change is complete; the runner verifies it outside the sandbox.\n"
+            if sandboxed
+            else "DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --run` exits 0.\n"
+        )
+        + "REPORT: finish with one line `STATUS: DONE`, `STATUS: DONE_WITH_CONCERNS <concerns>`, "
         "`STATUS: NEEDS_CONTEXT <what is missing>` or `STATUS: BLOCKED <why>`."
     )
 
@@ -352,6 +410,16 @@ TIMELINE_QUERY = (
 )
 
 
+def worker_command(cfg, issue, wt):
+    """The worker's argv: the runtime's command plus the brief, wrapped in `container run` when sandboxed."""
+    sandboxed = cfg["sandbox"] == "container"
+    argv = [
+        *shlex.split(cfg["workers"][cfg["runtime"]]),
+        brief(issue, SANDBOX_MOUNT if sandboxed else wt, sandboxed),
+    ]
+    return sandbox_argv(cfg, wt, argv) if sandboxed else argv
+
+
 def plan(
     root,
     cfg,
@@ -376,7 +444,7 @@ def plan(
                             "-F", f"number={n}", "-f", f"query={TIMELINE_QUERY}"]),
         ("fetch", root, ["git", "-C", root, "fetch", "origin", base]),
         ("provision", root, [*harness, "provision", "--task", task, "--baseline", base_sha, "--path", wt]),
-        ("worker", wt, [*shlex.split(cfg["workers"][cfg["runtime"]]), brief(issue, wt)]),
+        ("worker", wt, worker_command(cfg, issue, wt)),
         ("verify", wt, ["(in-process)", f"{base_sha}:harness.toml", "commands.lint", "when every path is on the allowlist"]),
         ("enqueue", wt, [*harness, "enqueue", "--task", task, "-m", commit_message(issue),
                          *[a for f in files for a in ("--file", f)]]),
@@ -622,7 +690,14 @@ def execute(root, cfg, issue):
                     "blocked",
                     f"codex would run without hook gates: main's .codex/hooks.json is {drift}",
                 )
-        done = sh(plans["worker"][1], wt, WORKER_TIMEOUT, untrusted=root)
+        link = (wt / ".git").read_text()
+        env, secret = sandbox_env(cfg) if cfg["sandbox"] == "container" else ({}, None)
+        done = redact(
+            sh(plans["worker"][1], wt, WORKER_TIMEOUT, untrusted=root, extra_env=env),
+            secret,
+        )
+        if (wt / ".git").read_text() != link:
+            raise Halt("failed", "the worker changed the worktree's .git link")
         status, note = parse_status(done.stdout)
         if status in ("NEEDS_CONTEXT", "BLOCKED"):
             raise Halt("blocked", f"{status}: {note}")
@@ -814,10 +889,29 @@ def cmd_next(root, cfg, args):
     return 0
 
 
+def refuse_unsandboxed(cfg, args):
+    """Exit status 2 when the config runs workers as the owner and --unsandboxed was not given, else None."""
+    if cfg["sandbox"] != "none":
+        return None
+    if not args.unsandboxed:
+        print(
+            'task_loop: [loop] sandbox = "none" runs workers as you; pass --unsandboxed to allow it',
+            file=sys.stderr,
+        )
+        return 2
+    print(
+        "WARNING: unsandboxed: the worker runs as you and can reach your keyring, ssh keys and home",
+        file=sys.stderr,
+    )
+    return None
+
+
 def cmd_run_one(root, cfg, args):
     """Run the next task, or with --dry-run print its commands."""
     if args.dry_run:
         return cmd_next(root, cfg, args)
+    if (refused := refuse_unsandboxed(cfg, args)) is not None:
+        return refused
     issue, how = next_issue(root, cfg)
     if issue is None:
         print("queue empty")
@@ -830,7 +924,11 @@ def cmd_run_one(root, cfg, args):
 
 def cmd_run(root, cfg, args):
     """Run the loop, or with --dry-run print the first task's commands."""
-    return cmd_next(root, cfg, args) if args.dry_run else run_loop(root, cfg)
+    if args.dry_run:
+        return cmd_next(root, cfg, args)
+    if (refused := refuse_unsandboxed(cfg, args)) is not None:
+        return refused
+    return run_loop(root, cfg)
 
 
 def cmd_status(root, cfg, args):
@@ -899,6 +997,10 @@ def build_parser():
                 action="store_true",
                 help="print the commands, run none of them",
             )
+    for name in ("run-one", "run"):
+        sub.choices[name].add_argument(
+            "--unsandboxed", action="store_true", help='allow [loop] sandbox = "none"'
+        )
     sub.choices["status"].add_argument("--json", action="store_true")
     sub.choices["next"].add_argument(
         "--dry-run", action="store_true", help="accepted; next never mutates"

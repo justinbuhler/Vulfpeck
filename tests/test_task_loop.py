@@ -63,6 +63,17 @@ eval "$FAKE_WORKER_EXTRA"
 printf 'STATUS: %s because\\n' "${FAKE_WORKER_STATUS:-DONE}"
 exit "${FAKE_WORKER_RC:-0}"
 """,
+    "container": """#!/bin/sh
+printf '%s\\n' "$@" > "$SHIM_DIR/container-argv.txt"
+printf '%s|%s|%s|%s|%s|%s|%s' "${ANTHROPIC_API_KEY-unset}" "${OPENAI_API_KEY-unset}" "${GEMINI_API_KEY-unset}" "${GH_TOKEN-unset}" "${SSH_AUTH_SOCK-unset}" "${GH_CONFIG_DIR-unset}" "${HOME-unset}" > "$SHIM_DIR/container-env.txt"
+if [ "$FAKE_CONTAINER_MODE" = leak ]; then
+  echo "auth failed for key ${ANTHROPIC_API_KEY}${OPENAI_API_KEY}${GEMINI_API_KEY}" >&2
+  exit 1
+fi
+while [ "$1" != vulfpeck-worker ]; do shift; done
+shift
+exec "$@"
+""",
     "git": """#!/bin/sh
 for a; do
   if [ "$a" = push ]; then echo "git $*" >> "$SHIM_LOG"; exit 0; fi
@@ -70,7 +81,7 @@ done
 exec "$REAL_GIT" "$@"
 """,
 }
-for name, text in {"gh": SHIM_SOURCES["gh"], "claude": SHIM_SOURCES["worker"],
+for name, text in {"gh": SHIM_SOURCES["gh"], "container": SHIM_SOURCES["container"], "claude": SHIM_SOURCES["worker"],
                    "codex": SHIM_SOURCES["worker"], "gemini": SHIM_SOURCES["worker"],
                    "git": SHIM_SOURCES["git"]}.items():  # fmt: skip
     (SHIMS / name).write_text(text)
@@ -101,6 +112,7 @@ FAKE_VARS = (
     "FAKE_HEAD_OID",
     "FAKE_WORKER_EXTRA",
     "FAKE_TIMELINE_FILE",
+    "FAKE_CONTAINER_MODE",
 )
 os.environ["PATH"] = f"{SHIMS}{os.pathsep}{os.environ['PATH']}"
 os.environ["REAL_GIT"] = REAL_GIT
@@ -166,7 +178,7 @@ def scenario(issues, codex_hooks=False, ignore="tmp/\n", **env):
 
 
 def cfg_for(repo, **over):
-    return {**harness_config.load(repo)["loop"], **over}
+    return {**harness_config.load(repo)["loop"], "sandbox": "none", **over}
 
 
 def lines(path):
@@ -1131,6 +1143,171 @@ task_loop.agent_harness.read_ledger = real_ledger
 check("HEAD: a worktree HEAD that is not the ledger's landed commit fails before the push",
       final == "failed" and "push" not in log.read_text(), f"{final} {task_loop.load(repo, 140)['reason']}")  # fmt: skip
 
+
+# --- the worker sandbox: Apple `container`, one mount, one key ------------------
+KEY_VARS = ("LOOP_ANTHROPIC_API_KEY", "LOOP_OPENAI_API_KEY", "LOOP_GEMINI_API_KEY")
+DUMMY = {
+    "LOOP_ANTHROPIC_API_KEY": "sk-ant-dummy-111",
+    "LOOP_OPENAI_API_KEY": "sk-oai-dummy-222",
+    "LOOP_GEMINI_API_KEY": "gem-dummy-333",
+}
+
+
+def with_keys(keys):
+    for name in KEY_VARS:
+        os.environ.pop(name, None)
+    os.environ.update(keys)
+
+
+def boxed(number, repo, runtime="claude", **over):
+    return attempt(number, repo, sandbox="container", runtime=runtime, **over)
+
+
+with_keys(DUMMY)
+os.environ.update(GH_TOKEN="tok", SSH_AUTH_SOCK="/tmp/agent.sock")
+repo, log, ev = scenario([])
+final = boxed(160, repo)
+argv = (ev.parent / "container-argv.txt").read_text().splitlines()
+wt = repo / "tmp" / "worktrees" / "issue-160-a1"
+check("BOX: the worker runs as `container run --rm` with the worktree as the one volume, the key by name, the image, then the command",
+      argv[:7] == ["run", "--rm", "--volume", f"{wt}:/work", "--env", "ANTHROPIC_API_KEY", "vulfpeck-worker"] and argv[7:9] == ["claude", "-p"],
+      str(argv[:9]))  # fmt: skip
+check(
+    "BOX: a green task still publishes through the sandbox", final == "published", final
+)
+head = argv[:9]
+check("BOX: exactly one volume, no --mount, no extra --env", head.count("--volume") == 1 and "--mount" not in head and head.count("--env") == 1 and "-e" not in head and "-v" not in head, str(head))  # fmt: skip
+volume = f"{wt}:/work"
+exposed = [
+    a
+    for a in head
+    if a != volume
+    and any(
+        x in a
+        for x in (
+            str(Path.home()),
+            ".ssh",
+            ".config",
+            "hosts.yml",
+            ".git/",
+            "SSH_AUTH_SOCK",
+            "GH_",
+        )
+    )
+]
+check(
+    "BOX: nothing else in the argv names home, ssh, gh config or a git common dir",
+    exposed == [],
+    str(exposed),
+)
+check(
+    "BOX: the key value is never in the argv",
+    all("dummy" not in a for a in argv),
+    str(argv[:9]),
+)
+check(
+    "BOX: no --dangerously flag anywhere in the argv",
+    not any(a.startswith("--dangerously") for a in argv),
+)
+seen = (ev.parent / "container-env.txt").read_text().split("|")
+check("BOX: the container process gets its key and none of the owner's tokens, ssh agent or gh config",
+      seen[0] == DUMMY["LOOP_ANTHROPIC_API_KEY"] and seen[1:3] == ["unset", "unset"] and seen[3:5] == ["unset", "unset"] and seen[5].endswith("gh-empty"), str(seen[1:]))  # fmt: skip
+brief_text = "\n".join(argv[9:])
+check("BOX: the brief names /work, not the host path, and does not ask for plan_tests",
+      "inside /work;" in brief_text and str(wt) not in brief_text and "plan_tests" not in brief_text, brief_text[-400:])  # fmt: skip
+
+for runtime, source, name in (
+    ("codex", "LOOP_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    ("gemini", "LOOP_GEMINI_API_KEY", "GEMINI_API_KEY"),
+):
+    repo, log, ev = scenario([], codex_hooks=runtime == "codex")
+    boxed(161, repo, runtime)
+    argv = (ev.parent / "container-argv.txt").read_text().splitlines()
+    seen = (ev.parent / "container-env.txt").read_text().split("|")
+    names = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"]
+    present = [n for n, v in zip(names, seen[:3]) if v != "unset"]
+    check(f"BOX: the {runtime} worker gets only {name}, from {source}",
+          argv[argv.index("--env") + 1] == name and present == [name] and seen[names.index(name)] == DUMMY[source], f"{argv[:7]} {seen[:3]}")  # fmt: skip
+
+for runtime, source in (
+    ("claude", "LOOP_ANTHROPIC_API_KEY"),
+    ("codex", "LOOP_OPENAI_API_KEY"),
+):
+    with_keys({k: v for k, v in DUMMY.items() if k != source})
+    repo, log, ev = scenario([], codex_hooks=runtime == "codex")
+    final = boxed(162, repo, runtime)
+    st = task_loop.load(repo, 162)
+    check(f"BOX: a missing {source} blocks the {runtime} task before any container starts",
+          final == "blocked" and source in st["reason"] and not (ev.parent / "container-argv.txt").exists(), f"{final} {st['reason']}")  # fmt: skip
+with_keys(DUMMY)
+
+repo, log, ev = scenario([], FAKE_CONTAINER_MODE="leak")
+final = boxed(163, repo)
+st = task_loop.load(repo, 163)
+state_text = (task_loop.state_dir(repo) / "163.json").read_text()
+logs = state_text + log.read_text() + (ev.read_text() if ev.exists() else "")
+check("BOX: a key echoed in the container's error text is redacted from the task reason, state, log and events",
+      final == "failed" and "[redacted]" in st["reason"] and DUMMY["LOOP_ANTHROPIC_API_KEY"] not in logs and DUMMY["LOOP_ANTHROPIC_API_KEY"] not in st["reason"], f"{final} {st['reason']}")  # fmt: skip
+leaked = io.StringIO()
+with contextlib.redirect_stderr(leaked), contextlib.redirect_stdout(leaked):
+    repo, log, ev = scenario([])
+    os.environ["FAKE_CONTAINER_MODE"] = "leak"
+    boxed(164, repo)
+check(
+    "BOX: nothing the loop prints carries the key",
+    DUMMY["LOOP_ANTHROPIC_API_KEY"] not in leaked.getvalue(),
+    leaked.getvalue()[-300:],
+)
+os.environ.pop("FAKE_CONTAINER_MODE", None)
+
+repo, log, ev = scenario(
+    [], FAKE_WORKER_EXTRA='printf "gitdir: /tmp/elsewhere\\n" > .git'
+)
+final = boxed(165, repo)
+check(
+    "BOX: a worker that rewrites the worktree's .git link ends failed",
+    final == "failed" and ".git link" in task_loop.load(repo, 165)["reason"],
+    final,
+)
+
+repo, log, ev = scenario([issue(166, "Sandboxed")])
+_, shown = quiet(task_loop.main, ["next", "--dry-run"], repo)
+check("BOX: a dry run prints the container command and starts none",
+      "container run --rm --volume" in shown and not (ev.parent / "container-argv.txt").exists(), shown)  # fmt: skip
+
+# The default is the sandbox; "none" needs --unsandboxed and prints a warning.
+repo, log, ev = scenario([])
+check(
+    "BOX: sandbox defaults to container",
+    harness_config.load(repo)["loop"]["sandbox"] == "container",
+)
+(repo / "harness.toml").write_text(HARNESS_TOML + '\n[loop]\nsandbox = "elsewhere"\n')
+try:
+    harness_config.load(repo)
+    rejected = False
+except harness_config.ConfigError:
+    rejected = True
+check("BOX: any sandbox value but container or none is rejected", rejected)
+(repo / "harness.toml").write_text(HARNESS_TOML + '\n[loop]\nsandbox = "none"\n')
+for command in ("run", "run-one"):
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        code, _ = quiet(task_loop.main, [command], repo)
+    check(f'BOX: `{command}` refuses sandbox = "none" without --unsandboxed', code == 2 and "--unsandboxed" in err.getvalue() and not (ev.parent / "container-argv.txt").exists(), f"{code} {err.getvalue()}")  # fmt: skip
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        code, out = quiet(task_loop.main, [command, "--unsandboxed"], repo)
+    check(f"BOX: `{command} --unsandboxed` runs and warns", code == 0 and "WARNING: unsandboxed" in err.getvalue() and "queue empty" in out, f"{code} {err.getvalue()} {out}")  # fmt: skip
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    code, _ = quiet(task_loop.main, ["run", "--dry-run"], repo)
+check(
+    "BOX: a dry run needs no flag",
+    code == 0 and err.getvalue() == "",
+    f"{code} {err.getvalue()}",
+)
+for name in KEY_VARS + ("GH_TOKEN", "SSH_AUTH_SOCK"):
+    os.environ.pop(name, None)
 
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

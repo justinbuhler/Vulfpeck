@@ -123,6 +123,9 @@ DEFAULTS = {
         "runtime": "claude",
         "base": "main",
         "priority": ["priority:high", "priority:medium", "priority:low"],
+        # "container" runs each worker in Apple `container` with only its worktree mounted;
+        # "none" runs it as the owner and `task_loop.py run` then needs --unsandboxed.
+        "sandbox": "container",
         # Headless worker command per runtime; the brief is appended as the last argument.
         "workers": {
             "claude": "claude -p",
@@ -325,6 +328,8 @@ def merge(raw):
         raise ConfigError(
             f"loop.runtime {loop['runtime']!r} has no loop.workers command"
         )
+    if loop["sandbox"] not in ("container", "none"):
+        raise ConfigError('loop.sandbox must be "container" or "none"')
     if not loop["priority"]:
         raise ConfigError("loop.priority needs at least one label")
     for runtime, command in loop["workers"].items():

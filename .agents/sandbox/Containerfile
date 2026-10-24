@@ -1,0 +1,24 @@
+# The worker sandbox for scripts/task_loop.py (ADR 0018). Build from the repo root:
+#   container build -t vulfpeck-worker -f .agents/sandbox/Containerfile .agents/sandbox
+# The loop mounts only the task worktree at /work; nothing else from the host is visible.
+FROM node:22-bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ripgrep python3 ca-certificates curl bash \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+# The official packages of the three worker runtimes (unpinned: pin them when the loop goes live).
+RUN npm install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli \
+ && npm cache clean --force
+
+COPY entrypoint.sh /usr/local/bin/sandbox-entry
+RUN chmod 0755 /usr/local/bin/sandbox-entry
+
+# Git inside the sandbox uses a private, throwaway git dir (made by the entrypoint), never the
+# host's: the worktree's own .git link points at a host path that does not exist here.
+ENV GIT_DIR=/gitdir GIT_WORK_TREE=/work HOME=/home/node
+WORKDIR /work
+USER node
+ENTRYPOINT ["/usr/local/bin/sandbox-entry"]
