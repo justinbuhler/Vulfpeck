@@ -4,7 +4,7 @@
 # behaviour: a pull request whose checks did not pass is never merged
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -655,7 +655,7 @@ def execute(root, cfg, issue):
+@@ -712,7 +712,7 @@
              raise Halt("blocked", f"needs-review: {review}")
          watch = sh(pr_plans["checks"], root, CHECKS_TIMEOUT)
          problem = check_problem(watch, sh(pr_plans["list"], root))
