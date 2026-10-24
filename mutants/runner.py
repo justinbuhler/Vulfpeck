@@ -78,8 +78,11 @@ def tree_digest():
 
 def dirty():
     """Return the modified tracked files, ignoring this runner's own ledger."""
-    return [line for line in git("status", "--porcelain", "--untracked-files=no").splitlines()
-            if line.strip() and not line.endswith(LEDGER.name)]
+    return [
+        line
+        for line in git("status", "--porcelain", "--untracked-files=no").splitlines()
+        if line.strip() and not line.endswith(LEDGER.name)
+    ]
 
 
 def interpreter():
@@ -92,8 +95,9 @@ def interpreter():
 
 def suite_files():
     """Return the test scripts run.sh walks, in the same order."""
-    return sorted([*(ROOT / "tests").glob("test_*.py"),
-                   *ROOT.glob("*/scripts/tests/test_*.py")])
+    return sorted(
+        [*(ROOT / "tests").glob("test_*.py"), *ROOT.glob("*/scripts/tests/test_*.py")]
+    )
 
 
 def failing_specs(output):
@@ -113,16 +117,28 @@ def run_one(command, path, timeout):
     name = path.relative_to(ROOT).as_posix()
     # HARNESS_EVENTS_LOG: tests run real hooks; keep mutant runs out of the real
     # decision record (scripts/harness_events.py).
-    environment = dict(os.environ, PYTHONPATH=f"{ROOT}:{ROOT / 'scripts'}",
-                       HARNESS_EVENTS_LOG=os.devnull)
+    environment = dict(
+        os.environ,
+        PYTHONPATH=f"{ROOT}:{ROOT / 'scripts'}",
+        HARNESS_EVENTS_LOG=os.devnull,
+    )
     try:
-        done = subprocess.run([*command, str(path)], cwd=ROOT, capture_output=True,
-                              text=True, timeout=timeout, env=environment)
+        done = subprocess.run(
+            [*command, str(path)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=environment,
+        )
         code, out, err = done.returncode, done.stdout, done.stderr
     except subprocess.TimeoutExpired as expired:
         code = -1
-        out = (expired.stdout or b"").decode("utf-8", "replace") if isinstance(
-            expired.stdout, bytes) else (expired.stdout or "")
+        out = (
+            (expired.stdout or b"").decode("utf-8", "replace")
+            if isinstance(expired.stdout, bytes)
+            else (expired.stdout or "")
+        )
         err = f"TIMEOUT after {timeout}s"
     summary = SUMMARY_LINE.search(out)
     return name, {
@@ -205,7 +221,6 @@ def metadata(patch):
     return fields
 
 
-
 def report(ledger_path, wanted_round=None):
     """Print the mutant-to-killing-spec table for one round of the ledger.
 
@@ -214,19 +229,35 @@ def report(ledger_path, wanted_round=None):
     in the suite says what was violated, so it is reported separately rather
     than counted as coverage.
     """
-    rows = [json.loads(line) for line in
-            pathlib.Path(ledger_path).read_text().splitlines() if line.strip()]
+    rows = [
+        json.loads(line)
+        for line in pathlib.Path(ledger_path).read_text().splitlines()
+        if line.strip()
+    ]
     rounds = sorted({row["round"] for row in rows})
     chosen = wanted_round if wanted_round is not None else rounds[-1]
-    mutants_seen = [row for row in rows
-                    if row.get("record") != "baseline" and row["round"] == chosen]
-    baseline = next((row for row in rows
-                     if row.get("record") == "baseline" and row["round"] == chosen), {})
+    mutants_seen = [
+        row
+        for row in rows
+        if row.get("record") != "baseline" and row["round"] == chosen
+    ]
+    baseline = next(
+        (
+            row
+            for row in rows
+            if row.get("record") == "baseline" and row["round"] == chosen
+        ),
+        {},
+    )
 
     print(f"# Mutation round {chosen}\n")
     print(f"- corpus: {len(mutants_seen)} mutants")
-    print(f"- suite: {baseline.get('scripts')} scripts, {baseline.get('checks')} checks")
-    print(f"- red at baseline (absent source data): {len(baseline.get('red_at_baseline', []))}\n")
+    print(
+        f"- suite: {baseline.get('scripts')} scripts, {baseline.get('checks')} checks"
+    )
+    print(
+        f"- red at baseline (absent source data): {len(baseline.get('red_at_baseline', []))}\n"
+    )
 
     print("| Mutant | Target | Operator | Status | Killing spec |")
     print("|---|---|---|---|---|")
@@ -247,16 +278,22 @@ def report(ledger_path, wanted_round=None):
             status = "killed (unmapped)"
             cell = f"crash only: {', '.join(crashes[:2])}"
             unmapped.append(row)
-        print(f"| {row['mutant_id']} | {target} | {row.get('operator')} | {status} | {cell} |")
+        print(
+            f"| {row['mutant_id']} | {target} | {row.get('operator')} | {status} | {cell} |"
+        )
 
     killed = sum(1 for row in mutants_seen if row.get("killed"))
     mapped = killed - len(unmapped)
-    print(f"\ncaught {killed}/{len(mutants_seen)}"
-          f" ({100 * killed / max(len(mutants_seen), 1):.0f}%),"
-          f" of which {mapped} map to a named spec")
+    print(
+        f"\ncaught {killed}/{len(mutants_seen)}"
+        f" ({100 * killed / max(len(mutants_seen), 1):.0f}%),"
+        f" of which {mapped} map to a named spec"
+    )
     if unmapped:
-        print(f"\nunmapped kills ({len(unmapped)}): "
-              + ", ".join(row["mutant_id"] for row in unmapped))
+        print(
+            f"\nunmapped kills ({len(unmapped)}): "
+            + ", ".join(row["mutant_id"] for row in unmapped)
+        )
     if survivors:
         print(f"\nsurvivors ({len(survivors)}):")
         for row in survivors:
@@ -264,25 +301,35 @@ def report(ledger_path, wanted_round=None):
     return 0
 
 
-
 def main():
     for received in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(received, lambda number, frame: (_ for _ in ()).throw(
-            KeyboardInterrupt(f"signal {number}")))
+        signal.signal(
+            received,
+            lambda number, frame: (_ for _ in ()).throw(
+                KeyboardInterrupt(f"signal {number}")
+            ),
+        )
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workers", type=int, default=12)
     # Generous on purpose: the lander's end-to-end tests take minutes under
     # parallel load, and a script that times out at baseline has no killing power.
-    parser.add_argument("--timeout", type=int, default=600,
-                        help="per test script, seconds")
+    parser.add_argument(
+        "--timeout", type=int, default=600, help="per test script, seconds"
+    )
     parser.add_argument("--round", type=int, default=1)
     parser.add_argument("--only", nargs="*", default=None)
     parser.add_argument("--ledger", default=str(LEDGER))
-    parser.add_argument("--report", action="store_true",
-                        help="print the mutant-to-spec table for a recorded round")
-    parser.add_argument("--require-green", action="store_true",
-                        help="refuse to run unless every test script passes")
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        help="print the mutant-to-spec table for a recorded round",
+    )
+    parser.add_argument(
+        "--require-green",
+        action="store_true",
+        help="refuse to run unless every test script passes",
+    )
     args = parser.parse_args()
 
     if args.report:
@@ -305,42 +352,63 @@ def main():
     baseline = run_suite(command, paths, args.timeout, args.workers)
     red = sorted(name for name, r in baseline.items() if r["returncode"] != 0)
     checks = sum(r["passed"] for r in baseline.values())
-    print(f"baseline: {checks} checks, {len(red)} failing scripts, "
-          f"{time.monotonic() - started:.0f}s")
+    print(
+        f"baseline: {checks} checks, {len(red)} failing scripts, "
+        f"{time.monotonic() - started:.0f}s"
+    )
     timed_out = sorted(name for name, r in baseline.items() if r["returncode"] == -1)
     if timed_out:
         # Not a red test: the runner is misconfigured. Every mutant would then
         # look like a survivor or a crash-only kill for these scripts.
-        raise SystemExit(f"baseline timed out after {args.timeout}s in {timed_out}; "
-                         "raise --timeout (or lower --workers) and run again")
+        raise SystemExit(
+            f"baseline timed out after {args.timeout}s in {timed_out}; "
+            "raise --timeout (or lower --workers) and run again"
+        )
     if red and args.require_green:
         raise SystemExit(f"baseline is not green: {red}")
     if red:
         # A kill is attributed differentially -- green-to-red, or a new named
         # FAIL -- so a script already red here cannot manufacture one. The names
         # are recorded so the ledger says what killing power was absent.
-        print(f"  {len(red)} scripts red at baseline: {red}; "
-              f"kills are attributed differentially")
+        print(
+            f"  {len(red)} scripts red at baseline: {red}; "
+            f"kills are attributed differentially"
+        )
 
     ledger = pathlib.Path(args.ledger)
     corpus = mutants(args.only)
     killed_count = 0
     with ledger.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps({
-            "record": "baseline", "round": args.round,
-            "scripts": len(paths), "checks": checks,
-            "red_at_baseline": red, "tree_digest": baseline_digest,
-            "corpus": len(corpus)}) + "\n")
+        handle.write(
+            json.dumps(
+                {
+                    "record": "baseline",
+                    "round": args.round,
+                    "scripts": len(paths),
+                    "checks": checks,
+                    "red_at_baseline": red,
+                    "tree_digest": baseline_digest,
+                    "corpus": len(corpus),
+                }
+            )
+            + "\n"
+        )
         for patch in corpus:
             fields = metadata(patch)
             mutant_id = fields.get("mutant_id", patch.stem)
-            applied = subprocess.run(("git", "apply", str(patch)), cwd=ROOT,
-                                     capture_output=True, text=True)
+            applied = subprocess.run(
+                ("git", "apply", str(patch)), cwd=ROOT, capture_output=True, text=True
+            )
             if applied.returncode != 0:
-                record = {"mutant_id": mutant_id, "round": args.round,
-                          "patch": patch.name, "error": "patch did not apply",
-                          "killed": None, "failing_spec_names": [],
-                          "stderr_tail": applied.stderr.strip()[-2000:]}
+                record = {
+                    "mutant_id": mutant_id,
+                    "round": args.round,
+                    "patch": patch.name,
+                    "error": "patch did not apply",
+                    "killed": None,
+                    "failing_spec_names": [],
+                    "stderr_tail": applied.stderr.strip()[-2000:],
+                }
                 handle.write(json.dumps(record) + "\n")
                 handle.flush()
                 print(f"  {mutant_id} PATCH-FAILED")
@@ -363,27 +431,37 @@ def main():
                 if after_digest != baseline_digest:
                     raise SystemExit(
                         f"{mutant_id}: tree not byte-identical after revert "
-                        f"({after_digest} != {baseline_digest})")
+                        f"({after_digest} != {baseline_digest})"
+                    )
 
-            record = {"mutant_id": mutant_id, "round": args.round,
-                      "patch": patch.name, "target": fields.get("target"),
-                      "operator": fields.get("operator"),
-                      "behaviour": fields.get("behaviour"),
-                      "killed": killed, "failing_spec_names": specs,
-                      "crash_only_scripts": crashes,
-                      "stderr_tail": tail,
-                      "seconds": round(time.monotonic() - began, 1),
-                      "tree_verified": True}
+            record = {
+                "mutant_id": mutant_id,
+                "round": args.round,
+                "patch": patch.name,
+                "target": fields.get("target"),
+                "operator": fields.get("operator"),
+                "behaviour": fields.get("behaviour"),
+                "killed": killed,
+                "failing_spec_names": specs,
+                "crash_only_scripts": crashes,
+                "stderr_tail": tail,
+                "seconds": round(time.monotonic() - began, 1),
+                "tree_verified": True,
+            }
             handle.write(json.dumps(record) + "\n")
             handle.flush()
             killed_count += bool(killed)
             mark = "KILLED " if killed else "SURVIVED"
-            detail = specs[0] if specs else (f"crash-only: {crashes[0]}" if crashes else "")
+            detail = (
+                specs[0] if specs else (f"crash-only: {crashes[0]}" if crashes else "")
+            )
             print(f"  {mutant_id} {mark} {len(specs)} specs  {detail}")
 
     total = len(corpus)
-    print(f"\nround {args.round}: {killed_count}/{total} killed "
-          f"({100 * killed_count / total:.0f}%), {time.monotonic() - started:.0f}s")
+    print(
+        f"\nround {args.round}: {killed_count}/{total} killed "
+        f"({100 * killed_count / total:.0f}%), {time.monotonic() - started:.0f}s"
+    )
     return 0
 
 

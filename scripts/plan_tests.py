@@ -66,7 +66,9 @@ def change(root, base):
     """
     mb = git(root, "merge-base", base, "HEAD").strip()
     paths, removed = set(), set()
-    tokens = [t for t in git(root, "diff", "-M", "--name-status", "-z", mb).split("\0") if t]
+    tokens = [
+        t for t in git(root, "diff", "-M", "--name-status", "-z", mb).split("\0") if t
+    ]
     i = 0
     while i < len(tokens):
         if tokens[i][0] in "RC":
@@ -79,7 +81,13 @@ def change(root, base):
             if tokens[i][0] == "D":
                 removed.add(tokens[i + 1])
             i += 2
-    paths |= {t for t in git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0") if t}
+    paths |= {
+        t
+        for t in git(root, "ls-files", "--others", "--exclude-standard", "-z").split(
+            "\0"
+        )
+        if t
+    }
     stats, tokens, i = [], git(root, "diff", "-M", "--numstat", "-z", mb).split("\0"), 0
     while i < len(tokens) and tokens[i]:
         added, deleted, name = tokens[i].split("\t")
@@ -109,7 +117,17 @@ def referencing_tests(root, path):
     if not path.endswith(".py"):
         return []
     done = subprocess.run(
-        ["rg", "-l", "-F", "-w", "-g", "**/tests/test_*.py", "--", Path(path).stem, "."],
+        [
+            "rg",
+            "-l",
+            "-F",
+            "-w",
+            "-g",
+            "**/tests/test_*.py",
+            "--",
+            Path(path).stem,
+            ".",
+        ],
         cwd=root,
         capture_output=True,
         text=True,
@@ -178,7 +196,11 @@ def plan(root, tier, paths, config):
             commands[:] = [{"command": lint, "why": "lint"}]
             add(FULL_SUITE, f"no mapped or naming test covers {', '.join(uncovered)}")
             skipped.append("per-file tests (the full suite replaces them)")
-        skipped += ["full suite (High)", "mutation (High)"] if not uncovered else ["mutation (High)"]
+        skipped += (
+            ["full suite (High)", "mutation (High)"]
+            if not uncovered
+            else ["mutation (High)"]
+        )
     else:
         add(FULL_SUITE, "full suite")
         ids = touching_mutants(root, paths)
@@ -229,7 +251,11 @@ def main(argv=None, root=REPO):
     parser = argparse.ArgumentParser(
         description="Plan the checks for a change's consequence tier."
     )
-    parser.add_argument("--base", default="origin/main", help="plan for BASE..HEAD plus uncommitted work")
+    parser.add_argument(
+        "--base",
+        default="origin/main",
+        help="plan for BASE..HEAD plus uncommitted work",
+    )
     parser.add_argument(
         "--tier",
         type=str.capitalize,
@@ -280,7 +306,9 @@ def main(argv=None, root=REPO):
         consequence=verdict,
     )
     if result["below_floor_override"]:
-        result["notes"].append(f"OVERRIDE: tier {tier} is below the {floor} floor (--below-floor)")
+        result["notes"].append(
+            f"OVERRIDE: tier {tier} is below the {floor} floor (--below-floor)"
+        )
     if verdict and verdict["status"] == "referred":
         result["notes"].append(
             f"REFERRAL to the owner: {verdict['reason']}; planned at the provisional {tier}"

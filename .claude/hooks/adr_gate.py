@@ -18,6 +18,7 @@ checked; a Write into any other repository passes.
 
 Registered as a gate: a crash exits 2 (see .claude/settings.json).
 """
+
 import json
 import os
 import subprocess
@@ -35,6 +36,7 @@ def record(*args, **kwargs):
     any failure here, including a failed import, is swallowed."""
     try:
         import harness_events
+
         harness_events.record(*args, **kwargs)
     except Exception:
         pass
@@ -43,8 +45,14 @@ def record(*args, **kwargs):
 def common_dir(cwd):
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     try:
-        done = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                              cwd=cwd, capture_output=True, text=True, timeout=5, env=env)
+        done = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=env,
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     return done.stdout.strip() if done.returncode == 0 else None
@@ -67,8 +75,14 @@ def top_of(path):
         here = here.parent
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     try:
-        done = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=here,
-                              capture_output=True, text=True, timeout=5, env=env)
+        done = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=here,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=env,
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     return Path(done.stdout.strip()).resolve() if done.returncode == 0 else None
@@ -97,8 +111,10 @@ def main():
     try:
         config = harness_config.load(top)
     except harness_config.ConfigError as exc:
-        print(f"adr_gate: {top}/harness.toml is unreadable, so ADR rules cannot be applied: {exc}",
-              file=sys.stderr)
+        print(
+            f"adr_gate: {top}/harness.toml is unreadable, so ADR rules cannot be applied: {exc}",
+            file=sys.stderr,
+        )
         return 2
     adr_dir = config["adr"]["dir"].rstrip("/")
 
@@ -110,11 +126,18 @@ def main():
             record("adr_gate", "pass", "adr-valid", rel, payload)
             return 0
         record("adr_gate", "block", "adr-malformed", rel, payload)
-        print("adr_gate: this ADR does not parse:\n  " + "\n  ".join(problems), file=sys.stderr)
+        print(
+            "adr_gate: this ADR does not parse:\n  " + "\n  ".join(problems),
+            file=sys.stderr,
+        )
         return 2
 
     # Edit creates a missing file when old_string is empty, so both count.
-    if event != "PreToolUse" or payload.get("tool_name") not in ("Write", "Edit") or path.exists():
+    if (
+        event != "PreToolUse"
+        or payload.get("tool_name") not in ("Write", "Edit")
+        or path.exists()
+    ):
         return 0
     if not adr.governed(config, rel):
         return 0
@@ -124,16 +147,23 @@ def main():
         record("adr_gate", "allow", f"adr-{found[0]['number']}", rel, payload)
         return 0
     record("adr_gate", "deny", "no-adr", rel, payload)
-    print(json.dumps({"hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "deny",
-        "permissionDecisionReason": (
-            f"{rel} is governed by harness.toml adr.require_for, and no proposed or accepted "
-            f"ADR in {adr_dir}/ names it. Record the decision first: "
-            f"`python3 scripts/adr.py new \"<decision>\" --component {rel}`, fill in Context, "
-            "Decision and Consequences, then create the file. If an existing ADR already "
-            "covers it, add the path to that ADR's Components."),
-    }}))
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        f"{rel} is governed by harness.toml adr.require_for, and no proposed or accepted "
+                        f"ADR in {adr_dir}/ names it. Record the decision first: "
+                        f'`python3 scripts/adr.py new "<decision>" --component {rel}`, fill in Context, '
+                        "Decision and Consequences, then create the file. If an existing ADR already "
+                        "covers it, add the path to that ADR's Components."
+                    ),
+                }
+            }
+        )
+    )
     return 0
 
 

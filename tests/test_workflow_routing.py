@@ -8,6 +8,7 @@ says, which is the failure this control exists to prevent.
 Adding a workflow means adding it to EXPECTED_CALLS and its call sites to
 EXPECTED_CALL_ROLES here, by hand. MODEL-00 fails until you do.
 """
+
 import re
 import sys
 from pathlib import Path
@@ -20,7 +21,11 @@ PASS, FAIL = [], []
 
 def check(name, cond, detail=""):
     (PASS if cond else FAIL).append(name)
-    print(("  PASS  " if cond else "  FAIL  ") + name + (("\n          " + detail) if detail and not cond else ""))
+    print(
+        ("  PASS  " if cond else "  FAIL  ")
+        + name
+        + (("\n          " + detail) if detail and not cond else "")
+    )
 
 
 EXPECTED_CALL_ROLES = {
@@ -57,15 +62,21 @@ def routing_violations(fname, src):
     v = []
     call_count = len(re.findall(r"\bagent\(", src))
     if call_count != EXPECTED_CALLS[fname]:
-        v.append(f"MODEL-01: {fname}: {call_count} agent() call(s), expected {EXPECTED_CALLS[fname]}")
+        v.append(
+            f"MODEL-01: {fname}: {call_count} agent() call(s), expected {EXPECTED_CALLS[fname]}"
+        )
 
     spread_count = len(re.findall(r"\.\.\.ROLE\.", src))
     if spread_count != call_count:
-        v.append(f"MODEL-01: {fname}: {spread_count} ...ROLE. spread(s), expected {call_count} (one per agent() call)")
+        v.append(
+            f"MODEL-01: {fname}: {spread_count} ...ROLE. spread(s), expected {call_count} (one per agent() call)"
+        )
 
     pairs = re.findall(rf"\.\.\.ROLE\.([A-Z_]+)\s*,\s*label:\s*({_LABEL_VALUE})", src)
     if len(pairs) != call_count:
-        v.append(f"MODEL-01: {fname}: {len(pairs)} spread/label pair(s), expected {call_count}")
+        v.append(
+            f"MODEL-01: {fname}: {len(pairs)} spread/label pair(s), expected {call_count}"
+        )
 
     actual_roles = {(fname, label.strip()): role for role, label in pairs}
     expected_roles = {k: r for k, r in EXPECTED_CALL_ROLES.items() if k[0] == fname}
@@ -75,9 +86,13 @@ def routing_violations(fname, src):
             continue
         _, label = key
         if act is None:
-            v.append(f"MODEL-03A: {fname} {label} expected {exp}, but no tracked call site was found for it")
+            v.append(
+                f"MODEL-03A: {fname} {label} expected {exp}, but no tracked call site was found for it"
+            )
         elif exp is None:
-            v.append(f"MODEL-03A: {fname} {label} is not a tracked call site (spreads role {act})")
+            v.append(
+                f"MODEL-03A: {fname} {label} is not a tracked call site (spreads role {act})"
+            )
         else:
             v.append(f"MODEL-03A: {fname} {label} expected {exp}, found {act}")
 
@@ -85,28 +100,47 @@ def routing_violations(fname, src):
 
     orphan_spreads = {role for role, _ in pairs} - set(role_table)
     if orphan_spreads:
-        v.append(f"MODEL-02: {fname}: spread(s) name role(s) missing from this file's own ROLE table: {sorted(orphan_spreads)}")
+        v.append(
+            f"MODEL-02: {fname}: spread(s) name role(s) missing from this file's own ROLE table: {sorted(orphan_spreads)}"
+        )
 
     for role, cls in role_table.items():
         if role not in EXPECTED_ROLE_CLASS:
-            v.append(f"MODEL-03B: {fname}: ROLE.{role} is not a role this test recognises")
+            v.append(
+                f"MODEL-03B: {fname}: ROLE.{role} is not a role this test recognises"
+            )
         elif EXPECTED_ROLE_CLASS[role] != cls:
-            v.append(f"MODEL-03B: {role} expected {EXPECTED_ROLE_CLASS[role]}, found {cls}")
+            v.append(
+                f"MODEL-03B: {role} expected {EXPECTED_ROLE_CLASS[role]}, found {cls}"
+            )
 
     model_block = re.search(r"const MODEL = Object\.freeze\(\{(.*?)\}\)", src, re.S)
-    model_table = dict(re.findall(r"(\w+):\s*'([^']+)'", model_block.group(1))) if model_block else {}
+    model_table = (
+        dict(re.findall(r"(\w+):\s*'([^']+)'", model_block.group(1)))
+        if model_block
+        else {}
+    )
     if model_table != APPROVED_MODELS:
-        v.append(f"MODEL-02: {fname}: MODEL table is {model_table}, approved is {APPROVED_MODELS}")
+        v.append(
+            f"MODEL-02: {fname}: MODEL table is {model_table}, approved is {APPROVED_MODELS}"
+        )
 
-    bad_models = [m.group(1) for m in re.finditer(r"model:\s*(\S+?)[\s,}]", src)
-                  if not re.match(r"MODEL\.(REASONING_STRONG|MECHANICAL)$", m.group(1))]
+    bad_models = [
+        m.group(1)
+        for m in re.finditer(r"model:\s*(\S+?)[\s,}]", src)
+        if not re.match(r"MODEL\.(REASONING_STRONG|MECHANICAL)$", m.group(1))
+    ]
     if bad_models:
-        v.append(f"MODEL-02: {fname}: model: value(s) not routed through MODEL.*: {bad_models}")
+        v.append(
+            f"MODEL-02: {fname}: model: value(s) not routed through MODEL.*: {bad_models}"
+        )
 
     model_kw_count = len(re.findall(r"\bmodel:\s*", src))
     if model_kw_count != len(role_table):
-        v.append(f"MODEL-02: {fname}: {model_kw_count} 'model:' occurrence(s) in the file, "
-                 f"expected {len(role_table)} (one per this file's own ROLE entry)")
+        v.append(
+            f"MODEL-02: {fname}: {model_kw_count} 'model:' occurrence(s) in the file, "
+            f"expected {len(role_table)} (one per this file's own ROLE entry)"
+        )
 
     return v
 
@@ -121,10 +155,12 @@ _named = {p.name for p in WF_DIR.glob("*.js")}
 _usable = {p.name for p in WF_DIR.glob("*.js") if p.is_file()}
 _unenforced = sorted(_named - set(EXPECTED_CALLS))
 _missing = sorted(set(EXPECTED_CALLS) - _usable)
-check("MODEL-00: every workflow in .claude/workflows/ is covered by the expectation table",
-      not _unenforced and not _missing,
-      f"MODEL-00: workflow(s) present but unenforced: {_unenforced}; "
-      f"expected but absent from disk: {_missing}")
+check(
+    "MODEL-00: every workflow in .claude/workflows/ is covered by the expectation table",
+    not _unenforced and not _missing,
+    f"MODEL-00: workflow(s) present but unenforced: {_unenforced}; "
+    f"expected but absent from disk: {_missing}",
+)
 
 for _fname in EXPECTED_CALLS:
     if not (WF_DIR / _fname).is_file():
@@ -140,7 +176,10 @@ for _fname in EXPECTED_CALLS:
 # SPECIFIC control the mutation is supposed to defeat.
 def _mutation_rejected(fname, mutate, expected_marker):
     if not (WF_DIR / fname).is_file():
-        return False, f"MODEL-00: {fname} is expected but absent from disk - mutation not runnable"
+        return (
+            False,
+            f"MODEL-00: {fname} is expected but absent from disk - mutation not runnable",
+        )
     src = (WF_DIR / fname).read_text()
     mutated = mutate(src)
     applied = mutated != src
@@ -158,25 +197,57 @@ def _mutation_rejected(fname, mutate, expected_marker):
 
 
 WF = "review-changes.js"
-check("MODEL-04: a call site re-pointed at another role is rejected",
-      *_mutation_rejected(WF, lambda s: s.replace(
-          "{ ...ROLE.VERIFIER, label: `verify:${f.file}`",
-          "{ ...ROLE.REVIEWER, label: `verify:${f.file}`"), "MODEL-03A"))
-check("MODEL-04: a role downgraded from reasoning to mechanical is rejected",
-      *_mutation_rejected(WF, lambda s: s.replace(
-          "VERIFIER: { model: MODEL.REASONING_STRONG }",
-          "VERIFIER: { model: MODEL.MECHANICAL }"), "MODEL-03B"))
-check("MODEL-04: an agent() call with no ROLE spread is rejected",
-      *_mutation_rejected(WF, lambda s: s.replace(
-          "{ ...ROLE.REVIEWER, label: `review:${d.key}`",
-          "{ label: `review:${d.key}`"), "MODEL-01"))
-check("MODEL-04: a model named directly at a call site is rejected",
-      *_mutation_rejected(WF, lambda s: s.replace(
-          "{ ...ROLE.REVIEWER, label: `review:${d.key}`",
-          "{ ...ROLE.REVIEWER, model: 'sonnet', label: `review:${d.key}`"), "MODEL-02"))
-check("MODEL-04: a MODEL table re-pointed at another model is rejected",
-      *_mutation_rejected(WF, lambda s: s.replace(
-          "REASONING_STRONG: 'opus'", "REASONING_STRONG: 'sonnet'"), "MODEL-02"))
+check(
+    "MODEL-04: a call site re-pointed at another role is rejected",
+    *_mutation_rejected(
+        WF,
+        lambda s: s.replace(
+            "{ ...ROLE.VERIFIER, label: `verify:${f.file}`",
+            "{ ...ROLE.REVIEWER, label: `verify:${f.file}`",
+        ),
+        "MODEL-03A",
+    ),
+)
+check(
+    "MODEL-04: a role downgraded from reasoning to mechanical is rejected",
+    *_mutation_rejected(
+        WF,
+        lambda s: s.replace(
+            "VERIFIER: { model: MODEL.REASONING_STRONG }",
+            "VERIFIER: { model: MODEL.MECHANICAL }",
+        ),
+        "MODEL-03B",
+    ),
+)
+check(
+    "MODEL-04: an agent() call with no ROLE spread is rejected",
+    *_mutation_rejected(
+        WF,
+        lambda s: s.replace(
+            "{ ...ROLE.REVIEWER, label: `review:${d.key}`", "{ label: `review:${d.key}`"
+        ),
+        "MODEL-01",
+    ),
+)
+check(
+    "MODEL-04: a model named directly at a call site is rejected",
+    *_mutation_rejected(
+        WF,
+        lambda s: s.replace(
+            "{ ...ROLE.REVIEWER, label: `review:${d.key}`",
+            "{ ...ROLE.REVIEWER, model: 'sonnet', label: `review:${d.key}`",
+        ),
+        "MODEL-02",
+    ),
+)
+check(
+    "MODEL-04: a MODEL table re-pointed at another model is rejected",
+    *_mutation_rejected(
+        WF,
+        lambda s: s.replace("REASONING_STRONG: 'opus'", "REASONING_STRONG: 'sonnet'"),
+        "MODEL-02",
+    ),
+)
 
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

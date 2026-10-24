@@ -34,7 +34,7 @@ REASON = (
     "-> sonnet; mechanical discovery, counting and deterministic comparison -> haiku;\n"
     "review, planning and independent re-derivation -> opus; architecture, arbitration\n"
     "and adversarial gating stay with the LEAD.\n"
-    "A fork inherits the parent by design - `subagent_type: \"fork\"` is exempt."
+    'A fork inherits the parent by design - `subagent_type: "fork"` is exempt.'
 )
 
 
@@ -44,6 +44,7 @@ def record(*args, **kwargs):
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
         import harness_events
+
         harness_events.record(*args, **kwargs)
     except Exception:
         pass
@@ -84,8 +85,12 @@ def main() -> int:
         return 0
     if payload.get("tool_name") != "Agent":
         return 0
-    tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
-    subject = f"{tool_input.get('subagent_type') or '-'}/{tool_input.get('model') or '-'}"
+    tool_input = (
+        payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    )
+    subject = (
+        f"{tool_input.get('subagent_type') or '-'}/{tool_input.get('model') or '-'}"
+    )
     if offending(payload):
         print(json.dumps(verdict(REASON)))
         record("require_agent_model", "deny", "model-missing", subject, payload)

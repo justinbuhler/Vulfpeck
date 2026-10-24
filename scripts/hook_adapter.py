@@ -222,7 +222,9 @@ def split_simple(line):
 def patch_blocks(text):
     """Return every Begin..End block in `text`; a Begin with no End raises."""
     if text.count("*** Begin Patch") != len(PATCH_BLOCK.findall(text)):
-        raise AdapterError("an apply_patch command has a Begin Patch marker with no End Patch marker")
+        raise AdapterError(
+            "an apply_patch command has a Begin Patch marker with no End Patch marker"
+        )
     return PATCH_BLOCK.findall(text)
 
 
@@ -248,7 +250,9 @@ def scan_script(script):
             if flags[match.start()]:
                 continue
             body = []
-            while i < len(lines) and (lines[i].strip() if match.group(1) else lines[i]) != match.group(3):
+            while i < len(lines) and (
+                lines[i].strip() if match.group(1) else lines[i]
+            ) != match.group(3):
                 body.append(lines[i])
                 i += 1
             i += 1
@@ -257,7 +261,7 @@ def scan_script(script):
         for segment in split_simple(line):
             seg_flags = quoted_flags(segment)[0]
             mine = [m for m in HEREDOC.finditer(segment) if not seg_flags[m.start()]]
-            texts, used = bodies[used:used + len(mine)], used + len(mine)
+            texts, used = bodies[used : used + len(mine)], used + len(mine)
             try:
                 words = shlex.split(segment, comments=True)
             except ValueError:
@@ -272,7 +276,9 @@ def scan_script(script):
                 for text in texts:
                     found = patch_blocks(text)
                     if not found:
-                        raise AdapterError("an apply_patch command carries no valid patch")
+                        raise AdapterError(
+                            "an apply_patch command carries no valid patch"
+                        )
                     blocks += found
             elif command in SHELLS:
                 for k, word in enumerate(words[1:-1], 1):
@@ -533,14 +539,30 @@ def run_guard(command, payload, deadline=None):
     `deadline` is a time.monotonic() instant; past it the guard's process group is
     killed and AdapterError is raised.
     """
-    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) and os.path.isdir(payload["cwd"]) else str(REPO)
+    cwd = (
+        payload.get("cwd")
+        if isinstance(payload.get("cwd"), str) and os.path.isdir(payload["cwd"])
+        else str(REPO)
+    )
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(REPO)}
-    proc = subprocess.Popen(["bash", "-c", command], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, cwd=cwd, env=env, start_new_session=True)
+    proc = subprocess.Popen(
+        ["bash", "-c", command],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+        env=env,
+        start_new_session=True,
+    )
     CHILDREN.append(proc)
     try:
-        stdout, stderr = proc.communicate(json.dumps(payload),
-                                          timeout=None if deadline is None else max(deadline - time.monotonic(), 0.01))
+        stdout, stderr = proc.communicate(
+            json.dumps(payload),
+            timeout=None
+            if deadline is None
+            else max(deadline - time.monotonic(), 0.01),
+        )
     except subprocess.TimeoutExpired as exc:
         os.killpg(proc.pid, signal.SIGKILL)
         try:
@@ -567,7 +589,12 @@ def handle(runtime, native_event, raw, command, deadline=None, edits=False):
         native = json.loads(raw)
     except ValueError as exc:
         raise AdapterError(f"payload is not JSON: {exc}") from exc
-    result = merge([run_guard(command, p, deadline) for p in to_claude(runtime, event, native, edits)])
+    result = merge(
+        [
+            run_guard(command, p, deadline)
+            for p in to_claude(runtime, event, native, edits)
+        ]
+    )
     return emit(runtime, event, result)
 
 
@@ -575,8 +602,17 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--runtime", choices=("codex", "gemini"), required=True)
     parser.add_argument("--event", required=True, help="the runtime's own event name")
-    parser.add_argument("--edits", action="store_true", help="the guard watches file edits (see to_claude)")
-    parser.add_argument("--timeout", type=float, default=None, help="the registered hook timeout, in seconds")
+    parser.add_argument(
+        "--edits",
+        action="store_true",
+        help="the guard watches file edits (see to_claude)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="the registered hook timeout, in seconds",
+    )
     parser.add_argument("guard", nargs=argparse.REMAINDER, help="-- <guard command>")
     args = parser.parse_args(argv)
     guard = args.guard[1:] if args.guard[:1] == ["--"] else args.guard
@@ -590,7 +626,9 @@ def main(argv=None):
     try:
         raw = read_stdin(limit)
         deadline = None if limit is None else started + limit
-        output = handle(args.runtime, args.event, raw, " ".join(guard), deadline, args.edits)
+        output = handle(
+            args.runtime, args.event, raw, " ".join(guard), deadline, args.edits
+        )
     except AdapterError as exc:
         print(f"hook_adapter: {exc}", file=sys.stderr)
         return 1
