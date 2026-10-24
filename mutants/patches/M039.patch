@@ -1,0 +1,15 @@
+# mutant_id: M039
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: a landed commit that is not directly on the pinned base fails before the push
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -684,7 +684,7 @@
+         parents = sh(
+             ["git", "-C", root, "rev-list", "--parents", "-n", "1", sha]
+         ).stdout.split()
+-        if parents != [sha, base_sha]:
++        if parents != [sha, base_sha] and False:
+             raise Halt(
+                 "failed",
+                 f"the landed commit {sha[:9]} has parent(s) {[x[:9] for x in parents[1:]]}, not the base {base_sha[:9]}",

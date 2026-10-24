@@ -939,7 +939,6 @@ for path in (
     "docs/a.md",
     "README.md",
     "docs/sub/deep/x.md",
-    "pkg/notes.md",
     "docs/adr/0001-x.md",
 ):
     repo, log, ev = scenario([], FAKE_WORKER_EXTRA=write(path))
@@ -953,6 +952,7 @@ HELD = (
     "AGENTS.md", "CLAUDE.md", "HARNESS.md", "sub/AGENTS.md", "a/b/CLAUDE.md", "docs/agents/x.md", "agents.md",
     "scripts/guard_lib.py", "scripts/hook_adapter.py", "pyproject.toml", "uv.lock", "ruff.toml", ".python-version",
     "scripts/github_bootstrap.sh", "scripts/x.py", "src/app.py",
+    ".agents/skills/review/SKILL.md", ".claude/agents/x.md", "foo/README.md", "pkg/notes.md", "docs/sub/AGENTS.md",
 )  # fmt: skip
 for path in HELD:
     repo, log, ev = scenario([], FAKE_WORKER_EXTRA=write(path))
@@ -969,6 +969,41 @@ for what, extra in (("a delete of a tracked script", "rm scripts/plan_tests.py")
         final == "blocked" and not merged_or_pushed(log.read_text()),
         final,
     )
+
+
+# H2 (review of #23): the landed commit must sit directly on the pinned base, and its own diff is judged.
+def tamper(number, path, body="x"):
+    """A worker that commits `path` itself, points its manifest baseline at that commit, then leaves a docs file."""
+    return (
+        f"mkdir -p $(dirname {path}); echo {body} > {path}; git add {path}; "
+        "git -c user.email=w@w -c user.name=w commit -q -m sneaky; x=$(git rev-parse HEAD); "
+        f"m=$(git rev-parse --path-format=absolute --git-common-dir)/agent-harness/tasks/issue-{number}-a1.json; "
+        "python3 -c \"import json,sys;p,x=sys.argv[1:];d=json.load(open(p));d['baseline_sha']=x;json.dump(d,open(p,'w'))\" $m $x; "
+        "mkdir -p docs; echo y > docs/new.md"
+    )
+
+
+for path in ("scripts/evil.py", "docs/sneaky.md"):
+    repo, log, ev = scenario([], FAKE_WORKER_EXTRA=tamper(150, path))
+    final = attempt(150, repo)
+    st = task_loop.load(repo, 150)
+    check(f"PARENT: a landed commit that is not directly on the base fails with nothing pushed ({path})",
+          final == "failed" and "parent" in st["reason"] and " push " not in log.read_text() and "gh pr create" not in log.read_text(),
+          f"{final} {st['reason']}")  # fmt: skip
+
+# MED 1 (review of #23): the ignore-rules scratch repository is per call and is removed.
+repo, log, ev = scenario([])
+planted = repo / "tmp" / "loop" / "ignore-rules"
+planted.mkdir(parents=True)
+(planted / "keep.txt").write_text("not the loop's\n")
+final = attempt(151, repo)
+left = sorted(
+    p.name
+    for p in (repo / "tmp" / "loop").iterdir()
+    if p.name not in ("gh-empty", "ignore-rules")
+)
+check("SCRATCH: the ignore-rules scratch repository is a fresh directory per call and nothing is left behind",
+      final == "published" and (planted / "keep.txt").exists() and left == [], f"{final} {left}")  # fmt: skip
 
 # H1: worker-controlled code runs without the owner's credentials, config or hooks.
 os.environ.update(
@@ -1018,7 +1053,7 @@ check(
 # C2/M2: ignore rules come from the base commit, the cloned list from provision time.
 A3 = (
     f"printf 'tmp/\\n' > .gitignore; printf 'tmp/\\n' > {{repo}}/.gitignore; "
-    "m=$(git rev-parse --git-common-dir)/agent-harness/tasks/issue-130-a1.json; "
+    "m=$(git rev-parse --path-format=absolute --git-common-dir)/agent-harness/tasks/issue-130-a1.json; "
     "python3 -c \"import json,sys;p=sys.argv[1];d=json.load(open(p));d['cloned_inputs']=[];json.dump(d,open(p,'w'))\" $m"
 )
 repo, log, ev = scenario([], ignore="tmp/\noutput/\n")

@@ -4,7 +4,7 @@
 # behaviour: SystemExit inside a task ends it failed instead of stranding it running
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -579,7 +579,7 @@
+@@ -575,7 +575,7 @@
              return execute(root, cfg, issue)
          except KeyboardInterrupt:
              raise
