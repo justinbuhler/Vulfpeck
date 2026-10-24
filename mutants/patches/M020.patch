@@ -4,12 +4,12 @@
 # behaviour: a read-only agent moving any ref blocks its stop
 --- a/.claude/hooks/readonly_guard.py
 +++ b/.claude/hooks/readonly_guard.py
-@@ -135,7 +135,7 @@
-     lines = sorted(status.splitlines())
+@@ -157,7 +157,7 @@
      config = git(top, "config", "--local", "--list") or ""
+     contents, index_sha = content_state(top)
      return {
 -        "refs": refs(top),
 +        "refs": {},
+         "contents": contents,
+         "index_sha": index_sha,
          "writer_branches": sorted(writer_branches(top)),
-         "gitdir_sha": gitdir_state(top),
-         "config_sha": hashlib.sha256(config.encode()).hexdigest(),

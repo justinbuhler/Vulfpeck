@@ -146,6 +146,7 @@ DEFAULTS = {
             "harness.toml",
             "scripts/paths.py",
             "scripts/harness_config.py",
+            "scripts/harness_inputs.py",
             "scripts/gate.sh",
             "scripts/land.sh",
             "scripts/run.sh",

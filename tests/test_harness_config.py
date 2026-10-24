@@ -125,6 +125,11 @@ check(
     "harness.toml" in d0["hooks"]["watched_files"],
 )
 
+check("the shared input copier is watched by default",
+      "scripts/harness_inputs.py" in d0["hooks"]["watched_files"])
+check("the shipped config watches the shared input copier",
+      "scripts/harness_inputs.py" in harness_config.load(REPO)["hooks"]["watched_files"])
+
 # --- overrides merge; unknown or mistyped keys are refused -------------------
 over = Path(tempfile.mkdtemp(prefix="harness-config-over."))
 (over / "harness.toml").write_text(
@@ -383,18 +388,26 @@ check(
 HOOK = REPO / ".claude" / "hooks" / "test_for_edited_module.py"
 
 
+def invoke_hook(payload, project, *, process_cwd=None, deadline=None, overrides=None):
+    hook_env = env(**(overrides or {}))
+    hook_env.pop("CLAUDE_PROJECT_DIR", None)
+    if project is not None:
+        hook_env["CLAUDE_PROJECT_DIR"] = str(project)
+    argv = [sys.executable, str(HOOK)]
+    if deadline is not None:
+        # Exercise a real timeout through the existing constant in a fresh process.
+        code = ("import importlib.util,sys; "
+                "spec=importlib.util.spec_from_file_location('mapped_hook',sys.argv[1]); "
+                "mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); "
+                "assert hasattr(mod,'TIMEOUT'); mod.TIMEOUT=float(sys.argv[2]); "
+                "raise SystemExit(mod.main())")
+        argv = [sys.executable, "-c", code, str(HOOK), str(deadline)]
+    return subprocess.run(argv, input=json.dumps(payload), capture_output=True, cwd=process_cwd,
+                          text=True, env=hook_env, timeout=60)
+
+
 def hook(root, edited):
-    payload = json.dumps(
-        {"tool_input": {"file_path": str(root / edited)}, "cwd": str(root)}
-    )
-    return subprocess.run(
-        [sys.executable, str(HOOK)],
-        input=payload,
-        capture_output=True,
-        text=True,
-        env={**env(), "CLAUDE_PROJECT_DIR": str(root)},
-        timeout=60,
-    )
+    return invoke_hook({"tool_input": {"file_path": str(root / edited)}, "cwd": str(root)}, root)
 
 
 d3 = fixture(
@@ -414,11 +427,17 @@ check(
 )
 (d3 / "src" / "app.test.ts").write_text("echo broken; exit 1\n")
 r = hook(d3, "src/app.ts")
-check(
-    "a failing mapped test exits 2 with its output",
-    r.returncode == 2 and "broken" in r.stderr,
-    r.stdout + r.stderr,
-)
+check("a failing mapped test exits 2 with its output", r.returncode == 2 and "broken" in r.stderr,
+      r.stdout + r.stderr)
+for label, payload_cwd, file_path in (
+        ("subdirectory with an absolute edit", d3 / "src", str(d3 / "src" / "app.ts")),
+        ("subdirectory with a relative edit", d3 / "src", "app.ts"),
+        ("root with a relative edit", d3, "src/app.ts")):
+    r = invoke_hook({"cwd": str(payload_cwd), "tool_input": {"file_path": file_path}},
+                    d3, process_cwd=empty)
+    check(f"{label} runs the mapped test from a distinct process cwd",
+          r.returncode == 2 and "broken" in r.stderr and "app.test.ts" in r.stderr,
+          r.stdout + r.stderr)
 r = hook(d3, "src/app.test.ts")
 check(
     "editing a test file runs that test",
@@ -427,6 +446,45 @@ check(
 )
 check("a file with no mapped test is silent", hook(d3, "src/lone.ts").returncode == 0)
 check("a file no rule matches is silent", hook(d3, "README.md").returncode == 0)
+payload = {"cwd": str(d3), "tool_input": {"file_path": str(d3 / "src" / "app.ts")}}
+for label, item, project in (
+        ("foreign project", payload, d1),
+        ("missing project", payload, None),
+        ("outside Git", {"cwd": str(empty), "tool_input": {"file_path": "app.ts"}}, d3),
+        ("outside file", {"cwd": str(d3), "tool_input": {"file_path": str(d1 / "app.ts")}}, d3),
+        ("missing edit path", {"cwd": str(d3), "tool_input": {}}, d3)):
+    r = invoke_hook(item, project, process_cwd=empty)
+    check(f"{label} is a silent mapped-test no-op", r.returncode == 0 and r.stdout == r.stderr == "",
+          r.stdout + r.stderr)
+sh(["git", "add", "-A"], d3)
+sh(["git", "commit", "-qm", "mapped fixture"], d3)
+linked = d3.parent / (d3.name + "-linked")
+created = sh(["git", "worktree", "add", "-q", "-b", "mapped-side", str(linked)], d3)
+r = invoke_hook({"cwd": str(linked / "src"), "tool_input": {"file_path": "app.ts"}}, d3,
+                process_cwd=empty)
+check("a linked worktree remains trusted for a subdirectory edit",
+      created.returncode == 0 and r.returncode == 2 and "broken" in r.stderr,
+      created.stderr + r.stdout + r.stderr)
+
+# A selected test must report a failure when it cannot finish or be executed.
+slow = fixture('[[mapped_tests]]\nmatch = "*.ts"\nself = "*.test.ts"\n'
+               'tests = ["{dir}/{stem}.test.ts"]\ncommand = "bash {test}"\n',
+               scripts=("harness_config.py",))
+(slow / "app.ts").write_text("export {}\n")
+(slow / "app.test.ts").write_text("printf started > started; exec sleep 2\n")
+slow_payload = {"cwd": str(slow), "tool_input": {"file_path": str(slow / "app.ts")}}
+r = invoke_hook(slow_payload, slow, deadline=0.2)
+check("a selected test that starts and times out exits 2 with a diagnostic",
+      r.returncode == 2 and "TimeoutExpired" in r.stderr and (slow / "started").read_text() == "started",
+      r.stdout + r.stderr)
+git_only = slow / "git-only"
+git_only.mkdir()
+(git_only / "git").symlink_to(shutil.which("git"))
+r = invoke_hook(slow_payload, slow, overrides={"PATH": str(git_only)})
+check("a selected test whose launcher cannot execute exits 2 with a diagnostic",
+      r.returncode == 2 and "FileNotFoundError" in r.stderr and "app.test.ts" in r.stderr,
+      r.stdout + r.stderr)
+
 (d3 / "harness.toml").write_text("[[mapped_tests]]\nmatch = 1\n")
 r = hook(d3, "src/app.ts")
 check(

@@ -553,7 +553,7 @@ if FAIL:
 COPY_CONFIG = (
     "[land]\n"
     'copy_untracked = ["fn/sources", "fn/generated.json", "fn/generated\u2013v1.1.json",'
-    ' "fn/absent.json", "fn/tracked.json"]\n'
+    ' "fn/tracked.json"]\n'
 )
 d14 = repo()
 (d14 / "fn" / "sources").mkdir(parents=True)
@@ -625,28 +625,14 @@ check(
     not (lwt14 / "fn" / "unlisted.json").exists(),
 )
 check("another session's live state is NOT copied", not (lwt14 / ".omc").exists())
-check(
-    "a listed path absent from main is reported, not fatal",
-    "fn/absent.json" in r14.stdout and r14.returncode == 0,
-    r14.stdout,
-)
-check(
-    "a listed path the candidate tracks is reported and not copied",
-    "fn/tracked.json, which the candidate tracks" in r14.stdout,
-    r14.stdout,
-)
-check(
-    "gate writes leave the primary untracked input unchanged",
-    (d14 / "fn/sources/untracked.txt").read_text() == "provision me\n",
-)
-check(
-    "gate writes leave the primary ignored input unchanged",
-    (d14 / "fn/generated.json").read_text() == "generated input\n",
-)
-check(
-    "the candidate's tracked bytes survive copying",
-    (lwt14 / "fn/sources/candidate.txt").read_text() == "candidate\n",
-)
+check("a listed path the candidate tracks is reported and not copied",
+      "tracked input excluded: fn/tracked.json" in r14.stderr, r14.stderr)
+check("gate writes leave the primary untracked input unchanged",
+      (d14 / "fn/sources/untracked.txt").read_text() == "provision me\n")
+check("gate writes leave the primary ignored input unchanged",
+      (d14 / "fn/generated.json").read_text() == "generated input\n")
+check("the candidate's tracked bytes survive copying",
+      (lwt14 / "fn/sources/candidate.txt").read_text() == "candidate\n")
 main_inode = (d14 / "fn" / "sources" / "untouched.txt").stat().st_ino
 check(
     "a tracked file is not inode-shared with the main checkout during the gate",
@@ -668,9 +654,8 @@ check(
     r14b.stdout + r14b.stderr,
 )
 
-# A failed transfer must stop before the gate or main can move. Shadow only
-# the transfer command; the real lander and its Git operations still execute.
-for command in ("rsync", "cp"):
+# Invalid declared inputs must stop before the gate or main can move.
+for command in ("missing", "symlink"):
     with tempfile.TemporaryDirectory() as td:
         fixture = repo()
         (fixture / "fn/sources").mkdir(parents=True)
@@ -684,9 +669,9 @@ for command in ("rsync", "cp"):
         (fixture / "fn/generated.json").write_text("generated\n")
         candidate = agent(fixture, f"failed-{command}")
         original_main = git(fixture, "rev-parse", "main")
-        stub = Path(td) / command
-        stub.write_text("#!/bin/sh\nexit 23\n")
-        stub.chmod(0o755)
+        (fixture / "fn/generated.json").unlink()
+        if command == "symlink":
+            (fixture / "fn/generated.json").symlink_to(fixture / "fn/sources/raw.txt")
         gate_marker = Path(td) / "gate-ran"
         result = land(
             candidate,
@@ -876,6 +861,59 @@ r18c = land(wt18c)
 check("once idle, the abandoned worktree is pruned", not sierra.exists())
 check("the prune names what it removed", "sierra" in r18c.stdout, r18c.stdout)
 
+# --- without lsof, "nothing is working in it" cannot be known -------------------
+# A missing lsof exits 127, which the prune read as "idle" and force-removed a
+# worktree a live process might be using. The worktree must be kept instead.
+nolsof = Path(tempfile.mkdtemp(prefix="harness-nolsof."))
+for _dir in os.environ["PATH"].split(os.pathsep):
+    for _exe in Path(_dir).glob("*") if Path(_dir).is_dir() else ():
+        if _exe.name != "lsof" and not os.path.lexists(nolsof / _exe.name):
+            (nolsof / _exe.name).symlink_to(_exe)
+d19 = repo()
+wt19 = agent(d19, "nolsof-a")
+land(wt19)
+nolsof_a = Path(LANDER_ROOT) / "nolsof-a"
+git(d19, "worktree", "remove", "--force", str(wt19))
+git(d19, "branch", "-D", "nolsof-a")
+r19 = land(agent(d19, "nolsof-b"), PATH=str(nolsof))
+check("a land still succeeds when lsof is not installed", r19.returncode == 0, r19.stdout + r19.stderr)
+check("an abandoned lander worktree is kept when lsof is not installed",
+      nolsof_a.is_dir(), "nolsof_a was force-removed with no way to tell it was idle")
+
+# lsof exits 1 for "nothing in it" and also for its own errors; only exit 1 with
+# no output is idle. A fake lsof that fails with a message must keep the worktree.
+badlsof = Path(tempfile.mkdtemp(prefix="harness-badlsof."))
+(badlsof / "lsof").write_text("""#!/bin/sh
+warnings=1
+for option do
+  case "$option" in -w) warnings=0 ;; +w) warnings=1 ;; esac
+done
+if [ "${LSOF_TEST_DIAGNOSTIC:-warning}" = error ]; then
+  echo 'lsof: cannot read process info' >&2
+elif [ "$warnings" = 1 ]; then
+  echo 'lsof: WARNING: cannot inspect process info' >&2
+fi
+exit 1
+""")
+(badlsof / "lsof").chmod(0o755)
+d20 = repo()
+wt20 = agent(d20, "badlsof-a")
+land(wt20)
+badlsof_a = Path(LANDER_ROOT) / "badlsof-a"
+git(d20, "worktree", "remove", "--force", str(wt20))
+git(d20, "branch", "-D", "badlsof-a")
+wt20b = agent(d20, "badlsof-b")
+r20 = land(wt20b, PATH=f"{badlsof}{os.pathsep}{os.environ['PATH']}",
+           LSOF_TEST_DIAGNOSTIC="error")
+check("a land still succeeds when lsof itself errors", r20.returncode == 0, r20.stdout + r20.stderr)
+check("an abandoned lander worktree is kept when lsof errors out",
+      badlsof_a.is_dir(), "badlsof_a was force-removed after lsof failed with output")
+r20_warning = land(wt20b, PATH=f"{badlsof}{os.pathsep}{os.environ['PATH']}",
+                   LSOF_TEST_DIAGNOSTIC="warning")
+check("a land still succeeds when lsof reports a warning", r20_warning.returncode == 0,
+      r20_warning.stdout + r20_warning.stderr)
+check("an abandoned lander worktree is kept when lsof warns it cannot inspect processes",
+      badlsof_a.is_dir(), r20_warning.stdout + r20_warning.stderr)
 
 # --- local main must not fall behind origin/main ---------------------------
 # Two trunks exist: the lander gates local refs/heads/main, while origin/main is

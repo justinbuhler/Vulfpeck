@@ -36,4 +36,5 @@ To change a decision, write a new ADR with `Supersedes: NNNN` and mark the old o
 - 2026-10-23 — [0016. Jev proposes consequence tier, code picks the checks](0016-jev-proposes-consequence-tier-code-picks-the-checks.md) — proposed
 - 2026-10-23 — [0017. Loop, scope and budget limits are hooks, not prose](0017-loop-scope-and-budget-limits-are-hooks-not-prose.md) — proposed
 - 2026-10-23 — [0018. The task loop turns labelled issues into merged pull requests](0018-the-task-loop-turns-labelled-issues-into-merged-pull-request.md) — proposed
+- 2026-10-23 — [0019. Copy declared inputs into isolated specimens](0019-copy-declared-inputs-into-isolated-specimens.md) — proposed
 <!-- adr-index:end -->

@@ -52,8 +52,11 @@ for wt in "${dead[@]}"; do
   # A short-lived Bash subprocess won't show up here (land.sh's prune_landers
   # has the same gap) - "ahead=0" is the real safety bar, this only catches a
   # human terminal or a long-lived process sitting in the directory.
-  if lsof -a -d cwd -- "$wt" >/dev/null 2>&1; then
-    say "▶ keeping $wt: a process is working in it"
+  # lsof exits 1 for "nothing in it" and also for its own errors, and 127 when
+  # missing: only exit 1 with no output is idle; anything else keeps the tree.
+  out=$(lsof +w -a -d cwd -- "$wt" 2>&1); rc=$?
+  if [ "$rc" != 1 ] || [ -n "$out" ]; then
+    say "▶ keeping $wt: a process is working in it, or lsof could not tell (rc=$rc)"
     continue
   fi
   # No --force: `git worktree remove` refuses on its own if anything is
