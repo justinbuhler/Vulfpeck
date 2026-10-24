@@ -991,6 +991,24 @@ for path in ("scripts/evil.py", "docs/sneaky.md"):
           final == "failed" and "parent" in st["reason"] and " push " not in log.read_text() and "gh pr create" not in log.read_text(),
           f"{final} {st['reason']}")  # fmt: skip
 
+# The landed commit's own diff is judged: a worker whose pre-land paths look like docs but whose landed commit
+# holds a script is held. The pre-land allowlist check is made blind so only the landed check can catch it.
+real_outside = task_loop.outside_allowlist
+seen = []
+task_loop.outside_allowlist = lambda paths: (
+    [] if not seen.append(1) and len(seen) == 1 else real_outside(paths)
+)
+repo, log, ev = scenario(
+    [],
+    FAKE_WORKER_EXTRA="mkdir -p docs scripts; echo x > docs/x.md; echo y > scripts/x.py",
+)
+final = attempt(152, repo)
+task_loop.outside_allowlist = real_outside
+st = task_loop.load(repo, 152)
+check("LANDED: a landed commit holding a path outside the allowlist is blocked even when the pre-land check saw none",
+      final == "blocked" and "scripts/x.py" in st["reason"] and not merged_or_pushed(log.read_text()) and len(seen) == 2,
+      f"{final} {st['reason']} {len(seen)}")  # fmt: skip
+
 # MED 1 (review of #23): the ignore-rules scratch repository is per call and is removed.
 repo, log, ev = scenario([])
 planted = repo / "tmp" / "loop" / "ignore-rules"

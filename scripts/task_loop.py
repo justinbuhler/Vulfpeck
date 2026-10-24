@@ -706,6 +706,10 @@ def execute(root, cfg, issue):
             "listing the landed paths",
         ).stdout.split("\0")
         landed_paths = sorted(x for x in landed_paths if x)
+        if not landed_paths:
+            raise Halt(
+                "failed", f"the landed commit {sha[:9]} changes nothing from the base"
+            )
         refuse_ignored(root, base_sha, landed_paths, cloned)
         outside = outside_allowlist(landed_paths)
         if outside and review is None:
