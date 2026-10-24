@@ -1277,8 +1277,12 @@ check("BOX: a dry run prints the container command and starts none",
 repo, log, ev = scenario([])
 final = boxed(167, repo)
 wt = repo / "tmp" / "worktrees" / "issue-167-a1"
-vargv = (ev.parent / "container-argv-verify.txt").read_text().splitlines()
-venv = (ev.parent / "container-env-verify.txt").read_text().split("|")
+verify_argv_file, verify_env_file = (
+    ev.parent / "container-argv-verify.txt",
+    ev.parent / "container-env-verify.txt",
+)
+vargv = verify_argv_file.read_text().splitlines() if verify_argv_file.exists() else []
+venv = verify_env_file.read_text().split("|") if verify_env_file.exists() else []
 check("BOX: verification goes through `container run` with the worktree as the one volume and no --env",
       vargv[:6] == ["run", "--rm", "--volume", f"{wt}:/work", "vulfpeck-worker", "bash"] and vargv[6] == "-c" and "--env" not in vargv[:6], str(vargv[:8]))  # fmt: skip
 check("BOX: the verification container holds no model key and none of the owner's tokens",
