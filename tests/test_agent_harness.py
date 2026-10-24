@@ -245,6 +245,10 @@ check(
     not H.clonable(".claude/worktrees") and not H.clonable(".claude/worktrees/other"),
 )
 check("rebuildable caches are skipped", not H.clonable("a/__pycache__/b.pyc"))
+check(
+    "scratch tmp/ is never cloned: it holds the task worktrees themselves",
+    not H.clonable("tmp") and not H.clonable("tmp/worktrees/issue-1"),
+)
 check("but real ignored data is cloned", H.clonable("output/x.json"))
 # Each platform is pinned here because each CI runner only exercises its own.
 _platform = H.sys.platform

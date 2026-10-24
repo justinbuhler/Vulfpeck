@@ -1,0 +1,15 @@
+# mutant_id: M031
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: a pull request with a red check is never merged
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -390,7 +390,7 @@ def run_one(root, cfg, issue):
+         pr_plan = {
+             name: argv for name, _, argv in plan(root, cfg, issue, pr=pr.group(1))
+         }
+-        if sh(pr_plan["checks"], root, CHECKS_TIMEOUT).returncode:
++        if sh(pr_plan["checks"], root, CHECKS_TIMEOUT).returncode and False:
+             raise Halt(
+                 "failed",
+                 f"checks failed on PR #{pr.group(1)}: {fail_comment(root, pr.group(1))}",
