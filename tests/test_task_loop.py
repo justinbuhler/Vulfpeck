@@ -142,7 +142,7 @@ def issue(number, title, *labels, body=""):
     }
 
 
-def scenario(issues, codex_hooks=False, ignore="tmp/\n", **env):
+def scenario(issues, codex_hooks=False, ignore="tmp/\n", toml=HARNESS_TOML, **env):
     """A fresh repo, remote and shim state; returns (repo path, log path, events path)."""
     s = Path(tempfile.mkdtemp(prefix="s.", dir=TMP))
     repo, remote = s / "repo", s / "remote.git"
@@ -163,7 +163,7 @@ def scenario(issues, codex_hooks=False, ignore="tmp/\n", **env):
     (repo / "hooks" / "pre-commit").write_text("#!/bin/sh\nexit 0\n")
     (repo / "hooks" / "pre-commit").chmod(0o755)
     (repo / ".gitignore").write_text(ignore)
-    (repo / "harness.toml").write_text(HARNESS_TOML)
+    (repo / "harness.toml").write_text(toml)
     if codex_hooks:
         (repo / ".codex").mkdir()
         (repo / ".codex" / "hooks.json").write_text("{}\n")
@@ -1112,17 +1112,24 @@ check("IGNORE: a file the base ignores that the worker un-ignored is refused, no
       final == "failed" and "docs/private/new.md" in st["reason"], f"{final} {st['reason']}")  # fmt: skip
 
 # Nothing ignored is cloned for a task: host-only files in the main checkout never reach the worktree.
+# output/ is a declared input, so only --no-inputs keeps it out of the box.
 repo, log, ev = scenario(
     [],
-    ignore="tmp/\n.env.*\n*.har\n",
-    FAKE_WORKER_EXTRA='ls -A > "$SHIM_DIR/wt-ls.txt"',
+    ignore="tmp/\n.env.*\n*.har\noutput/\n",
+    toml=HARNESS_TOML + '\n[land]\ncopy_untracked = ["output"]\n',
+    FAKE_WORKER_EXTRA='ls -A > "$SHIM_DIR/wt-ls.txt"; find . -name confidential.json > "$SHIM_DIR/wt-find.txt"',
 )
 (repo / ".env.local").write_text("TOKEN=dummy\n")
 (repo / "x.har").write_text("{}\n")
+(repo / "output").mkdir()
+(repo / "output" / "confidential.json").write_text("{}\n")
 final = attempt(132, repo)
 listing = (ev.parent / "wt-ls.txt").read_text().split()
+found = (ev.parent / "wt-find.txt").read_text().split()
 check("INPUTS: ignored host files (.env.local, x.har) in the main checkout are absent from the task worktree",
       ".env.local" not in listing and "x.har" not in listing and final == "published", f"{final} {listing}")  # fmt: skip
+check("INPUTS: a declared copy_untracked input (output/confidential.json) is absent from the task worktree",
+      found == [] and "output" not in listing and final == "published", f"{final} {found} {listing}")  # fmt: skip
 
 # M3: the worktree HEAD must be the landed commit even when a forged ledger row names a real commit on the
 # base with the same tree, which passes the parent and path checks.
