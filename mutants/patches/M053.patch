@@ -1,0 +1,15 @@
+# mutant_id: M053
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: a failed container delete after a worker timeout halts the task
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -729,7 +729,7 @@
+             raise
+         if done.returncode == 124 and boxed:
+             gone = sh(["container", "delete", "--force", box_name(wt)])
+-            if gone.returncode:
++            if False:
+                 raise Halt(
+                     "failed",
+                     f"could not delete box {box_name(wt)}: {tail(gone)}",
