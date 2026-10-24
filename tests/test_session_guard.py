@@ -238,30 +238,50 @@ check(
 
 d = repo()
 calls = d.parent / (d.name + "-lint-calls")
-command = (f"printf x >> {shlex.quote(str(calls))}; {shlex.quote(sys.executable)} "
-           "-c 'import ast; ast.parse(open(\"module.py\").read())'")
+command = (
+    f"printf x >> {shlex.quote(str(calls))}; {shlex.quote(sys.executable)} "
+    "-c 'import ast; ast.parse(open(\"module.py\").read())'"
+)
 (d / "harness.toml").write_text(f"[commands]\nlint = {json.dumps(command)}\n")
 (d / "module.py").write_text("value = 1\n")
 git(d, "add", "harness.toml", "module.py")
 git(d, "commit", "-qm", "syntax lint")
 rc, out = hook("Stop", d)
-check("the first clean stop runs the configured lint", rc == 0 and out == {} and calls.read_text() == "x",
-      str(out))
+check(
+    "the first clean stop runs the configured lint",
+    rc == 0 and out == {} and calls.read_text() == "x",
+    str(out),
+)
 rc, out = hook("Stop", d)
-check("an unchanged clean stop reuses successful lint", rc == 0 and out == {} and calls.read_text() == "x",
-      str(out))
+check(
+    "an unchanged clean stop reuses successful lint",
+    rc == 0 and out == {} and calls.read_text() == "x",
+    str(out),
+)
 (d / "module.py").write_text("value = 2\n")
 before = git(d, "status", "--porcelain=v1", "--untracked-files=all")
 rc, out = hook("Stop", d)
-check("valid dirty code is linted without blocking", rc == 0 and "decision" not in out and calls.read_text() == "xx",
-      str(out))
+check(
+    "valid dirty code is linted without blocking",
+    rc == 0 and "decision" not in out and calls.read_text() == "xx",
+    str(out),
+)
 (d / "module.py").write_text("value = (\n")
 after = git(d, "status", "--porcelain=v1", "--untracked-files=all")
-check("different dirty bytes retain the same Git status", before == after == "M module.py", f"{before!r} {after!r}")
+check(
+    "different dirty bytes retain the same Git status",
+    before == after == "M module.py",
+    f"{before!r} {after!r}",
+)
 rc, out = hook("Stop", d)
-check("same-status dirty edits rerun lint and block actual syntax errors",
-      rc == 0 and out.get("decision") == "block" and "SyntaxError" in out.get("reason", "")
-      and calls.read_text() == "xxx", str(out))
+check(
+    "same-status dirty edits rerun lint and block actual syntax errors",
+    rc == 0
+    and out.get("decision") == "block"
+    and "SyntaxError" in out.get("reason", "")
+    and calls.read_text() == "xxx",
+    str(out),
+)
 
 d = repo()
 calls = d.parent / (d.name + "-lint-calls")
@@ -270,10 +290,14 @@ command = f"printf x >> {shlex.quote(str(calls))}; echo clean-lint-error; exit 1
 git(d, "commit", "-qam", "failing clean lint")
 _, first = hook("Stop", d)
 rc, out = hook("Stop", d)
-check("failed lint is retried even on an unchanged clean tree",
-      git(d, "status", "--porcelain=v1") == "" and rc == 0
-      and first.get("decision") == out.get("decision") == "block" and calls.read_text() == "xx",
-      str(out))
+check(
+    "failed lint is retried even on an unchanged clean tree",
+    git(d, "status", "--porcelain=v1") == ""
+    and rc == 0
+    and first.get("decision") == out.get("decision") == "block"
+    and calls.read_text() == "xx",
+    str(out),
+)
 
 d = repo()
 git(d, "checkout", "-q", "-b", "feature")

@@ -172,7 +172,13 @@ def content_state(top):
             contents[name] = "absent"
             continue
         mode = path.lstat().st_mode
-        raw = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes() if path.is_file() else b"<directory>"
+        raw = (
+            os.fsencode(os.readlink(path))
+            if path.is_symlink()
+            else path.read_bytes()
+            if path.is_file()
+            else b"<directory>"
+        )
         contents[name] = hashlib.sha256(str(mode).encode() + b"\0" + raw).hexdigest()
     return contents, hashlib.sha256(staged.encode()).hexdigest()
 
@@ -257,7 +263,11 @@ def differences(before, after):
         out.append("index contents changed")
     if before.get("contents") != after.get("contents"):
         was, current = before.get("contents", {}), after.get("contents", {})
-        names = sorted(name for name in set(was) | set(current) if was.get(name) != current.get(name))
+        names = sorted(
+            name
+            for name in set(was) | set(current)
+            if was.get(name) != current.get(name)
+        )
         out.append("working-tree contents: " + ", ".join(names[:8]))
     if before.get("status_sha") != after.get("status_sha"):
         was, now = set(before.get("status", [])), set(after.get("status", []))

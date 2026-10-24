@@ -625,14 +625,23 @@ check(
     not (lwt14 / "fn" / "unlisted.json").exists(),
 )
 check("another session's live state is NOT copied", not (lwt14 / ".omc").exists())
-check("a listed path the candidate tracks is reported and not copied",
-      "tracked input excluded: fn/tracked.json" in r14.stderr, r14.stderr)
-check("gate writes leave the primary untracked input unchanged",
-      (d14 / "fn/sources/untracked.txt").read_text() == "provision me\n")
-check("gate writes leave the primary ignored input unchanged",
-      (d14 / "fn/generated.json").read_text() == "generated input\n")
-check("the candidate's tracked bytes survive copying",
-      (lwt14 / "fn/sources/candidate.txt").read_text() == "candidate\n")
+check(
+    "a listed path the candidate tracks is reported and not copied",
+    "tracked input excluded: fn/tracked.json" in r14.stderr,
+    r14.stderr,
+)
+check(
+    "gate writes leave the primary untracked input unchanged",
+    (d14 / "fn/sources/untracked.txt").read_text() == "provision me\n",
+)
+check(
+    "gate writes leave the primary ignored input unchanged",
+    (d14 / "fn/generated.json").read_text() == "generated input\n",
+)
+check(
+    "the candidate's tracked bytes survive copying",
+    (lwt14 / "fn/sources/candidate.txt").read_text() == "candidate\n",
+)
 main_inode = (d14 / "fn" / "sources" / "untouched.txt").stat().st_ino
 check(
     "a tracked file is not inode-shared with the main checkout during the gate",
@@ -876,9 +885,16 @@ nolsof_a = Path(LANDER_ROOT) / "nolsof-a"
 git(d19, "worktree", "remove", "--force", str(wt19))
 git(d19, "branch", "-D", "nolsof-a")
 r19 = land(agent(d19, "nolsof-b"), PATH=str(nolsof))
-check("a land still succeeds when lsof is not installed", r19.returncode == 0, r19.stdout + r19.stderr)
-check("an abandoned lander worktree is kept when lsof is not installed",
-      nolsof_a.is_dir(), "nolsof_a was force-removed with no way to tell it was idle")
+check(
+    "a land still succeeds when lsof is not installed",
+    r19.returncode == 0,
+    r19.stdout + r19.stderr,
+)
+check(
+    "an abandoned lander worktree is kept when lsof is not installed",
+    nolsof_a.is_dir(),
+    "nolsof_a was force-removed with no way to tell it was idle",
+)
 
 # lsof exits 1 for "nothing in it" and also for its own errors; only exit 1 with
 # no output is idle. A fake lsof that fails with a message must keep the worktree.
@@ -903,17 +919,37 @@ badlsof_a = Path(LANDER_ROOT) / "badlsof-a"
 git(d20, "worktree", "remove", "--force", str(wt20))
 git(d20, "branch", "-D", "badlsof-a")
 wt20b = agent(d20, "badlsof-b")
-r20 = land(wt20b, PATH=f"{badlsof}{os.pathsep}{os.environ['PATH']}",
-           LSOF_TEST_DIAGNOSTIC="error")
-check("a land still succeeds when lsof itself errors", r20.returncode == 0, r20.stdout + r20.stderr)
-check("an abandoned lander worktree is kept when lsof errors out",
-      badlsof_a.is_dir(), "badlsof_a was force-removed after lsof failed with output")
-r20_warning = land(wt20b, PATH=f"{badlsof}{os.pathsep}{os.environ['PATH']}",
-                   LSOF_TEST_DIAGNOSTIC="warning")
-check("a land still succeeds when lsof reports a warning", r20_warning.returncode == 0,
-      r20_warning.stdout + r20_warning.stderr)
-check("an abandoned lander worktree is kept when lsof warns it cannot inspect processes",
-      badlsof_a.is_dir(), r20_warning.stdout + r20_warning.stderr)
+r20 = land(
+    wt20b,
+    PATH=f"{badlsof}{os.pathsep}{os.environ['PATH']}",
+    LSOF_TEST_DIAGNOSTIC="error",
+)
+check(
+    "a land still succeeds when lsof itself errors",
+    r20.returncode == 0,
+    r20.stdout + r20.stderr,
+)
+check(
+    "an abandoned lander worktree is kept when lsof errors out",
+    badlsof_a.is_dir(),
+    "badlsof_a was force-removed after lsof failed with output",
+)
+r20_warning = land(
+    wt20b,
+    PATH=f"{badlsof}{os.pathsep}{os.environ['PATH']}",
+    LSOF_TEST_DIAGNOSTIC="warning",
+)
+check(
+    "a land still succeeds when lsof reports a warning",
+    r20_warning.returncode == 0,
+    r20_warning.stdout + r20_warning.stderr,
+)
+check(
+    "an abandoned lander worktree is kept when lsof warns it cannot inspect processes",
+    badlsof_a.is_dir(),
+    r20_warning.stdout + r20_warning.stderr,
+)
+
 
 # --- local main must not fall behind origin/main ---------------------------
 # Two trunks exist: the lander gates local refs/heads/main, while origin/main is

@@ -94,7 +94,8 @@ def make_repo(tmp, gate_exit=0):
     # the one file that is genuinely authored here. Without this the cloned
     # inputs would show up as untracked and every worktree would read dirty.
     (repo / ".gitignore").write_text(
-        "func/sources/*\n!func/sources/tracked.txt\n.env\n.env.*\nnested_cache/\ntmp/\n")
+        "func/sources/*\n!func/sources/tracked.txt\n.env\n.env.*\nnested_cache/\ntmp/\n"
+    )
     (repo / "harness.toml").write_text('[land]\ncopy_untracked = ["func/sources"]\n')
     (repo / "a.txt").write_text("one\n")
     git("add", "-A", cwd=repo)
@@ -210,43 +211,82 @@ check(
 
 print("\nthe ignored inputs a checkout cannot carry are cloned in and verified")
 inputs = tmp / "wt-alpha" / "func" / "sources"
-check("the tracked file the checkout carried is still there",
-      (inputs / "tracked.txt").read_text() == "tracked\n")
-check("the untracked input beside it was cloned in, not skipped",
-      (inputs / "supplied.bin").exists(),
-      f"contents: {sorted(p.name for p in inputs.iterdir())}")
-check("and so was one nested a directory deep",
-      (inputs / "nested" / "deep.json").exists())
-check("the supplied inputs are reported as cloned",
-      any(c.startswith("func/sources/") for c in manifest.get("cloned_inputs", [])),
-      str(manifest.get("cloned_inputs")))
+check(
+    "the tracked file the checkout carried is still there",
+    (inputs / "tracked.txt").read_text() == "tracked\n",
+)
+check(
+    "the untracked input beside it was cloned in, not skipped",
+    (inputs / "supplied.bin").exists(),
+    f"contents: {sorted(p.name for p in inputs.iterdir())}",
+)
+check(
+    "and so was one nested a directory deep", (inputs / "nested" / "deep.json").exists()
+)
+check(
+    "the supplied inputs are reported as cloned",
+    any(c.startswith("func/sources/") for c in manifest.get("cloned_inputs", [])),
+    str(manifest.get("cloned_inputs")),
+)
 # Inputs are explicit; ignored credentials and another task's scratch stay out.
-check("the ignored .env exists in the checkout being cloned from",
-      (repo / ".env").read_text() == "API_TOKEN=super-secret\n")
-check("but credentials are never cloned into a worktree",
-      not (tmp / "wt-alpha" / ".env").exists())
-check("and .env is not even reported as a cloned input",
-      ".env" not in manifest.get("cloned_inputs", []), str(manifest.get("cloned_inputs")))
-check("environment variants never arrive in the task worktree",
-      not (tmp / "wt-alpha" / ".env.local").exists())
-check("scratch worktrees are not copied as task inputs", not (tmp / "wt-alpha" / "tmp").exists())
-check("ignored data not declared in copy_untracked stays outside the task",
-      not (tmp / "wt-alpha" / "nested_cache").exists())
-check("the clone gave the worktree its own inode, not a shared one",
-      (inputs / "supplied.bin").stat().st_ino
-      != (repo / "func" / "sources" / "supplied.bin").stat().st_ino)
+check(
+    "the ignored .env exists in the checkout being cloned from",
+    (repo / ".env").read_text() == "API_TOKEN=super-secret\n",
+)
+check(
+    "but credentials are never cloned into a worktree",
+    not (tmp / "wt-alpha" / ".env").exists(),
+)
+check(
+    "and .env is not even reported as a cloned input",
+    ".env" not in manifest.get("cloned_inputs", []),
+    str(manifest.get("cloned_inputs")),
+)
+check(
+    "environment variants never arrive in the task worktree",
+    not (tmp / "wt-alpha" / ".env.local").exists(),
+)
+check(
+    "scratch worktrees are not copied as task inputs",
+    not (tmp / "wt-alpha" / "tmp").exists(),
+)
+check(
+    "ignored data not declared in copy_untracked stays outside the task",
+    not (tmp / "wt-alpha" / "nested_cache").exists(),
+)
+check(
+    "the clone gave the worktree its own inode, not a shared one",
+    (inputs / "supplied.bin").stat().st_ino
+    != (repo / "func" / "sources" / "supplied.bin").stat().st_ino,
+)
 (inputs / "supplied.bin").write_text("worktree-local change\n")
-check("writing through the clone does not reach the source",
-      (repo / "func" / "sources" / "supplied.bin").read_text() == "supplied by hand\n")
+check(
+    "writing through the clone does not reach the source",
+    (repo / "func" / "sources" / "supplied.bin").read_text() == "supplied by hand\n",
+)
 print("\na live socket in declared inputs is refused before copying")
 sock_path = repo / "func" / "sources" / "live.sock"
 server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 server.bind(str(sock_path))
-out = run("provision", "--task", "socket", "--baseline", FIRST,
-          "--path", str(tmp / "wt-socket"), cwd=repo)
-check("nonregular declared input stops provisioning", out.returncode != 0 and "nonregular" in out.stderr,
-      out.stdout + out.stderr)
-check("refused input leaves no successful task manifest", not (state / "tasks/socket.json").exists())
+out = run(
+    "provision",
+    "--task",
+    "socket",
+    "--baseline",
+    FIRST,
+    "--path",
+    str(tmp / "wt-socket"),
+    cwd=repo,
+)
+check(
+    "nonregular declared input stops provisioning",
+    out.returncode != 0 and "nonregular" in out.stderr,
+    out.stdout + out.stderr,
+)
+check(
+    "refused input leaves no successful task manifest",
+    not (state / "tasks/socket.json").exists(),
+)
 server.close()
 sock_path.unlink()
 
@@ -261,23 +301,46 @@ dirt_repo, dirt_first, _ = make_repo(dirt_tmp)
 (dirt_repo / "flow" / "logs").mkdir(parents=True)
 (dirt_repo / "flow" / ".gitignore").write_text("logs/\n")
 (dirt_repo / "flow" / "logs" / "daemon.log").write_text("noise\n")
-(dirt_repo / "harness.toml").write_text('[land]\ncopy_untracked = ["func/sources", "flow/logs"]\n')
+(dirt_repo / "harness.toml").write_text(
+    '[land]\ncopy_untracked = ["func/sources", "flow/logs"]\n'
+)
 git("add", "harness.toml", cwd=dirt_repo)
 git("commit", "-q", "-m", "declare inputs", cwd=dirt_repo)
 dirt_first = git("rev-parse", "HEAD", cwd=dirt_repo).stdout.strip()
-listed = subprocess.run(["git", "ls-files", "--others", "--ignored",
-                         "--exclude-standard", "--directory"],
-                        cwd=dirt_repo, capture_output=True, text=True,
-                        env=_clean_env()).stdout
-check("git reports the content as ignored in the source checkout",
-      "flow/logs/" in listed, listed)
-out = run("provision", "--task", "dirty", "--baseline", dirt_first,
-          "--path", str(dirt_tmp / "wt-dirty"), cwd=dirt_repo)
-check("provision refuses rather than handing over a dirty worktree",
-      out.returncode != 0, out.stdout)
-check("and names what it carried in", "untracked path" in out.stderr, out.stderr.strip())
-check("no manifest is written for the refused task",
-      not (dirt_repo / ".git" / "agent-harness" / "tasks" / "dirty.json").exists())
+listed = subprocess.run(
+    ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "--directory"],
+    cwd=dirt_repo,
+    capture_output=True,
+    text=True,
+    env=_clean_env(),
+).stdout
+check(
+    "git reports the content as ignored in the source checkout",
+    "flow/logs/" in listed,
+    listed,
+)
+out = run(
+    "provision",
+    "--task",
+    "dirty",
+    "--baseline",
+    dirt_first,
+    "--path",
+    str(dirt_tmp / "wt-dirty"),
+    cwd=dirt_repo,
+)
+check(
+    "provision refuses rather than handing over a dirty worktree",
+    out.returncode != 0,
+    out.stdout,
+)
+check(
+    "and names what it carried in", "untracked path" in out.stderr, out.stderr.strip()
+)
+check(
+    "no manifest is written for the refused task",
+    not (dirt_repo / ".git" / "agent-harness" / "tasks" / "dirty.json").exists(),
+)
 dirt_dir.cleanup()
 
 print("\na dirty target directory stops provisioning before anything is created")
@@ -1191,10 +1254,15 @@ for _ in range(30):  # the kill escalates, so allow for it
     if not H.alive(grandchild):
         break
     time.sleep(0.1)
-check("and it was killed with the rest of the tree, not orphaned",
-      not H.alive(grandchild), f"pid {grandchild} still running")
-check("kill_group reports success on a group that is already gone",
-      H.kill_group(int(grandchild)) is True)
+check(
+    "and it was killed with the rest of the tree, not orphaned",
+    not H.alive(grandchild),
+    f"pid {grandchild} still running",
+)
+check(
+    "kill_group reports success on a group that is already gone",
+    H.kill_group(int(grandchild)) is True,
+)
 _killpg = H.os.killpg
 check("kill_group on None is a no-op rather than an error", H.kill_group(None) is True)
 # Linux keeps a group signalable while its leader is an unreaped zombie, and
@@ -1202,16 +1270,22 @@ check("kill_group on None is a no-op rather than an error", H.kill_group(None) i
 # succeeds until the Popen has been reaped. Expectation by hand: the timeout (1s)
 # plus a prompt kill (~0.1s), under the 2s one unreaped polling round costs.
 _Popen, _procs = H.subprocess.Popen, []
+
+
 class _Tracked(_Popen):
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
         _procs.append(self)
+
+
 def _linux_probe(pgid, sig):
     if sig == 0:
         if _procs[-1].returncode is None:
             return
         raise ProcessLookupError(3, "no such process")
     return _killpg(pgid, sig)
+
+
 try:
     H.subprocess.Popen, H.os.killpg = _Tracked, _linux_probe
     _t0 = time.monotonic()
@@ -1222,8 +1296,11 @@ try:
     _elapsed = time.monotonic() - _t0
 finally:
     H.subprocess.Popen, H.os.killpg = _Popen, _killpg
-check("a timed-out gate whose leader is a zombie is reaped, not polled out",
-      _elapsed < 2, f"{_elapsed:.1f}s")
+check(
+    "a timed-out gate whose leader is a zombie is reaped, not polled out",
+    _elapsed < 2,
+    f"{_elapsed:.1f}s",
+)
 # The lander's signal handler and finally block kill a gate that is still running.
 # Same zombie-leader probe; the leader must be reaped there too.
 _procs.clear()
@@ -1241,8 +1318,11 @@ try:
     _runner.join(10)
 finally:
     H.subprocess.Popen, H.os.killpg = _Popen, _killpg
-check("stopping the lander mid-gate reaps the zombie leader and reports the group gone",
-      _stopped is True and _elapsed < 2, f"{_stopped} after {_elapsed:.1f}s")
+check(
+    "stopping the lander mid-gate reaps the zombie leader and reports the group gone",
+    _stopped is True and _elapsed < 2,
+    f"{_stopped} after {_elapsed:.1f}s",
+)
 # On Linux killpg(1) is kill(-1): every process this user owns, the test runner
 # included. Group 1 must be refused before any signal is sent, on every platform,
 # so no check here may pass it to the real killpg.

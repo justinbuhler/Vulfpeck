@@ -259,8 +259,12 @@ def refuse_if_dirty(path):
 
 def clone_ignored_inputs(worktree):
     """Copy the task baseline's declared inputs and return their paths."""
-    return [item["path"] for item in copy_inputs(
-        main_checkout(), worktree, load_config(worktree)["land"]["copy_untracked"])]
+    return [
+        item["path"]
+        for item in copy_inputs(
+            main_checkout(), worktree, load_config(worktree)["land"]["copy_untracked"]
+        )
+    ]
 
 
 def cmd_provision(args):

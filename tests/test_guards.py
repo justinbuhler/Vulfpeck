@@ -464,11 +464,16 @@ for kind in ("dirty", "staged", "index-only", "untracked", "symlink", "mode"):
             git(r, "add", "a.txt")
         if kind == "index-only":
             path.write_text("working bytes remain\n")
-    check(f"{kind} regression keeps the same porcelain status",
-          git(r, "status", "--porcelain=v1", "--untracked-files=all") == before_status)
+    check(
+        f"{kind} regression keeps the same porcelain status",
+        git(r, "status", "--porcelain=v1", "--untracked-files=all") == before_status,
+    )
     _, outcome = sub("SubagentStop", r, agent_id="same-status-" + kind)
-    check(f"same-status {kind} change blocks review completion",
-          outcome.get("decision") == "block", str(outcome))
+    check(
+        f"same-status {kind} change blocks review completion",
+        outcome.get("decision") == "block",
+        str(outcome),
+    )
 
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

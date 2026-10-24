@@ -85,13 +85,17 @@ def tree_digest() -> str:
             except FileNotFoundError:
                 mode = 0
             if length < len(parts) and not stat.S_ISDIR(mode):
-                raise SystemExit(f"tree not identical: tracked ancestor {relative} is not a directory")
+                raise SystemExit(
+                    f"tree not identical: tracked ancestor {relative} is not a directory"
+                )
             payload = b""
             if stat.S_ISLNK(mode):
                 payload = os.fsencode(os.readlink(path))
             elif stat.S_ISREG(mode):
                 payload = path.read_bytes()
-            accumulator.update(os.fsencode(relative) + b"\0" + str(mode).encode() + b"\0")
+            accumulator.update(
+                os.fsencode(relative) + b"\0" + str(mode).encode() + b"\0"
+            )
             accumulator.update(hashlib.sha256(payload).digest())
             seen.add(relative)
     return accumulator.hexdigest()
@@ -101,7 +105,9 @@ def verify_tree(expected: str, subject: str) -> None:
     """Refuse further results when restoration differs from the specimen baseline."""
     restored = tree_digest()
     if restored != expected:
-        raise SystemExit(f"{subject}: tree not identical after restoration ({restored} != {expected})")
+        raise SystemExit(
+            f"{subject}: tree not identical after restoration ({restored} != {expected})"
+        )
 
 
 def dirty():
@@ -429,8 +435,12 @@ def main():
             mutant_id = fields.get("mutant_id", patch.stem)
             applied = None
             try:
-                applied = subprocess.run(("git", "apply", str(patch)), cwd=ROOT,
-                                         capture_output=True, text=True)
+                applied = subprocess.run(
+                    ("git", "apply", str(patch)),
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                )
                 if applied.returncode == 0:
                     discard_bytecode(fields["target"])
                     began = time.monotonic()
@@ -460,15 +470,20 @@ def main():
                 print(f"  {mutant_id} PATCH-FAILED")
                 continue
 
-            record = {"mutant_id": mutant_id, "round": args.round,
-                      "patch": patch.name, "target": fields.get("target"),
-                      "operator": fields.get("operator"),
-                      "behaviour": fields.get("behaviour"),
-                      "killed": killed, "failing_spec_names": specs,
-                      "crash_only_scripts": crashes,
-                      "stderr_tail": tail,
-                      "seconds": round(time.monotonic() - began, 1),
-                      "tree_verified": True}
+            record = {
+                "mutant_id": mutant_id,
+                "round": args.round,
+                "patch": patch.name,
+                "target": fields.get("target"),
+                "operator": fields.get("operator"),
+                "behaviour": fields.get("behaviour"),
+                "killed": killed,
+                "failing_spec_names": specs,
+                "crash_only_scripts": crashes,
+                "stderr_tail": tail,
+                "seconds": round(time.monotonic() - began, 1),
+                "tree_verified": True,
+            }
             handle.write(json.dumps(record) + "\n")
             handle.flush()
             killed_count += bool(killed)

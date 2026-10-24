@@ -172,7 +172,11 @@ def on_stop(payload, top):
     out = {}
 
     # Porcelain labels do not change when an already-dirty file is edited again.
-    if now["dirty"] or now["tree"] != memo.get("linted_tree") or memo.get("lint_failed"):
+    if (
+        now["dirty"]
+        or now["tree"] != memo.get("linted_tree")
+        or memo.get("lint_failed")
+    ):
         command = lint_command(top)
         if command.startswith("__unreadable__:"):
             out["systemMessage"] = (
