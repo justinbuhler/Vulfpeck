@@ -626,7 +626,18 @@ check("an abandoned lander worktree is kept when lsof is not installed",
 # lsof exits 1 for "nothing in it" and also for its own errors; only exit 1 with
 # no output is idle. A fake lsof that fails with a message must keep the worktree.
 badlsof = Path(tempfile.mkdtemp(prefix="harness-badlsof."))
-(badlsof / "lsof").write_text("#!/bin/sh\necho 'lsof: cannot read process info' >&2\nexit 1\n")
+(badlsof / "lsof").write_text("""#!/bin/sh
+warnings=1
+for option do
+  case "$option" in -w) warnings=0 ;; +w) warnings=1 ;; esac
+done
+if [ "${LSOF_TEST_DIAGNOSTIC:-warning}" = error ]; then
+  echo 'lsof: cannot read process info' >&2
+elif [ "$warnings" = 1 ]; then
+  echo 'lsof: WARNING: cannot inspect process info' >&2
+fi
+exit 1
+""")
 (badlsof / "lsof").chmod(0o755)
 d20 = repo()
 wt20 = agent(d20, "badlsof-a")
@@ -634,10 +645,18 @@ land(wt20)
 badlsof_a = Path(LANDER_ROOT) / "badlsof-a"
 git(d20, "worktree", "remove", "--force", str(wt20))
 git(d20, "branch", "-D", "badlsof-a")
-r20 = land(agent(d20, "badlsof-b"), PATH=f"{badlsof}{os.pathsep}{os.environ['PATH']}")
+wt20b = agent(d20, "badlsof-b")
+r20 = land(wt20b, PATH=f"{badlsof}{os.pathsep}{os.environ['PATH']}",
+           LSOF_TEST_DIAGNOSTIC="error")
 check("a land still succeeds when lsof itself errors", r20.returncode == 0, r20.stdout + r20.stderr)
 check("an abandoned lander worktree is kept when lsof errors out",
       badlsof_a.is_dir(), "badlsof_a was force-removed after lsof failed with output")
+r20_warning = land(wt20b, PATH=f"{badlsof}{os.pathsep}{os.environ['PATH']}",
+                   LSOF_TEST_DIAGNOSTIC="warning")
+check("a land still succeeds when lsof reports a warning", r20_warning.returncode == 0,
+      r20_warning.stdout + r20_warning.stderr)
+check("an abandoned lander worktree is kept when lsof warns it cannot inspect processes",
+      badlsof_a.is_dir(), r20_warning.stdout + r20_warning.stderr)
 
 # --- local main must not fall behind origin/main ---------------------------
 # Two trunks exist: the lander gates local refs/heads/main, while origin/main is
