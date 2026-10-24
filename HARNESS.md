@@ -55,7 +55,7 @@ None of the three spells a command, so they cannot drift apart.
 
 ## Adopting it in another repository
 
-Requirements: git, bash, Python 3.11+ and uv for the harness's own scripts, `rsync`, and `flock` or `lockf`. macOS or Linux.
+Requirements: git, bash, Python 3.11+ and uv for the harness's own scripts, `rsync`, `lsof`, and `flock` or `lockf`. macOS or Linux.
 
 1. Copy `AGENTS.md`, `CLAUDE.md`, `.gemini/`, `HARNESS.md`, `harness.toml`, `.claude/`, `.agents/`, `.codex/`, `.githooks/`, `.github/`, `scripts/`, `tests/` and `mutants/` into the repository.
 2. Edit `harness.toml`. For example, a Node project:
@@ -95,7 +95,7 @@ Requirements: git, bash, Python 3.11+ and uv for the harness's own scripts, `rsy
 - **The mutation runner assumes the standalone-test layout.** It runs `tests/test_*.py` scripts in parallel and reads their `FAIL <name>` lines; it does not yet use `commands.test`.
 - **Mutation tooling is the older generation.** `docs/mutation-testing.md` is the target: Jev-assisted sizing (`plan.py`), ID ranges (`registry.py`), probes and specs, and a runner that works in an isolated clone with a double baseline. Only patches and the in-place runner exist here.
 - **Hook timeouts fail open.** Claude Code proceeds when a hook times out, and the fail-closed wrapper cannot catch that. Newer Claude Code documents an `onFailure: "block"` hook setting; it is not used because the installed version could not be confirmed to accept it.
-- **`agent_harness.py` clones ignored inputs with `cp -c` on macOS and `cp --reflink=auto` elsewhere.** On a filesystem without reflinks the Linux path is a full copy, so large inputs cost disk and time there.
+- **`agent_harness.py` copies declared inputs with `shutil.copy2` (`scripts/harness_inputs.py`).** It refuses symlinks, sockets and other nonregular files, and makes full copies, so large inputs cost disk and time on every platform.
 
 ## Open gaps
 

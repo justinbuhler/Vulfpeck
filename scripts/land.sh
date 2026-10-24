@@ -263,8 +263,11 @@ prune_landers(){
     # directory and reports a plausible wrong answer, which reads as a defect in
     # whatever is being tested rather than a lost workspace. ~350ms per stale
     # directory, once per land, against a gate measured in minutes.
-    if lsof -a -d cwd -- "${stale%/}" >/dev/null 2>&1; then
-      say "▶ keeping $name: a process is working in it despite its branch being gone"
+    # lsof exits 1 for "nothing in it" and also for its own errors, and 127 when
+    # missing: only exit 1 with no output is idle; anything else keeps the tree.
+    out=$(lsof +w -a -d cwd -- "${stale%/}" 2>&1); rc=$?
+    if [ "$rc" != 1 ] || [ -n "$out" ]; then
+      say "▶ keeping $name: a process is working in it, or lsof could not tell (rc=$rc)"
       continue
     fi
     git worktree remove --force "${stale%/}" >/dev/null 2>&1 || rm -rf "${stale%/}"
