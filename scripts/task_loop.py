@@ -43,6 +43,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -78,17 +79,12 @@ STOP_AFTER_BAD = 2  # consecutive tasks ending failed or blocked
 STOP_AFTER_FAILS = 2  # failures of one issue
 RESET_SESSION = "task-loop"
 # The only changes merged unattended: every changed path matches ALLOW and none matches EXCEPT.
-# Hard-coded here, never read from any harness.toml or the worktree (Rule 11). Anything else,
-# renames and deletes included, is pushed and opened as a PR but ends `blocked` as `needs-review`.
-ALLOW = ("docs/**", "**/*.md")
-EXCEPT = (
-    "AGENTS.md",
-    "CLAUDE.md",
-    "HARNESS.md",
-    "**/AGENTS.md",
-    "**/CLAUDE.md",
-    "docs/agents/**",
-)
+# Hard-coded here, never read from any harness.toml or the worktree (Rule 11). Runtime-loaded
+# definitions (skills, agents, instruction files) are not documentation, so `*.md` outside docs/
+# is not allowed; AGENTS.md and CLAUDE.md are read by the runtimes from any directory. Anything
+# else, renames and deletes included, is pushed and opened as a PR but ends `blocked` as `needs-review`.
+ALLOW = ("docs/**", "README.md")
+EXCEPT = ("**/AGENTS.md", "**/CLAUDE.md", "docs/agents/**")
 # Code that runs worker-controlled content (the worker, verification, the lander and its hooks)
 # holds none of the owner's tokens. This does not contain a hostile worker that runs as the owner:
 # keyring entries and ssh keys on disk stay reachable (ADR 0018).
@@ -474,9 +470,9 @@ def refuse_ignored(root, base_sha, files, cloned):
     names = sh(["git", "-C", root, "ls-tree", "-r", "--name-only", "-z", base_sha])
     if names.returncode:
         raise Halt("failed", f"git ls-tree exited {names.returncode}: {tail(names)}")
-    scratch = Path(root) / "tmp" / "loop" / "ignore-rules"
-    shutil.rmtree(scratch, ignore_errors=True)
-    scratch.mkdir(parents=True)
+    parent = Path(root) / "tmp" / "loop"
+    parent.mkdir(parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix="ignore-", dir=parent))
     try:
         stage(["git", "init", "-q", scratch], root, "git init")
         for name in files:
@@ -685,6 +681,35 @@ def execute(root, cfg, issue):
             raise Halt(
                 "failed", f"the worktree HEAD is not the landed commit {sha[:9]}"
             )
+        parents = sh(
+            ["git", "-C", root, "rev-list", "--parents", "-n", "1", sha]
+        ).stdout.split()
+        if parents != [sha, base_sha]:
+            raise Halt(
+                "failed",
+                f"the landed commit {sha[:9]} has parent(s) {[x[:9] for x in parents[1:]]}, not the base {base_sha[:9]}",
+            )
+        # The commit's own diff is what gets pushed; the worker can write the worktree, manifest and ledger.
+        landed_paths = stage(
+            [
+                "git",
+                "-C",
+                root,
+                "diff",
+                "--name-only",
+                "--no-renames",
+                "-z",
+                base_sha,
+                sha,
+            ],
+            root,
+            "listing the landed paths",
+        ).stdout.split("\0")
+        landed_paths = sorted(x for x in landed_paths if x)
+        refuse_ignored(root, base_sha, landed_paths, cloned)
+        outside = outside_allowlist(landed_paths)
+        if outside and review is None:
+            review = f"changes outside the docs allowlist: {', '.join(outside[:5])}"
         move(root, n, "landed")
         stage(plans["push"][1], wt, "git push")
         created = stage(plans["pr"][1], root, "gh pr create")

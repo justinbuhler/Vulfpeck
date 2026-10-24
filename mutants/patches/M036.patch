@@ -4,7 +4,7 @@
 # behaviour: the worktree HEAD must be the landed commit before the push
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -681,7 +681,7 @@
+@@ -677,7 +677,7 @@
                  f"land: {(row or {}).get('detail') or 'no ledger row for this request'}",
              )
          sha = row["sha"]

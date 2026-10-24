@@ -4,7 +4,7 @@
 # behaviour: AGENTS.md, CLAUDE.md, HARNESS.md and docs/agents are never merged unattended
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -451,7 +451,7 @@
+@@ -447,7 +447,7 @@
          p
          for p in paths
          if not any(glob_match(g, p) for g in ALLOW)

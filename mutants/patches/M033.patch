@@ -4,7 +4,7 @@
 # behaviour: the base is the commit resolved after the fetch, not the origin ref the worker can repoint
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -608,6 +608,7 @@
+@@ -604,6 +604,7 @@
              root,
              "resolving the base",
          ).stdout.strip()

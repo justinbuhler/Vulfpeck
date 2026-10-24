@@ -4,7 +4,7 @@
 # behaviour: a changed path cloned in from the main checkout fails the task even when the base does not ignore it
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -508,7 +508,7 @@
+@@ -504,7 +504,7 @@
      if done.returncode not in (0, 1):
          raise Halt("failed", f"git check-ignore exited {done.returncode}: {tail(done)}")
      ignored = set(done.stdout.splitlines())
