@@ -4,7 +4,7 @@
 # behaviour: verification runs for every change, not only an allowlisted one
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -742,14 +742,15 @@
+@@ -743,14 +743,15 @@
              if outside
              else None
          )

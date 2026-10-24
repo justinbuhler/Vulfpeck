@@ -4,7 +4,7 @@
 # behaviour: a task is provisioned with no gitignored input, so no host-only file reaches the box
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -464,7 +464,7 @@
+@@ -465,7 +465,7 @@
          ("timeline", root, ["gh", "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}",
                              "-F", f"number={n}", "-f", f"query={TIMELINE_QUERY}"]),
          ("fetch", root, ["git", "-C", root, "fetch", "origin", base]),

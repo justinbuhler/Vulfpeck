@@ -4,7 +4,7 @@
 # behaviour: the base is the commit resolved after the fetch, not the origin ref the worker can repoint
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -695,6 +695,7 @@
+@@ -696,6 +696,7 @@
          ).stdout.strip()
          # A worktree .gitattributes with a filter (git-lfs) would run it in every host git command below.
          os.environ["GIT_ATTR_SOURCE"] = base_sha

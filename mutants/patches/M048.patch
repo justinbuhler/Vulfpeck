@@ -4,7 +4,7 @@
 # behaviour: host git reads attributes from the pinned base, never from the worker's worktree
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -694,7 +694,7 @@
+@@ -695,7 +695,7 @@
              "resolving the base",
          ).stdout.strip()
          # A worktree .gitattributes with a filter (git-lfs) would run it in every host git command below.

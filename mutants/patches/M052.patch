@@ -1,0 +1,15 @@
+# mutant_id: M052
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: run and run-one refuse a git older than the GIT_ATTR_SOURCE cut-off
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -946,7 +946,7 @@
+     """
+     shown = sh(["git", "--version"]).stdout
+     found = re.search(r"(\d+)\.(\d+)", shown)
+-    if found and (int(found[1]), int(found[2])) >= GIT_MIN:
++    if True:
+         return None
+     print(
+         f"task_loop: git 2.41 or newer is required (GIT_ATTR_SOURCE); found: {shown.strip() or 'no git'}",

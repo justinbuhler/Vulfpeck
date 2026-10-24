@@ -4,7 +4,7 @@
 # behaviour: a landed change to .github is held before anything is pushed
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -815,7 +815,7 @@
+@@ -816,7 +816,7 @@
              review = f"changes outside the docs allowlist: {', '.join(outside[:5])}"
          move(root, n, "landed")
          ci = [x for x in landed_paths if x.startswith(".github/")]

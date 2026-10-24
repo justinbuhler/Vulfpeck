@@ -84,7 +84,8 @@ RESET_SESSION = "task-loop"
 # definitions (skills, agents, instruction files) are not documentation, so `*.md` outside docs/
 # is not allowed; AGENTS.md and CLAUDE.md are read by the runtimes from any directory. Anything
 # else, renames and deletes included, is pushed and opened as a PR but ends `blocked` as `needs-review`.
-ALLOW = ("docs/**", "README.md")
+ALLOW = ("docs/**/*.md", "README.md")
+GIT_MIN = (2, 41)
 EXCEPT = ("**/AGENTS.md", "**/CLAUDE.md", "docs/agents/**")
 # Code that runs worker-controlled content (the worker, verification, the lander and its hooks)
 # holds none of the owner's tokens. This does not contain a hostile worker that runs as the owner:
@@ -938,11 +939,27 @@ def refuse_unsandboxed(cfg, args):
     return None
 
 
+def refuse_old_git():
+    """Exit status 2 when git predates `GIT_ATTR_SOURCE` (2.41: RelNotes 2.41.0 "--attr-source"), else None.
+
+    An older git ignores the variable, so a worktree .gitattributes filter would run on the host.
+    """
+    shown = sh(["git", "--version"]).stdout
+    found = re.search(r"(\d+)\.(\d+)", shown)
+    if found and (int(found[1]), int(found[2])) >= GIT_MIN:
+        return None
+    print(
+        f"task_loop: git 2.41 or newer is required (GIT_ATTR_SOURCE); found: {shown.strip() or 'no git'}",
+        file=sys.stderr,
+    )
+    return 2
+
+
 def cmd_run_one(root, cfg, args):
     """Run the next task, or with --dry-run print its commands."""
     if args.dry_run:
         return cmd_next(root, cfg, args)
-    if (refused := refuse_unsandboxed(cfg, args)) is not None:
+    if (refused := refuse_unsandboxed(cfg, args) or refuse_old_git()) is not None:
         return refused
     issue, how = next_issue(root, cfg)
     if issue is None:
@@ -958,7 +975,7 @@ def cmd_run(root, cfg, args):
     """Run the loop, or with --dry-run print the first task's commands."""
     if args.dry_run:
         return cmd_next(root, cfg, args)
-    if (refused := refuse_unsandboxed(cfg, args)) is not None:
+    if (refused := refuse_unsandboxed(cfg, args) or refuse_old_git()) is not None:
         return refused
     return run_loop(root, cfg)
 

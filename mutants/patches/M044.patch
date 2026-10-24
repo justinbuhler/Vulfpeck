@@ -4,7 +4,7 @@
 # behaviour: the branch is pushed with git hooks disabled
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -470,7 +470,7 @@
+@@ -471,7 +471,7 @@
          ("enqueue", wt, [*harness, "enqueue", "--task", task, "-m", commit_message(issue),
                           *[a for f in files for a in ("--file", f)]]),
          ("land", root, [*harness, "land", "--once", "--no-hooks"]),

@@ -4,7 +4,7 @@
 # behaviour: the worker's container is passed its one model key and no other host variable
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -331,7 +331,7 @@
+@@ -332,7 +332,7 @@
      `key_name`, when given, is inherited by name from the process environment, so the value of
      the key is never in this argv (`sandbox_env` supplies it). Verification gets no key at all.
      """

@@ -78,6 +78,7 @@ shift
 exec "$@"
 """,
     "git": """#!/bin/sh
+if [ "$1" = --version ] && [ -n "$FAKE_GIT_VERSION" ]; then echo "git version $FAKE_GIT_VERSION"; exit 0; fi
 for a; do
   case "$a" in push|commit|add) echo "$a ${GIT_ATTR_SOURCE-unset}" >> "$SHIM_DIR/git-attr.txt";; esac
   if [ "$a" = push ]; then echo "git $*" >> "$SHIM_LOG"; exit 0; fi
@@ -117,6 +118,7 @@ FAKE_VARS = (
     "FAKE_WORKER_EXTRA",
     "FAKE_TIMELINE_FILE",
     "FAKE_CONTAINER_MODE",
+    "FAKE_GIT_VERSION",
 )
 os.environ["PATH"] = f"{SHIMS}{os.pathsep}{os.environ['PATH']}"
 os.environ["REAL_GIT"] = REAL_GIT
@@ -957,6 +959,7 @@ for path in (
     "README.md",
     "docs/sub/deep/x.md",
     "docs/adr/0001-x.md",
+    "docs/a/b.md",
 ):
     repo, log, ev = scenario([], FAKE_WORKER_EXTRA=write(path))
     final = attempt(110, repo)
@@ -970,6 +973,7 @@ HELD = (
     "scripts/guard_lib.py", "scripts/hook_adapter.py", "pyproject.toml", "uv.lock", "ruff.toml", ".python-version",
     "scripts/github_bootstrap.sh", "scripts/x.py", "src/app.py",
     ".agents/skills/review/SKILL.md", ".claude/agents/x.md", "foo/README.md", "pkg/notes.md", "docs/sub/AGENTS.md",
+    "docs/.gitattributes", "docs/ruff.toml", "docs/x.py",
 )  # fmt: skip
 for path in HELD:
     repo, log, ev = scenario([], FAKE_WORKER_EXTRA=write(path))
@@ -1083,6 +1087,20 @@ check(
 )
 
 # M2: ignore rules come from the base commit.
+# The ignore rules are the base commit's, not the main checkout's file, which the worker can edit.
+repo, log, ev = scenario(
+    [],
+    ignore="tmp/\noutput/\n",
+    FAKE_WORKER_EXTRA="mkdir -p output; echo '{}' > output/confidential.json; printf 'tmp/\\n' > .gitignore; printf 'tmp/\\n' > {repo}/.gitignore",
+)
+os.environ["FAKE_WORKER_EXTRA"] = os.environ["FAKE_WORKER_EXTRA"].replace(
+    "{repo}", str(repo)
+)
+final = attempt(130, repo)
+st = task_loop.load(repo, 130)
+check("IGNORE: a worker that edits the main checkout's ignore file still cannot commit an ignored input",
+      final == "failed" and "output/confidential.json" in st["reason"] and "push" not in log.read_text(), f"{final} {st['reason']}")  # fmt: skip
+
 repo, log, ev = scenario(
     [],
     ignore="tmp/\ndocs/private/\n",
@@ -1352,6 +1370,23 @@ else:
     print(
         "  SKIP ATTR: git-lfs with a global filter.lfs.clean is not installed on this host"
     )
+
+# `GIT_ATTR_SOURCE` needs git 2.41 (RelNotes 2.41.0: "git --attr-source=<tree>"); an older git ignores it.
+repo, log, ev = scenario([])
+for command in ("run", "run-one"):
+    for version, ok in (
+        ("2.40.1", False),
+        ("2.41.0", True),
+        ("2.9.5", False),
+        ("3.0.0", True),
+    ):
+        os.environ["FAKE_GIT_VERSION"] = version
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code, out = quiet(task_loop.main, [command], repo)
+        check(f"GITVER: `{command}` with git {version} {'starts' if ok else 'is refused naming 2.41'}",
+              (code == 0 and "queue empty" in out) if ok else (code == 2 and "2.41" in err.getvalue() and "queue empty" not in out), f"{code} {err.getvalue()}")  # fmt: skip
+os.environ.pop("FAKE_GIT_VERSION")
 
 # The default is the sandbox; "none" needs --unsandboxed and prints a warning.
 repo, log, ev = scenario([])
