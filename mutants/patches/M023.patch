@@ -4,12 +4,12 @@
 # behaviour: a component covers only the path it names
 --- a/scripts/adr.py
 +++ b/scripts/adr.py
-@@ -240,7 +240,7 @@
-     """
-     rel = rel.strip("/").lower()
-     return [r for r in records if r["status"] in COVERING
--            and any(not literal_problem(c) and c.strip("/").lower() == rel for c in r["components"])]
-+            and any(glob_match(c, rel) for c in r["components"])]
- 
- 
- def tracked(root):
+@@ -279,7 +279,7 @@ def covering(records, rel):
+         for r in records
+         if r["status"] in COVERING
+         and any(
+-            not literal_problem(c) and c.strip("/").lower() == rel
++            glob_match(c, rel)
+             for c in r["components"]
+         )
+     ]

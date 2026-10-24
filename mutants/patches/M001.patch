@@ -4,12 +4,12 @@
 # behaviour: an Explore agent is routed to Haiku
 --- a/.claude/hooks/model_router.py
 +++ b/.claude/hooks/model_router.py
-@@ -19,7 +19,7 @@
+@@ -20,7 +20,7 @@ from typing import Any
  # Literal copy of require_agent_model.INHERIT: importing it would let a failed import disable the hook.
  # tests/test_model_router_hook.py asserts the two sets are equal.
  INHERIT = {"", "inherit", "inherit_parent", "none", "null"}
 -HAIKU = {"Explore"}
 +HAIKU = set()
- SONNET = {"code-simplifier:code-simplifier", "pr-review-toolkit:code-simplifier"}
- SONNET_SUFFIX = "-engineer"  # `*-engineer` types are bounded implementation ...
- COORDINATORS = {  # ... except these coordination roles, which are left unlisted
+ SONNET = {
+     "code-simplifier:code-simplifier",
+     "pr-review-toolkit:code-simplifier",

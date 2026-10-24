@@ -4,12 +4,12 @@
 # behaviour: a denied Agent call is recorded
 --- a/.claude/hooks/model_router.py
 +++ b/.claude/hooks/model_router.py
-@@ -108,7 +108,7 @@
-             "permissionDecision": "deny",
-             "permissionDecisionReason": denial,
-         }}))
+@@ -130,7 +130,7 @@ def main() -> int:
+                 }
+             )
+         )
 -        record("model_router", "deny", "tier-mismatch", subject, payload)
 +        pass
      else:
-         record("model_router", "allow", "tier-match" if tier(kind) else "unlisted", subject, payload)
-     return 0
+         record(
+             "model_router",
