@@ -31,7 +31,7 @@ for t in tests/test_*.py */scripts/tests/test_*.py; do
       checks=$((checks + n))
     fi
   else
-    printf '  %-50s FAILED\n' "$t"; echo "$out" | tail -5; fail=1
+    printf '  %-50s FAILED\n' "$t"; echo "$out" | grep -E -A2 '^ +FAIL ' | head -40; echo "$out" | tail -5; fail=1
   fi
 done
 echo "  ${checks} checks total"
