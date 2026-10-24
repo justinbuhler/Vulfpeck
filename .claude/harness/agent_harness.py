@@ -435,7 +435,7 @@ def cmd_provision(args):
     if proc.returncode:
         die(f"git worktree add failed ({proc.returncode}): {proc.stderr.strip()}")
 
-    cloned = clone_ignored_inputs(path)
+    cloned = [] if args.no_inputs else clone_ignored_inputs(path)
 
     # Cloning ignored content can leave the worktree dirty, because some of the
     # rules that make it ignored live in untracked files. `.claude-flow/` is the
@@ -1066,7 +1066,11 @@ def cmd_land(args):
     try:
         print(
             f"lander pid {os.getpid()}, timeout {args.timeout}s; "
-            f"each commit is gated by its own worktree's hook"
+            + (
+                "commits run with no hooks"
+                if args.no_hooks
+                else "each commit is gated by its own worktree's hook"
+            )
         )
         while True:
             pending = sorted((root / "queue").glob("*.json"))
@@ -1216,6 +1220,11 @@ def build_parser():
     )
     p.add_argument("--path", required=True)
     p.add_argument("--branch")
+    p.add_argument(
+        "--no-inputs",
+        action="store_true",
+        help="clone no gitignored inputs, so no host-only file reaches the worktree",
+    )
     p.set_defaults(func=cmd_provision)
 
     p = sub.add_parser("enqueue", help="queue one commit request")

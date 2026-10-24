@@ -1,0 +1,30 @@
+# mutant_id: M049
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: verification runs for every change, not only an allowlisted one
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -742,14 +742,15 @@
+             if outside
+             else None
+         )
+-        lint = base_lint(root, base_sha)
+-        stage(
+-            verify_argv(cfg, wt, lint),
+-            wt,
+-            f"verify `{lint}`",
+-            VERIFY_TIMEOUT,
+-            untrusted=root,
+-        )
++        if review is None:
++            lint = base_lint(root, base_sha)
++            stage(
++                verify_argv(cfg, wt, lint),
++                wt,
++                f"verify `{lint}`",
++                VERIFY_TIMEOUT,
++                untrusted=root,
++            )
+         move(root, n, "verified", f"needs-review: {review}" if review else status)
+         enqueue = next(
+             argv

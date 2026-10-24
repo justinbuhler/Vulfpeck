@@ -320,7 +320,12 @@ def next_issue(root, cfg, ask_jev=True):
 # --- the commands one task runs ----------------------------------------------
 
 
-def container_argv(worktree, command, key_name=None):
+def box_name(worktree):
+    """The container's name: one worker VM per task worktree."""
+    return f"vulfpeck-{Path(worktree).name}"
+
+
+def container_argv(worktree, command, key_name=None, name=None):
     """`container run` for one command: the worktree is the only volume.
 
     `key_name`, when given, is inherited by name from the process environment, so the value of
@@ -331,6 +336,7 @@ def container_argv(worktree, command, key_name=None):
         "container",
         "run",
         "--rm",
+        *(["--name", name] if name else []),
         "--volume",
         f"{worktree}:{SANDBOX_MOUNT}",
         *env,
@@ -341,7 +347,9 @@ def container_argv(worktree, command, key_name=None):
 
 def sandbox_argv(cfg, worktree, worker_argv):
     """The worker's `container run`, holding its runtime's one model key."""
-    return container_argv(worktree, worker_argv, SANDBOX_KEYS[cfg["runtime"]][1])
+    return container_argv(
+        worktree, worker_argv, SANDBOX_KEYS[cfg["runtime"]][1], box_name(worktree)
+    )
 
 
 def verify_argv(cfg, worktree, lint):
@@ -456,9 +464,9 @@ def plan(
         ("timeline", root, ["gh", "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}",
                             "-F", f"number={n}", "-f", f"query={TIMELINE_QUERY}"]),
         ("fetch", root, ["git", "-C", root, "fetch", "origin", base]),
-        ("provision", root, [*harness, "provision", "--task", task, "--baseline", base_sha, "--path", wt]),
+        ("provision", root, [*harness, "provision", "--task", task, "--baseline", base_sha, "--path", wt, "--no-inputs"]),
         ("worker", wt, worker_command(cfg, issue, wt)),
-        ("verify", wt, [*verify_argv(cfg, wt, f"<commands.lint from {base_sha}:harness.toml>"), "(only when every path is on the allowlist)"]),
+        ("verify", wt, verify_argv(cfg, wt, f"<commands.lint from {base_sha}:harness.toml>")),
         ("enqueue", wt, [*harness, "enqueue", "--task", task, "-m", commit_message(issue),
                          *[a for f in files for a in ("--file", f)]]),
         ("land", root, [*harness, "land", "--once", "--no-hooks"]),
@@ -685,6 +693,8 @@ def execute(root, cfg, issue):
             root,
             "resolving the base",
         ).stdout.strip()
+        # A worktree .gitattributes with a filter (git-lfs) would run it in every host git command below.
+        os.environ["GIT_ATTR_SOURCE"] = base_sha
         plans = {
             name: (cwd, argv)
             for name, cwd, argv in plan(
@@ -709,6 +719,8 @@ def execute(root, cfg, issue):
             sh(plans["worker"][1], wt, WORKER_TIMEOUT, untrusted=root, extra_env=env),
             secret,
         )
+        if done.returncode == 124 and cfg["sandbox"] == "container":
+            sh(["container", "delete", "--force", box_name(wt)])
         if (wt / ".git").read_text() != link:
             raise Halt("failed", "the worker changed the worktree's .git link")
         status, note = parse_status(done.stdout)
@@ -730,15 +742,14 @@ def execute(root, cfg, issue):
             if outside
             else None
         )
-        if review is None:
-            lint = base_lint(root, base_sha)
-            stage(
-                verify_argv(cfg, wt, lint),
-                wt,
-                f"verify `{lint}`",
-                VERIFY_TIMEOUT,
-                untrusted=root,
-            )
+        lint = base_lint(root, base_sha)
+        stage(
+            verify_argv(cfg, wt, lint),
+            wt,
+            f"verify `{lint}`",
+            VERIFY_TIMEOUT,
+            untrusted=root,
+        )
         move(root, n, "verified", f"needs-review: {review}" if review else status)
         enqueue = next(
             argv
@@ -803,6 +814,12 @@ def execute(root, cfg, issue):
         if outside and review is None:
             review = f"changes outside the docs allowlist: {', '.join(outside[:5])}"
         move(root, n, "landed")
+        ci = [x for x in landed_paths if x.startswith(".github/")]
+        if ci:
+            raise Halt(
+                "blocked",
+                f"needs-review: the change touches CI and is not pushed: {', '.join(ci[:5])}",
+            )
         stage(plans["push"][1], wt, "git push")
         created = stage(plans["pr"][1], root, "gh pr create")
         found = re.search(r"/pull/(\d+)", created.stdout)
@@ -836,6 +853,8 @@ def execute(root, cfg, issue):
         move(root, n, "published", f"PR #{pr}")
     except Halt as halt:
         move(root, n, halt.state, halt.reason)
+    finally:
+        os.environ.pop("GIT_ATTR_SOURCE", None)
     return load(root, n)["state"]
 
 

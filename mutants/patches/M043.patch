@@ -4,8 +4,8 @@
 # behaviour: the lander commits with no hooks, so a worktree hook never runs on the host
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -461,7 +461,7 @@
-         ("verify", wt, [*verify_argv(cfg, wt, f"<commands.lint from {base_sha}:harness.toml>"), "(only when every path is on the allowlist)"]),
+@@ -469,7 +469,7 @@
+         ("verify", wt, verify_argv(cfg, wt, f"<commands.lint from {base_sha}:harness.toml>")),
          ("enqueue", wt, [*harness, "enqueue", "--task", task, "-m", commit_message(issue),
                           *[a for f in files for a in ("--file", f)]]),
 -        ("land", root, [*harness, "land", "--once", "--no-hooks"]),

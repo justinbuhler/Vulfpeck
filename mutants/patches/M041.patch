@@ -4,8 +4,8 @@
 # behaviour: the worker's container mounts only the task worktree, never the owner's home
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -333,6 +333,8 @@
-         "--rm",
+@@ -339,6 +339,8 @@
+         *(["--name", name] if name else []),
          "--volume",
          f"{worktree}:{SANDBOX_MOUNT}",
 +        "--volume",

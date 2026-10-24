@@ -4,10 +4,10 @@
 # behaviour: the base is the commit resolved after the fetch, not the origin ref the worker can repoint
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -604,6 +604,7 @@
-             root,
-             "resolving the base",
+@@ -695,6 +695,7 @@
          ).stdout.strip()
+         # A worktree .gitattributes with a filter (git-lfs) would run it in every host git command below.
+         os.environ["GIT_ATTR_SOURCE"] = base_sha
 +        base_sha = f"origin/{base}"
          plans = {
              name: (cwd, argv)
