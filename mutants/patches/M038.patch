@@ -1,0 +1,15 @@
+# mutant_id: M038
+# target: scripts/task_loop.py
+# operator: widen-catch
+# behaviour: SystemExit inside a task ends it failed instead of stranding it running
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -579,7 +579,7 @@
+             return execute(root, cfg, issue)
+         except KeyboardInterrupt:
+             raise
+-        except BaseException as exc:  # noqa: BLE001 - SystemExit from a helper must not strand the task
++        except Exception as exc:  # noqa: BLE001 - SystemExit from a helper must not strand the task
+             print(f"task_loop: #{n} crashed: {exc!r}", file=sys.stderr)
+             if "failed" in TRANSITIONS[load(root, n)["state"]]:
+                 move(root, n, "failed", f"{type(exc).__name__}: {exc}"[:300])

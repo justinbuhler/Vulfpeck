@@ -1,0 +1,14 @@
+# mutant_id: M033
+# target: scripts/task_loop.py
+# operator: ref-by-name
+# behaviour: the base is the commit resolved after the fetch, not the origin ref the worker can repoint
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -608,6 +608,7 @@
+             root,
+             "resolving the base",
+         ).stdout.strip()
++        base_sha = f"origin/{base}"
+         plans = {
+             name: (cwd, argv)
+             for name, cwd, argv in plan(

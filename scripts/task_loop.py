@@ -20,10 +20,11 @@ The queue is GitHub issues labelled `[loop] label`. Per issue, a state file unde
 Work happens in a worktree from `agent_harness.py provision`, one per attempt (`issue-N-aK`); the
 worker commits nothing, the runner queues its changed files and the harness lander commits them
 on the task branch (ORCH-03, ORCH-12: origin/main moves only by merging a pull request, so `land.sh`
-is not used here). The tier is judged from the BASE's harness.toml with this runner's own
-plan_tests, never the worktree's copies: a change at High or above, or one that touches the files
-that judge the gates, is pushed and opened as a PR but ends `blocked` as `needs-review` and is
-never merged. Otherwise the merge happens only when the PR's check list is non-empty and every
+is not used here). `origin/<base>` is resolved to a commit once after the fetch and only that commit is used
+afterwards. A change merges unattended only when every changed path is on the docs allowlist (ALLOW minus
+EXCEPT); anything else is pushed and opened as a PR but ends `blocked` as `needs-review` and is never merged.
+The worker, verification and the lander run without the owner's tokens (this does not contain a hostile worker
+running as the owner; see ADR 0018). Otherwise the merge happens only when the PR's check list is non-empty and every
 bucket is `pass`, bound to the landed commit. There is no `--auto`, and no `--dangerously-*`
 flag is ever passed.
 
@@ -39,6 +40,7 @@ import hashlib
 import json
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -75,14 +77,27 @@ CHECKS_TIMEOUT = 3600
 STOP_AFTER_BAD = 2  # consecutive tasks ending failed or blocked
 STOP_AFTER_FAILS = 2  # failures of one issue
 RESET_SESSION = "task-loop"
-# Changes that judge or configure the gates are never merged unattended, whatever the base's
-# harness.toml rates them. This table is deliberately not read from any harness.toml (Rule 11).
-NEEDS_REVIEW = (
-    ".gitignore", "**/.gitignore", "harness.toml", ".github/**", ".githooks/**", ".claude/**",
-    ".codex/**", ".gemini/**", "tests/**", "**/tests/**", "**/test_*.py",
-)  # fmt: skip
-# The worker never holds the owner's GitHub or ssh credentials.
-WORKER_ENV_DROP = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "SSH_AUTH_SOCK")
+# The only changes merged unattended: every changed path matches ALLOW and none matches EXCEPT.
+# Hard-coded here, never read from any harness.toml or the worktree (Rule 11). Anything else,
+# renames and deletes included, is pushed and opened as a PR but ends `blocked` as `needs-review`.
+ALLOW = ("docs/**", "**/*.md")
+EXCEPT = (
+    "AGENTS.md",
+    "CLAUDE.md",
+    "HARNESS.md",
+    "**/AGENTS.md",
+    "**/CLAUDE.md",
+    "docs/agents/**",
+)
+# Code that runs worker-controlled content (the worker, verification, the lander and its hooks)
+# holds none of the owner's tokens. This does not contain a hostile worker that runs as the owner:
+# keyring entries and ssh keys on disk stay reachable (ADR 0018).
+UNTRUSTED_ENV_DROP = (
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "SSH_AUTH_SOCK",
+)
 
 
 class IllegalTransition(ValueError):
@@ -97,18 +112,25 @@ class Halt(Exception):
         self.state, self.reason = state, reason
 
 
-def sh(argv, cwd=None, timeout=None, drop_env=()):
+def sh(argv, cwd=None, timeout=None, untrusted=None):
     """Run one external command and return its CompletedProcess; the only exit from this script.
 
     A timeout or a missing program becomes a non-zero result rather than an exception, so the
     stage that called it reports the failure. A `--dangerously-*` argument raises: no runtime
-    is ever started with its safety checks off.
+    is ever started with its safety checks off. `untrusted` is the repo root when the command
+    runs worker-controlled code: it gets no GitHub or ssh credentials, an empty `gh` config
+    directory and no system git config.
     """
     if any(str(a).startswith("--dangerously") for a in argv):
         raise ValueError(
             f"refusing a --dangerously-* flag: {shlex.join(map(str, argv))}"
         )
-    env = {k: v for k, v in agent_harness.clean_env().items() if k not in drop_env}
+    env = agent_harness.clean_env()
+    if untrusted is not None:
+        env = {k: v for k, v in env.items() if k not in UNTRUSTED_ENV_DROP}
+        empty = Path(untrusted) / "tmp" / "loop" / "gh-empty"
+        empty.mkdir(parents=True, exist_ok=True)
+        env.update(GH_CONFIG_DIR=str(empty), GIT_CONFIG_NOSYSTEM="1")
     try:
         return subprocess.run(
             [str(a) for a in argv],
@@ -342,10 +364,12 @@ def plan(
     pr="<pr>",
     sha="<landed sha>",
     attempt=1,
+    base_sha="<base sha>",
 ):
     """Every command one task runs, in order, as (stage, cwd, argv).
 
-    `verify` is run in-process (see `assess`) and is listed here as a description only.
+    `verify` is run in-process and is listed here as a description only. `base_sha` is
+    `origin/<base>` resolved once after the fetch; no later stage reads the ref by name.
     """
     n = issue["number"]
     task, base = f"issue-{n}-a{attempt}", cfg["base"]
@@ -355,14 +379,13 @@ def plan(
         ("timeline", root, ["gh", "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}",
                             "-F", f"number={n}", "-f", f"query={TIMELINE_QUERY}"]),
         ("fetch", root, ["git", "-C", root, "fetch", "origin", base]),
-        ("provision", root, [*harness, "provision", "--task", task, "--baseline", f"origin/{base}", "--path", wt]),
+        ("provision", root, [*harness, "provision", "--task", task, "--baseline", base_sha, "--path", wt]),
         ("worker", wt, [*shlex.split(cfg["workers"][cfg["runtime"]]), brief(issue, wt)]),
-        ("verify", wt, ["(in-process)", "plan_tests.plan", f"tiers=origin/{base}:harness.toml",
-                        f"diff=origin/{base}..{wt}", "then", "each planned command"]),
+        ("verify", wt, ["(in-process)", f"{base_sha}:harness.toml", "commands.lint", "when every path is on the allowlist"]),
         ("enqueue", wt, [*harness, "enqueue", "--task", task, "-m", commit_message(issue),
                          *[a for f in files for a in ("--file", f)]]),
         ("land", root, [*harness, "land", "--once"]),
-        ("push", wt, ["git", "-C", wt, "push", "-u", "origin", f"agent/{task}"]),
+        ("push", wt, ["git", "-c", "core.hooksPath=/dev/null", "-C", wt, "push", "-u", "origin", f"agent/{task}"]),
         ("pr", root, ["gh", "pr", "create", "--base", base, "--head", f"agent/{task}", "--title", issue["title"],
                       "--body", f"Closes #{n}", "-a", "@me"]),
         ("head", root, ["gh", "pr", "view", pr, "--json", "headRefOid", "-q", ".headRefOid"]),
@@ -380,9 +403,9 @@ def show(stages):
         print(f"  {stage:<9} (in {cwd}) {shlex.join(map(str, argv))}")
 
 
-def stage(argv, cwd, what, timeout=None):
+def stage(argv, cwd, what, timeout=None, untrusted=None):
     """Run a command that must succeed; a non-zero exit halts the task as failed."""
-    done = sh(argv, cwd, timeout)
+    done = sh(argv, cwd, timeout, untrusted)
     if done.returncode:
         raise Halt("failed", f"{what} exited {done.returncode}: {tail(done)}")
     return done
@@ -422,68 +445,74 @@ def stale_issue_text(root, cfg, stages):
     return None
 
 
-def assess(root, cfg, worktree):
-    """(commands to run, reason the change needs an owner's review or None).
+def outside_allowlist(paths):
+    """The changed paths that are not on the unattended-merge allowlist (ALLOW minus EXCEPT)."""
+    return [
+        p
+        for p in paths
+        if not any(glob_match(g, p) for g in ALLOW)
+        or any(glob_match(g, p) for g in EXCEPT)
+    ]
 
-    The tier comes from the BASE branch's harness.toml and this runner's own plan_tests, never
-    from the worktree's copies, which the worker can rewrite (Rule 11).
-    """
-    base = f"origin/{cfg['base']}"
-    shown = sh(["git", "-C", root, "show", f"{base}:harness.toml"])
+
+def base_lint(root, base_sha):
+    """`commands.lint` from harness.toml as it is at the pinned base commit, never the worktree's."""
+    shown = sh(["git", "-C", root, "show", f"{base_sha}:harness.toml"])
     config = harness_config.merge(
         tomllib.loads(shown.stdout) if shown.returncode == 0 else {}
     )
-    changed = plan_tests.change(worktree, base)
-    paths = changed["paths"]
-    verdict = jev.consequence(
-        paths,
-        "; ".join(changed["subjects"]),
-        stats=changed["stats"],
-        symbols=changed["symbols"],
-        tiers=config["tiers"],
-    )
-    result = plan_tests.plan(worktree, verdict["tier"], paths, config)
-    sensitive = [p for p in paths if any(glob_match(g, p) for g in NEEDS_REVIEW)]
-    if jev.TIERS.index(verdict["tier"]) >= jev.TIERS.index("High"):
-        why = f"tier {verdict['tier']} (set by {', '.join(verdict['floor_paths'][:3])})"
-    elif verdict["status"] == "referred":
-        why = f"Jev referral: {verdict['reason']}"
-    elif any("adversarial review owns" in note for note in result["notes"]):
-        why = "adversarial review owns a gap in the checks"
-    elif sensitive:
-        why = f"changes {', '.join(sensitive[:5])}, which judge or configure the gates"
-    else:
-        return result["commands"], None
-    return result["commands"], why
+    return config["commands"]["lint"]
 
 
-def refuse_ignored(root, task, files):
-    """Halt when a changed path is ignored at the baseline or was cloned in from the main checkout.
+def refuse_ignored(root, base_sha, files, cloned):
+    """Halt when a changed path is ignored at the base commit or was cloned in from the main checkout.
 
-    The worktree's own .gitignore is the worker's to edit, so it cannot be the judge.
+    The ignore files are read from the pinned base commit into a scratch repository: the main
+    checkout's copies and the worktree's are the worker's to edit, and `cloned` is the list the
+    provisioner reported before the worker started.
     """
-    done = sh(
-        [
-            "git",
-            "-c",
-            "core.quotePath=false",
-            "-C",
-            root,
-            "check-ignore",
-            "--no-index",
-            "--",
-            *files,
-        ]
-    )
+    names = sh(["git", "-C", root, "ls-tree", "-r", "--name-only", "-z", base_sha])
+    if names.returncode:
+        raise Halt("failed", f"git ls-tree exited {names.returncode}: {tail(names)}")
+    scratch = Path(root) / "tmp" / "loop" / "ignore-rules"
+    shutil.rmtree(scratch, ignore_errors=True)
+    scratch.mkdir(parents=True)
+    try:
+        stage(["git", "init", "-q", scratch], root, "git init")
+        for name in files:
+            (scratch / name).parent.mkdir(parents=True, exist_ok=True)
+            (scratch / name).touch()
+        for name in (
+            n for n in names.stdout.split("\0") if Path(n).name == ".gitignore"
+        ):
+            shown = stage(
+                ["git", "-C", root, "show", f"{base_sha}:{name}"], root, "git show"
+            )
+            (scratch / name).parent.mkdir(parents=True, exist_ok=True)
+            (scratch / name).write_text(shown.stdout)
+        done = sh(
+            [
+                "git",
+                "-c",
+                "core.quotePath=false",
+                "-C",
+                scratch,
+                "check-ignore",
+                "--no-index",
+                "--",
+                *files,
+            ]
+        )
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
     if done.returncode not in (0, 1):
         raise Halt("failed", f"git check-ignore exited {done.returncode}: {tail(done)}")
-    manifest = json.loads((harness_dir(root) / "tasks" / f"{task}.json").read_text())
-    cloned = [c.rstrip("/") for c in manifest["cloned_inputs"]]
+    ignored = set(done.stdout.splitlines())
+    roots = [c.rstrip("/") for c in cloned]
     bad = [
         f
         for f in files
-        if f in done.stdout.splitlines()
-        or any(f == c or f.startswith(c + "/") for c in cloned)
+        if f in ignored or any(f == c or f.startswith(c + "/") for c in roots)
     ]
     if bad:
         raise Halt(
@@ -548,7 +577,9 @@ def run_one(root, cfg, issue):
         ensure(root, issue)
         try:
             return execute(root, cfg, issue)
-        except Exception as exc:  # noqa: BLE001 - the state file, not a traceback, is the record
+        except KeyboardInterrupt:
+            raise
+        except BaseException as exc:  # noqa: BLE001 - SystemExit from a helper must not strand the task
             print(f"task_loop: #{n} crashed: {exc!r}", file=sys.stderr)
             if "failed" in TRANSITIONS[load(root, n)["state"]]:
                 move(root, n, "failed", f"{type(exc).__name__}: {exc}"[:300])
@@ -564,13 +595,30 @@ def execute(root, cfg, issue):
         name: (cwd, argv) for name, cwd, argv in plan(root, cfg, issue, attempt=attempt)
     }
     wt = plans["worker"][0]
+    base = cfg["base"]
     move(root, n, "running")
     try:
         why = stale_issue_text(root, cfg, plans)
         if why:
             raise Halt("blocked", why)
         stage(plans["fetch"][1], root, "git fetch")
+        # Resolved once; the worker can repoint refs/remotes/origin/*, so no later stage reads the name.
+        base_sha = stage(
+            ["git", "-C", root, "rev-parse", "--verify", f"origin/{base}^{{commit}}"],
+            root,
+            "resolving the base",
+        ).stdout.strip()
+        plans = {
+            name: (cwd, argv)
+            for name, cwd, argv in plan(
+                root, cfg, issue, attempt=attempt, base_sha=base_sha
+            )
+        }
         stage(plans["provision"][1], root, "provision")
+        manifest = json.loads(
+            (harness_dir(root) / "tasks" / f"{task}.json").read_text()
+        )
+        cloned = list(manifest["cloned_inputs"])
         if cfg["runtime"] == "codex":
             drift = harness_doctor.codex_main_hooks(wt)
             if drift:
@@ -578,7 +626,7 @@ def execute(root, cfg, issue):
                     "blocked",
                     f"codex would run without hook gates: main's .codex/hooks.json is {drift}",
                 )
-        done = sh(plans["worker"][1], wt, WORKER_TIMEOUT, drop_env=WORKER_ENV_DROP)
+        done = sh(plans["worker"][1], wt, WORKER_TIMEOUT, untrusted=root)
         status, note = parse_status(done.stdout)
         if status in ("NEEDS_CONTEXT", "BLOCKED"):
             raise Halt("blocked", f"{status}: {note}")
@@ -587,28 +635,37 @@ def execute(root, cfg, issue):
                 "failed",
                 f"worker exited {done.returncode} with status {status}: {tail(done)}",
             )
-        commands, review = assess(root, cfg, wt)
-        if review is None:
-            for item in commands:
-                stage(
-                    ["bash", "-c", item["command"]],
-                    wt,
-                    f"verify `{item['command']}`",
-                    VERIFY_TIMEOUT,
-                )
-        move(root, n, "verified", f"needs-review: {review}" if review else status)
         files = changed_files(wt)
         if not files:
             raise Halt("failed", "the worker changed nothing")
-        refuse_ignored(root, task, files)
+        paths = sorted(set(plan_tests.change(wt, base_sha)["paths"]) | set(files))
+        refuse_ignored(root, base_sha, paths, cloned)
+        outside = outside_allowlist(paths)
+        review = (
+            f"changes outside the docs allowlist: {', '.join(outside[:5])}"
+            if outside
+            else None
+        )
+        if review is None:
+            lint = base_lint(root, base_sha)
+            stage(
+                ["bash", "-c", lint],
+                wt,
+                f"verify `{lint}`",
+                VERIFY_TIMEOUT,
+                untrusted=root,
+            )
+        move(root, n, "verified", f"needs-review: {review}" if review else status)
         enqueue = next(
             argv
-            for name, _, argv in plan(root, cfg, issue, files, attempt=attempt)
+            for name, _, argv in plan(
+                root, cfg, issue, files, attempt=attempt, base_sha=base_sha
+            )
             if name == "enqueue"
         )
         queued = re.search(r"queued (\S+)", stage(enqueue, wt, "enqueue").stdout)
         sh(
-            plans["land"][1], root, LAND_TIMEOUT
+            plans["land"][1], root, LAND_TIMEOUT, untrusted=root
         )  # its exit code covers the whole shared queue
         row = next(
             (

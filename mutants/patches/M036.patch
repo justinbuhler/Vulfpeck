@@ -1,0 +1,15 @@
+# mutant_id: M036
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: the worktree HEAD must be the landed commit before the push
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -681,7 +681,7 @@
+                 f"land: {(row or {}).get('detail') or 'no ledger row for this request'}",
+             )
+         sha = row["sha"]
+-        if sh(["git", "-C", wt, "rev-parse", "HEAD"]).stdout.strip() != sha:
++        if sh(["git", "-C", wt, "rev-parse", "HEAD"]).stdout.strip() != sha and False:
+             raise Halt(
+                 "failed", f"the worktree HEAD is not the landed commit {sha[:9]}"
+             )
