@@ -62,9 +62,17 @@ LOCK_BACKOFF_MAX = 8.0
 # rather than on its own. That is not hypothetical: it moved a branch ref to a
 # test fixture commit while the gate printed only "verify failed", so the visible
 # signal was an ordinary red gate. Scrub them on every call.
-GIT_ENV_LEAKS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX",
-                 "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-                 "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES")
+GIT_ENV_LEAKS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_PREFIX",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_CEILING_DIRECTORIES",
+)
 
 
 def clean_env():
@@ -102,8 +110,14 @@ def git(*args, cwd=None, timeout=120):
     Returns:
         (subprocess.CompletedProcess): captured stdout, stderr and exit code.
     """
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True,
-                          text=True, timeout=timeout, env=clean_env())
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=clean_env(),
+    )
 
 
 def git_ok(*args, **kwargs):
@@ -153,7 +167,8 @@ def task_name(value):
     if not isinstance(value, str) or not TASK_NAME.fullmatch(value) or ".." in value:
         raise argparse.ArgumentTypeError(
             f"invalid task name {value!r}: letters, digits, '.', '_' and '-' only, "
-            "starting with a letter or digit, no '..'")
+            "starting with a letter or digit, no '..'"
+        )
     return value
 
 
@@ -211,6 +226,7 @@ def read_ledger(root):
 
 # --- provision ---------------------------------------------------------------
 
+
 def refuse_if_dirty(path):
     """Exit unless `path` is free for a new worktree.
 
@@ -231,8 +247,10 @@ def refuse_if_dirty(path):
     if dirty is None:
         die(f"target directory is not empty ({len(entries)} entries): {path}")
     if dirty:
-        die(f"target is an existing worktree with {len(dirty)} uncommitted "
-            f"path(s); land or discard them first: {path}")
+        die(
+            f"target is an existing worktree with {len(dirty)} uncommitted "
+            f"path(s); land or discard them first: {path}"
+        )
     die(f"target is an existing clean worktree; provision a new path: {path}")
 
 
@@ -243,8 +261,14 @@ def refuse_if_dirty(path):
 # no network and no keys, so a scratch worktree has no reason to carry them.
 # The rest are caches that uv and the interpreter rebuild.
 NEVER_CLONE = (".env", ".claude/worktrees", ".venv", ".git", ".claude-flow")
-CACHE_NAMES = {"__pycache__", ".pytest_cache", ".ruff_cache", ".DS_Store",
-               ".mypy_cache", "node_modules"}
+CACHE_NAMES = {
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".DS_Store",
+    ".mypy_cache",
+    "node_modules",
+}
 
 
 def clonable(rel):
@@ -270,8 +294,15 @@ def ignored_inputs(source):
     Returns:
         (list): absolute paths, each an ignored file or directory to clone.
     """
-    listed = git_ok("-C", str(source), "ls-files", "--others", "--ignored",
-                    "--exclude-standard", "--directory")
+    listed = git_ok(
+        "-C",
+        str(source),
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--directory",
+    )
     paths = []
     for line in listed.splitlines():
         rel = line.strip().rstrip("/")
@@ -352,18 +383,28 @@ def clone_ignored_inputs(worktree):
         dst = worktree / rel
         if src.is_dir():
             dst.mkdir(parents=True, exist_ok=True)
-            subprocess.run([*clone_argv("-R", "-n"), f"{src}/.", f"{dst}/"],
-                           capture_output=True, text=True, timeout=900,
-                           env=clean_env())
+            subprocess.run(
+                [*clone_argv("-R", "-n"), f"{src}/.", f"{dst}/"],
+                capture_output=True,
+                text=True,
+                timeout=900,
+                env=clean_env(),
+            )
             missing = missing_after_clone(src, dst)
             if missing:
-                die(f"cloning {rel} left {len(missing)} file(s) behind, "
-                    f"first: {missing[0]}")
+                die(
+                    f"cloning {rel} left {len(missing)} file(s) behind, "
+                    f"first: {missing[0]}"
+                )
         elif src.is_file():
             dst.parent.mkdir(parents=True, exist_ok=True)
             if not os.path.lexists(dst):
-                subprocess.run([*clone_argv(), str(src), str(dst)],
-                               capture_output=True, text=True, timeout=900)
+                subprocess.run(
+                    [*clone_argv(), str(src), str(dst)],
+                    capture_output=True,
+                    text=True,
+                    timeout=900,
+                )
             if not os.path.lexists(dst):
                 die(f"cloning {rel} into the worktree produced no file")
         else:
@@ -403,10 +444,12 @@ def cmd_provision(args):
     # the provisioner's.
     dirt = porcelain(path) or []
     if dirt:
-        die(f"provisioning left {len(dirt)} untracked path(s) in {path}; the "
+        die(
+            f"provisioning left {len(dirt)} untracked path(s) in {path}; the "
             f"clone carried content whose ignore rule it did not: "
             f"{', '.join(line[3:] for line in dirt[:5])}. "
-            f"Remove that worktree before retrying.")
+            f"Remove that worktree before retrying."
+        )
 
     # The worktree's code is pinned to a commit; its inputs are a snapshot of a
     # checkout that is still being edited. Nothing links the two, because the
@@ -449,19 +492,26 @@ def cmd_provision(args):
     print(f"  baseline  {args.baseline} -> {baseline_sha}")
     print(f"  inputs    {len(cloned)} ignored paths cloned from {source}")
     if source_head != baseline_sha:
-        print(f"  WARNING   inputs come from {source_head[:9]}, "
-              f"not the baseline {baseline_sha[:9]}")
+        print(
+            f"  WARNING   inputs come from {source_head[:9]}, "
+            f"not the baseline {baseline_sha[:9]}"
+        )
     if source_dirt:
-        print(f"  WARNING   that checkout has {len(source_dirt)} uncommitted "
-              f"path(s); a gate failure may be input skew, not this task")
+        print(
+            f"  WARNING   that checkout has {len(source_dirt)} uncommitted "
+            f"path(s); a gate failure may be input skew, not this task"
+        )
     if foreign_gate:
-        print(f"  WARNING   this worktree's gate is {gate_hook}, which is outside "
-              f"it, so it commits under a hook from another checkout. Clear it "
-              f"with: git -C {path} config --worktree --unset core.hooksPath")
+        print(
+            f"  WARNING   this worktree's gate is {gate_hook}, which is outside "
+            f"it, so it commits under a hook from another checkout. Clear it "
+            f"with: git -C {path} config --worktree --unset core.hooksPath"
+        )
     return 0
 
 
 # --- enqueue -----------------------------------------------------------------
+
 
 def cmd_enqueue(args):
     """Record one commit request for the lander to consume."""
@@ -506,6 +556,7 @@ def cmd_enqueue(args):
 
 # --- land --------------------------------------------------------------------
 
+
 def resolve_gate(worktree):
     """Return the pre-commit hook that will really run in one worktree.
 
@@ -531,16 +582,22 @@ def resolve_gate(worktree):
     Returns:
         (tuple): (hooks directory, pre-commit hook, problem or None).
     """
-    proc = git("rev-parse", "--path-format=absolute", "--git-path", "hooks",
-               cwd=worktree)
+    proc = git(
+        "rev-parse", "--path-format=absolute", "--git-path", "hooks", cwd=worktree
+    )
     if proc.returncode:
         return None, None, f"cannot resolve the hooks path: {proc.stderr.strip()}"
     directory = Path(proc.stdout.strip())
     hook = directory / "pre-commit"
     if not (hook.is_file() and os.access(hook, os.X_OK)):
-        return directory, hook, (
-            f"the pre-commit gate is not wired for this worktree ({hook} is "
-            f"missing or not executable); run: git config core.hooksPath .githooks")
+        return (
+            directory,
+            hook,
+            (
+                f"the pre-commit gate is not wired for this worktree ({hook} is "
+                f"missing or not executable); run: git config core.hooksPath .githooks"
+            ),
+        )
     return directory, hook, None
 
 
@@ -622,8 +679,14 @@ def run_in_group(argv, timeout):
             so a timed-out gate leaves nothing behind.
     """
     global _child_pgid
-    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, env=clean_env(), start_new_session=True)
+    proc = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=clean_env(),
+        start_new_session=True,
+    )
     # start_new_session makes the child its own group leader. getpgid() would say
     # the same, except that on macOS it raises ESRCH for a child that has already
     # exited but is not yet reaped - a `git add` that fails at once on index.lock.
@@ -744,7 +807,12 @@ def verify_landed(worktree, message, before_sha):
     """
     proc = git("log", "--oneline", "-1", cwd=worktree)
     if proc.returncode:
-        return False, None, "", f"git log failed ({proc.returncode}): {proc.stderr.strip()}"
+        return (
+            False,
+            None,
+            "",
+            f"git log failed ({proc.returncode}): {proc.stderr.strip()}",
+        )
     oneline = proc.stdout.strip()
     short_sha, _, subject = oneline.partition(" ")
     sha = head_sha(worktree)
@@ -769,7 +837,7 @@ def land_one(root, request_path, timeout, lock_tries=LOCK_TRIES):
     request = json.loads(request_path.read_text())
     worktree = Path(request["worktree"])
     record = {
-        "ts": now(),          # attempt started; `finished` is added on write
+        "ts": now(),  # attempt started; `finished` is added on write
         "task": request["task"],
         "request": request_path.name,
         "worktree": str(worktree),
@@ -798,8 +866,9 @@ def land_one(root, request_path, timeout, lock_tries=LOCK_TRIES):
     # somebody else's branch.
     branch = git("rev-parse", "--abbrev-ref", "HEAD", cwd=worktree).stdout.strip()
     if branch != request["branch"]:
-        return fail(f"worktree is on branch {branch!r}, request expects "
-                    f"{request['branch']!r}")
+        return fail(
+            f"worktree is on branch {branch!r}, request expects {request['branch']!r}"
+        )
 
     # Resolved here, from this worktree, so the hook that runs is this
     # worktree's own and the ledger names the exact file that gated the commit.
@@ -828,39 +897,66 @@ def land_one(root, request_path, timeout, lock_tries=LOCK_TRIES):
         return fail(f"no readable manifest for task {request['task']!r}: {exc}")
     for field in ("worktree", "branch", "baseline_sha"):
         if str(request.get(field)) != str(manifest.get(field)):
-            return fail(f"request {field} {request.get(field)!r} does not match the task "
-                        f"manifest's {manifest.get(field)!r}")
-    landed = [r for r in read_ledger(root)
-              if r.get("task") == request["task"] and r.get("status") == "LANDED"]
+            return fail(
+                f"request {field} {request.get(field)!r} does not match the task "
+                f"manifest's {manifest.get(field)!r}"
+            )
+    landed = [
+        r
+        for r in read_ledger(root)
+        if r.get("task") == request["task"] and r.get("status") == "LANDED"
+    ]
     expected = landed[-1]["sha"] if landed else manifest["baseline_sha"]
     if before_sha != expected:
-        return fail(f"HEAD is {str(before_sha)[:9]}, expected {expected[:9]} (the task's "
-                    f"last landed commit or baseline): a commit was made outside the "
-                    f"queue; agents enqueue, they never commit")
+        return fail(
+            f"HEAD is {str(before_sha)[:9]}, expected {expected[:9]} (the task's "
+            f"last landed commit or baseline): a commit was made outside the "
+            f"queue; agents enqueue, they never commit"
+        )
 
     # The request file is agent-written, so the enqueue checks are repeated here.
     for name in request["files"]:
         if not isinstance(name, str) or set("*?[") & set(name) or name.startswith(":"):
-            return fail(f"queued path {name!r} is not one literal file inside the worktree")
+            return fail(
+                f"queued path {name!r} is not one literal file inside the worktree"
+            )
         target = (worktree / name).resolve()
-        if (not target.is_relative_to(worktree.resolve()) or target == worktree.resolve()
-                or target.is_dir()):
-            return fail(f"queued path {name!r} is not one literal file inside the worktree")
+        if (
+            not target.is_relative_to(worktree.resolve())
+            or target == worktree.resolve()
+            or target.is_dir()
+        ):
+            return fail(
+                f"queued path {name!r} is not one literal file inside the worktree"
+            )
 
     # The agent's own index is not the queue. Anything staged there that the
     # request does not name would ride along in a pathspec-less commit.
     # --no-renames: a staged rename must show both its source and its target.
-    staged = git("diff", "--cached", "--name-only", "--no-renames", "-z",
-                 cwd=worktree).stdout.split("\0")
+    staged = git(
+        "diff", "--cached", "--name-only", "--no-renames", "-z", cwd=worktree
+    ).stdout.split("\0")
     queued = {Path(f).as_posix() for f in request["files"]}
     extra = sorted(p for p in staged if p and p not in queued)
     if extra:
-        return fail(f"the worktree index holds staged changes nobody queued: "
-                    f"{', '.join(extra[:5])}; agents enqueue, they never stage")
+        return fail(
+            f"the worktree index holds staged changes nobody queued: "
+            f"{', '.join(extra[:5])}; agents enqueue, they never stage"
+        )
 
     add, add_retries = with_lock_backoff(
-        ["git", "--literal-pathspecs", "-C", str(worktree), "add", "--", *request["files"]],
-        timeout, lock_tries)
+        [
+            "git",
+            "--literal-pathspecs",
+            "-C",
+            str(worktree),
+            "add",
+            "--",
+            *request["files"],
+        ],
+        timeout,
+        lock_tries,
+    )
     record["lock_retries"] += add_retries
     if add.returncode:
         return fail(f"git add exited {add.returncode}", add.stderr, add.returncode)
@@ -869,13 +965,30 @@ def land_one(root, request_path, timeout, lock_tries=LOCK_TRIES):
         commit, commit_retries = with_lock_backoff(
             # Literal: the request file is agent-written, so a pattern that got
             # past enqueue still names only a file of that exact name.
-            ["git", "--literal-pathspecs", "-c", f"core.hooksPath={hooks_dir}", "-C", str(worktree),
-             "commit", "-m", request["message"], "--only", "--", *request["files"]],
-            timeout, lock_tries)
+            [
+                "git",
+                "--literal-pathspecs",
+                "-c",
+                f"core.hooksPath={hooks_dir}",
+                "-C",
+                str(worktree),
+                "commit",
+                "-m",
+                request["message"],
+                "--only",
+                "--",
+                *request["files"],
+            ],
+            timeout,
+            lock_tries,
+        )
     except subprocess.TimeoutExpired as expired:
-        return fail(f"the pre-commit gate exceeded {timeout}s",
-                    (expired.stderr or b"").decode(errors="replace")
-                    if isinstance(expired.stderr, bytes) else (expired.stderr or ""))
+        return fail(
+            f"the pre-commit gate exceeded {timeout}s",
+            (expired.stderr or b"").decode(errors="replace")
+            if isinstance(expired.stderr, bytes)
+            else (expired.stderr or ""),
+        )
     record["lock_retries"] += commit_retries
     record["exit_code"] = commit.returncode
 
@@ -888,21 +1001,31 @@ def land_one(root, request_path, timeout, lock_tries=LOCK_TRIES):
         after = head_sha(worktree)
         moved = ""
         if after and before_sha and after != before_sha:
-            moved = (f"; HEAD moved from {before_sha[:9]} to {after[:9]} even though "
-                     f"the commit failed, so something inside the gate wrote to "
-                     f"{request['branch']}")
-        return fail(f"git commit exited {commit.returncode} after "
-                    f"{commit_retries} lock retries{moved}",
-                    commit.stderr, commit.returncode)
+            moved = (
+                f"; HEAD moved from {before_sha[:9]} to {after[:9]} even though "
+                f"the commit failed, so something inside the gate wrote to "
+                f"{request['branch']}"
+            )
+        return fail(
+            f"git commit exited {commit.returncode} after "
+            f"{commit_retries} lock retries{moved}",
+            commit.stderr,
+            commit.returncode,
+        )
 
-    landed, sha, oneline, detail = verify_landed(worktree, request["message"], before_sha)
+    landed, sha, oneline, detail = verify_landed(
+        worktree, request["message"], before_sha
+    )
     record.update(sha=sha, oneline=oneline)
     if not landed:
         # The exit code said yes and the log says no. That gap is the whole
         # reason this check exists, so it is recorded as a failure with the
         # commit's own stderr attached.
-        return fail(f"commit reported success but verification failed: {detail}",
-                    commit.stderr, commit.returncode)
+        return fail(
+            f"commit reported success but verification failed: {detail}",
+            commit.stderr,
+            commit.returncode,
+        )
 
     record.update(status="LANDED", detail="")
     record["stderr"] = commit.stderr
@@ -926,13 +1049,16 @@ def cmd_land(args):
         kill_group(_child_pgid)
         raise SystemExit(128 + signum)
 
-    previous_handlers = {sig: signal.signal(sig, shutdown)
-                         for sig in (signal.SIGTERM, signal.SIGINT)}
+    previous_handlers = {
+        sig: signal.signal(sig, shutdown) for sig in (signal.SIGTERM, signal.SIGINT)
+    }
 
     landed = failed = 0
     try:
-        print(f"lander pid {os.getpid()}, timeout {args.timeout}s; "
-              f"each commit is gated by its own worktree's hook")
+        print(
+            f"lander pid {os.getpid()}, timeout {args.timeout}s; "
+            f"each commit is gated by its own worktree's hook"
+        )
         while True:
             pending = sorted((root / "queue").glob("*.json"))
             if not pending:
@@ -941,17 +1067,20 @@ def cmd_land(args):
                 time.sleep(args.poll)
                 continue
             for request_path in pending:
-                record = land_one(root, request_path, args.timeout,
-                                  args.lock_tries)
+                record = land_one(root, request_path, args.timeout, args.lock_tries)
                 os.replace(request_path, root / "done" / request_path.name)
                 if record["status"] == "LANDED":
                     landed += 1
-                    print(f"LANDED {record['task']:<22} {record['oneline']}"
-                          f"  (lock retries {record['lock_retries']})")
+                    print(
+                        f"LANDED {record['task']:<22} {record['oneline']}"
+                        f"  (lock retries {record['lock_retries']})"
+                    )
                 else:
                     failed += 1
-                    print(f"FAILED {record['task']:<22} {record['detail']}"
-                          f"  (lock retries {record['lock_retries']})")
+                    print(
+                        f"FAILED {record['task']:<22} {record['detail']}"
+                        f"  (lock retries {record['lock_retries']})"
+                    )
             if args.once:
                 break
     finally:
@@ -966,6 +1095,7 @@ def cmd_land(args):
 
 
 # --- reconcile ---------------------------------------------------------------
+
 
 def classify(manifest, ledger, queued):
     """Return one task's state and the evidence behind it.
@@ -1018,15 +1148,25 @@ def cmd_reconcile(args):
     """Report which tasks landed, which are queued and which are orphaned."""
     root = state_root()
     ledger = read_ledger(root)
-    queued = [json.loads(p.read_text()) for p in sorted((root / "queue").glob("*.json"))]
-    manifests = [json.loads(p.read_text())
-                 for p in sorted((root / "tasks").glob("*.json"))]
+    queued = [
+        json.loads(p.read_text()) for p in sorted((root / "queue").glob("*.json"))
+    ]
+    manifests = [
+        json.loads(p.read_text()) for p in sorted((root / "tasks").glob("*.json"))
+    ]
     rows = []
     for manifest in manifests:
         state, detail = classify(manifest, ledger, queued)
-        rows.append({"task": manifest["task"], "state": state, "detail": detail,
-                     "branch": manifest["branch"], "baseline_sha": manifest["baseline_sha"],
-                     "worktree": manifest["worktree"]})
+        rows.append(
+            {
+                "task": manifest["task"],
+                "state": state,
+                "detail": detail,
+                "branch": manifest["branch"],
+                "baseline_sha": manifest["baseline_sha"],
+                "worktree": manifest["worktree"],
+            }
+        )
 
     if args.json:
         print(json.dumps({"tasks": rows, "ledger": ledger}, indent=2))
@@ -1037,8 +1177,10 @@ def cmd_reconcile(args):
         counts = {}
         for row in rows:
             counts[row["state"]] = counts.get(row["state"], 0) + 1
-        print(f"  {len(rows)} task(s): " +
-              ", ".join(f"{n} {s.lower()}" for s, n in sorted(counts.items())))
+        print(
+            f"  {len(rows)} task(s): "
+            + ", ".join(f"{n} {s.lower()}" for s, n in sorted(counts.items()))
+        )
         orphan_lock = root / "lander.lock"
         if orphan_lock.exists():
             print(f"  lander.lock held by pid {orphan_lock.read_text().strip()}")
@@ -1047,16 +1189,20 @@ def cmd_reconcile(args):
 
 def build_parser():
     """Return the argument parser for every subcommand."""
-    parser = argparse.ArgumentParser(prog="agent_harness",
-                                     description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        prog="agent_harness", description=__doc__.splitlines()[0]
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("provision", help="create one task's worktree")
     p.add_argument("--task", required=True, type=task_name)
     # Required on purpose: a baseline defaulting to HEAD is a baseline nobody
     # chose, and four tasks started minutes apart would each have a different one.
-    p.add_argument("--baseline", required=True,
-                   help="commit-ish to branch from; never defaulted to HEAD")
+    p.add_argument(
+        "--baseline",
+        required=True,
+        help="commit-ish to branch from; never defaulted to HEAD",
+    )
     p.add_argument("--path", required=True)
     p.add_argument("--branch")
     p.set_defaults(func=cmd_provision)
@@ -1064,16 +1210,24 @@ def build_parser():
     p = sub.add_parser("enqueue", help="queue one commit request")
     p.add_argument("--task", required=True, type=task_name)
     p.add_argument("-m", "--message", required=True)
-    p.add_argument("--file", action="append", default=[],
-                   help="path to stage, relative to the current directory")
+    p.add_argument(
+        "--file",
+        action="append",
+        default=[],
+        help="path to stage, relative to the current directory",
+    )
     p.set_defaults(func=cmd_enqueue)
 
     p = sub.add_parser("land", help="consume the queue as the single lander")
     p.add_argument("--once", action="store_true", help="stop when the queue empties")
     p.add_argument("--timeout", type=int, default=GATE_TIMEOUT)
     p.add_argument("--poll", type=float, default=1.0)
-    p.add_argument("--lock-tries", type=int, default=LOCK_TRIES,
-                   help="index.lock retries before the lock is reported stuck")
+    p.add_argument(
+        "--lock-tries",
+        type=int,
+        default=LOCK_TRIES,
+        help="index.lock retries before the lock is reported stuck",
+    )
     p.set_defaults(func=cmd_land)
 
     p = sub.add_parser("reconcile", help="report landed / queued / orphaned")

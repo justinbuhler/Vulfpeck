@@ -220,27 +220,61 @@ with tempfile.TemporaryDirectory() as raw:
     base = Path(raw).resolve()
     main, wt = base / "main", base / "wt"
     main.mkdir()
-    for args in (["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
-                                                 "commit", "-q", "--allow-empty", "-m", "base"],
-                 ["worktree", "add", "-q", "-b", "side", str(wt)]):
-        subprocess.run(["git", *args], cwd=main, env=ENV, check=True, capture_output=True)
+    for args in (
+        ["init", "-q", "-b", "main"],
+        [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+        ["worktree", "add", "-q", "-b", "side", str(wt)],
+    ):
+        subprocess.run(
+            ["git", *args], cwd=main, env=ENV, check=True, capture_output=True
+        )
     (wt / ".codex").mkdir()
     (wt / ".codex" / "hooks.json").write_text('{"hooks": {"a": 1}}\n')
-    check("a worktree whose main has no hooks.json is reported missing",
-          harness_doctor.codex_main_hooks(wt) == "missing")
+    check(
+        "a worktree whose main has no hooks.json is reported missing",
+        harness_doctor.codex_main_hooks(wt) == "missing",
+    )
     (main / ".codex").mkdir()
     (main / ".codex" / "hooks.json").write_text('{"hooks": {"a": 2}}\n')
-    check("a worktree whose main has a different hooks.json is reported stale",
-          harness_doctor.codex_main_hooks(wt) == "stale")
+    check(
+        "a worktree whose main has a different hooks.json is reported stale",
+        harness_doctor.codex_main_hooks(wt) == "stale",
+    )
     (main / ".codex" / "hooks.json").write_text('{"hooks": {"a": 1}}\n')
-    check("a worktree whose main has the same hooks.json passes", harness_doctor.codex_main_hooks(wt) == "")
+    check(
+        "a worktree whose main has the same hooks.json passes",
+        harness_doctor.codex_main_hooks(wt) == "",
+    )
     (wt / ".codex" / "hooks.json").unlink()
-    check("a worktree with no hooks.json of its own is stale even if main has one",
-          harness_doctor.codex_main_hooks(wt) == "stale")
-    check("a standalone checkout is its own main and passes", harness_doctor.codex_main_hooks(main) == "")
+    check(
+        "a worktree with no hooks.json of its own is stale even if main has one",
+        harness_doctor.codex_main_hooks(wt) == "stale",
+    )
+    check(
+        "a standalone checkout is its own main and passes",
+        harness_doctor.codex_main_hooks(main) == "",
+    )
     problems, _ = harness_doctor.runtime_findings(wt, base)
-    check("the doctor words the finding plainly",
-          any(p.startswith("Codex in this worktree runs main's hooks: stale") for p in problems), str(problems))
+    check(
+        "the doctor words the finding plainly",
+        any(
+            p.startswith("Codex in this worktree runs main's hooks: stale")
+            for p in problems
+        ),
+        str(problems),
+    )
 
 
 # --- trust writes never corrupt or override existing config ---------------------------
@@ -263,24 +297,46 @@ with tempfile.TemporaryDirectory() as raw:
 
     broken = 'model = "x"\n[projects\n'
     out, after = codex_case(broken)
-    check("an unparseable Codex config is refused and left byte for byte", out.startswith("REFUSED") and after == broken, out)
+    check(
+        "an unparseable Codex config is refused and left byte for byte",
+        out.startswith("REFUSED") and after == broken,
+        out,
+    )
     for label, text in (
-            ("quoted table", f'[projects."{target}"]\ntrust_level = "untrusted"\n'),
-            ("dotted key", f'projects."{target}".trust_level = "untrusted"\n'),
-            ("inline table", f'projects = {{ "{target}" = {{ trust_level = "untrusted" }} }}\n')):
+        ("quoted table", f'[projects."{target}"]\ntrust_level = "untrusted"\n'),
+        ("dotted key", f'projects."{target}".trust_level = "untrusted"\n'),
+        (
+            "inline table",
+            f'projects = {{ "{target}" = {{ trust_level = "untrusted" }} }}\n',
+        ),
+    ):
         out, after = codex_case(text)
-        check(f"a project already present as a {label} is left alone and reported",
-              after == text and "already has" in out and "'untrusted'" in out, out)
-    out, after = codex_case('projects = 5\n')
-    check("a config whose `projects` is not a table is refused unchanged", out.startswith("REFUSED") and after == "projects = 5\n", out)
+        check(
+            f"a project already present as a {label} is left alone and reported",
+            after == text and "already has" in out and "'untrusted'" in out,
+            out,
+        )
+    out, after = codex_case("projects = 5\n")
+    check(
+        "a config whose `projects` is not a table is refused unchanged",
+        out.startswith("REFUSED") and after == "projects = 5\n",
+        out,
+    )
     out, after = codex_case('model = "x"')
     parsed = tomllib.loads(after)
-    check("an absent project is appended to a file with no trailing newline and the result parses",
-          parsed["projects"][str(target)]["trust_level"] == "trusted" and parsed["model"] == "x", after)
+    check(
+        "an absent project is appended to a file with no trailing newline and the result parses",
+        parsed["projects"][str(target)]["trust_level"] == "trusted"
+        and parsed["model"] == "x",
+        after,
+    )
     cfg.unlink()
     harness_install.trust_codex(target, h)
     after = cfg.read_text()
-    check("a missing Codex config is created with the trusted table", tomllib.loads(after)["projects"][str(target)]["trust_level"] == "trusted")
+    check(
+        "a missing Codex config is created with the trusted table",
+        tomllib.loads(after)["projects"][str(target)]["trust_level"] == "trusted",
+    )
 
     gem = h / ".gemini" / "trustedFolders.json"
     gem.parent.mkdir()
@@ -291,14 +347,20 @@ with tempfile.TemporaryDirectory() as raw:
         refused = False
     except SystemExit as exc:
         refused = "DO_NOT_TRUST" in str(exc)
-    check("an ancestor DO_NOT_TRUST rule is refused, not overridden", refused and gem.read_text() == rule)
+    check(
+        "an ancestor DO_NOT_TRUST rule is refused, not overridden",
+        refused and gem.read_text() == rule,
+    )
     gem.write_text(json.dumps({str(target): "DO_NOT_TRUST"}))
     try:
         harness_install.trust_gemini(target, h)
         refused = False
     except SystemExit:
         refused = True
-    check("a DO_NOT_TRUST rule on the path itself is refused", refused and json.loads(gem.read_text()) == {str(target): "DO_NOT_TRUST"})
+    check(
+        "a DO_NOT_TRUST rule on the path itself is refused",
+        refused and json.loads(gem.read_text()) == {str(target): "DO_NOT_TRUST"},
+    )
 
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

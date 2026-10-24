@@ -375,7 +375,11 @@ def consequence(paths, description, *, stats=None, symbols=None, tiers=None):
     shown = [p for p in paths if not is_protected_path(p)]
     state = {
         "paths": shown,
-        "stats": [st for st in (stats or []) if not any(is_protected_path(t) for t in st.split())],
+        "stats": [
+            st
+            for st in (stats or [])
+            if not any(is_protected_path(t) for t in st.split())
+        ],
         "symbols": list(symbols or []),
         "description": (description or "")[:2000],
         "rules": RULES,

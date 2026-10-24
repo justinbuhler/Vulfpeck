@@ -11,6 +11,7 @@ Everything else passes: ordinary branches, and Claude Code `isolation: worktree`
 agents, which ORCH-03 lets commit their own candidate. Task worktrees are the
 `worktree` paths in <git common dir>/agent-harness/tasks/*.json.
 """
+
 import json
 import os
 import re
@@ -28,6 +29,7 @@ def record(*args, **kwargs):
     try:
         sys.path.insert(0, str(ROOT / "scripts"))
         import harness_events
+
         harness_events.record(*args, **kwargs)
     except Exception:
         pass
@@ -42,11 +44,11 @@ def git_verb(command):
     for segment in re.split(r"[;&|\n()]+", command):
         words = segment.split()
         while words and "=" in words[0] and not words[0].startswith("-"):
-            words = words[1:]                       # VAR=value prefixes
+            words = words[1:]  # VAR=value prefixes
         if not words or Path(words[0]).name != "git":
             continue
         rest, targets = words[1:], []
-        while rest and rest[0].startswith("-"):     # git -c k=v, -C dir, --no-pager
+        while rest and rest[0].startswith("-"):  # git -c k=v, -C dir, --no-pager
             if rest[0] == "-C" and len(rest) > 1:
                 targets.append(rest[1])
             elif rest[0].startswith(("--git-dir=", "--work-tree=")):
@@ -64,14 +66,22 @@ def task_worktrees(cwd):
     """Return the resolved worktree paths of every agent_harness task."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     try:
-        done = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                              cwd=cwd, capture_output=True, text=True, timeout=5, env=env)
+        done = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=env,
+        )
     except (OSError, subprocess.SubprocessError):
         return []
     if done.returncode:
         return []
     paths = []
-    for manifest in (Path(done.stdout.strip()) / "agent-harness" / "tasks").glob("*.json"):
+    for manifest in (Path(done.stdout.strip()) / "agent-harness" / "tasks").glob(
+        "*.json"
+    ):
         try:
             paths.append(Path(json.loads(manifest.read_text())["worktree"]).resolve())
         except (OSError, ValueError, KeyError):
@@ -102,15 +112,22 @@ def main():
     if not inside:
         return 0
     record("queue_guard", "deny", f"git-{verb}", inside[0].name, payload)
-    print(json.dumps({"hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "deny",
-        "permissionDecisionReason": (
-            f"`git {verb}` inside agent_harness task worktree {inside[0]}. Task agents "
-            "never commit: queue the change with `python3 .claude/harness/agent_harness.py "
-            "enqueue --task <task> -m <message> --file <path>...` and the lander commits it "
-            "through the gate. A commit made here is refused at land anyway."),
-    }}))
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        f"`git {verb}` inside agent_harness task worktree {inside[0]}. Task agents "
+                        "never commit: queue the change with `python3 .claude/harness/agent_harness.py "
+                        "enqueue --task <task> -m <message> --file <path>...` and the lander commits it "
+                        "through the gate. A commit made here is refused at land anyway."
+                    ),
+                }
+            }
+        )
+    )
     return 0
 
 
