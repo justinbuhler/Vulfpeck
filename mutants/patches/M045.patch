@@ -1,0 +1,15 @@
+# mutant_id: M045
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: verification runs in the container when the worker is sandboxed
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -348,7 +348,7 @@
+     """The verification command: in a box with no key when sandboxed, else on the host."""
+     command = ["bash", "-c", lint]
+     return (
+-        container_argv(worktree, command) if cfg["sandbox"] == "container" else command
++        command
+     )
+ 
+ 

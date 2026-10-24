@@ -320,23 +320,36 @@ def next_issue(root, cfg, ask_jev=True):
 # --- the commands one task runs ----------------------------------------------
 
 
-def sandbox_argv(cfg, worktree, worker_argv):
-    """`container run` for one worker: the worktree is the only volume, the key is inherited by name.
+def container_argv(worktree, command, key_name=None):
+    """`container run` for one command: the worktree is the only volume.
 
-    The value of the key is never in this argv; `sandbox_env` supplies it to the process.
+    `key_name`, when given, is inherited by name from the process environment, so the value of
+    the key is never in this argv (`sandbox_env` supplies it). Verification gets no key at all.
     """
-    name = SANDBOX_KEYS[cfg["runtime"]][1]
+    env = ["--env", key_name] if key_name else []
     return [
         "container",
         "run",
         "--rm",
         "--volume",
         f"{worktree}:{SANDBOX_MOUNT}",
-        "--env",
-        name,
+        *env,
         SANDBOX_IMAGE,
-        *worker_argv,
+        *command,
     ]
+
+
+def sandbox_argv(cfg, worktree, worker_argv):
+    """The worker's `container run`, holding its runtime's one model key."""
+    return container_argv(worktree, worker_argv, SANDBOX_KEYS[cfg["runtime"]][1])
+
+
+def verify_argv(cfg, worktree, lint):
+    """The verification command: in a box with no key when sandboxed, else on the host."""
+    command = ["bash", "-c", lint]
+    return (
+        container_argv(worktree, command) if cfg["sandbox"] == "container" else command
+    )
 
 
 def sandbox_env(cfg):
@@ -445,10 +458,10 @@ def plan(
         ("fetch", root, ["git", "-C", root, "fetch", "origin", base]),
         ("provision", root, [*harness, "provision", "--task", task, "--baseline", base_sha, "--path", wt]),
         ("worker", wt, worker_command(cfg, issue, wt)),
-        ("verify", wt, ["(in-process)", f"{base_sha}:harness.toml", "commands.lint", "when every path is on the allowlist"]),
+        ("verify", wt, [*verify_argv(cfg, wt, f"<commands.lint from {base_sha}:harness.toml>"), "(only when every path is on the allowlist)"]),
         ("enqueue", wt, [*harness, "enqueue", "--task", task, "-m", commit_message(issue),
                          *[a for f in files for a in ("--file", f)]]),
-        ("land", root, [*harness, "land", "--once"]),
+        ("land", root, [*harness, "land", "--once", "--no-hooks"]),
         ("push", wt, ["git", "-c", "core.hooksPath=/dev/null", "-C", wt, "push", "-u", "origin", f"agent/{task}"]),
         ("pr", root, ["gh", "pr", "create", "--base", base, "--head", f"agent/{task}", "--title", issue["title"],
                       "--body", f"Closes #{n}", "-a", "@me"]),
@@ -720,7 +733,7 @@ def execute(root, cfg, issue):
         if review is None:
             lint = base_lint(root, base_sha)
             stage(
-                ["bash", "-c", lint],
+                verify_argv(cfg, wt, lint),
                 wt,
                 f"verify `{lint}`",
                 VERIFY_TIMEOUT,

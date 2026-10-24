@@ -9,8 +9,8 @@ RUN apt-get update \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
-# The official packages of the three worker runtimes (unpinned: pin them when the loop goes live).
-RUN npm install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli \
+# The official packages of the three worker runtimes, pinned to the versions the proof ran with.
+RUN npm install -g @anthropic-ai/claude-code@2.1.310 @openai/codex@0.164.0 @google/gemini-cli@0.65.0 \
  && npm cache clean --force
 
 COPY entrypoint.sh /usr/local/bin/sandbox-entry

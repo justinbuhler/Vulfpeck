@@ -64,8 +64,9 @@ printf 'STATUS: %s because\\n' "${FAKE_WORKER_STATUS:-DONE}"
 exit "${FAKE_WORKER_RC:-0}"
 """,
     "container": """#!/bin/sh
-printf '%s\\n' "$@" > "$SHIM_DIR/container-argv.txt"
-printf '%s|%s|%s|%s|%s|%s|%s' "${ANTHROPIC_API_KEY-unset}" "${OPENAI_API_KEY-unset}" "${GEMINI_API_KEY-unset}" "${GH_TOKEN-unset}" "${SSH_AUTH_SOCK-unset}" "${GH_CONFIG_DIR-unset}" "${HOME-unset}" > "$SHIM_DIR/container-env.txt"
+n=""; [ -f "$SHIM_DIR/container-argv.txt" ] && n="-verify"
+printf '%s\\n' "$@" > "$SHIM_DIR/container-argv$n.txt"
+printf '%s|%s|%s|%s|%s|%s|%s' "${ANTHROPIC_API_KEY-unset}" "${OPENAI_API_KEY-unset}" "${GEMINI_API_KEY-unset}" "${GH_TOKEN-unset}" "${SSH_AUTH_SOCK-unset}" "${GH_CONFIG_DIR-unset}" "${HOME-unset}" > "$SHIM_DIR/container-env$n.txt"
 if [ "$FAKE_CONTAINER_MODE" = leak ]; then
   echo "auth failed for key ${ANTHROPIC_API_KEY}${OPENAI_API_KEY}${GEMINI_API_KEY}" >&2
   exit 1
@@ -1044,24 +1045,21 @@ os.environ.update(
 )
 HOOK = """cat > hooks/pre-commit <<'EOH'
 #!/bin/sh
-printf '%s|%s|%s|%s' "${GH_TOKEN-unset}" "${SSH_AUTH_SOCK-unset}" "${GH_CONFIG_DIR-unset}" "${GIT_CONFIG_NOSYSTEM-unset}" > "$SHIM_DIR/hook-env.txt"
+printf 'ran' > "$SHIM_DIR/hook-ran.txt"
 exit 0
 EOH
 chmod +x hooks/pre-commit"""
 repo, log, ev = scenario([], FAKE_WORKER_EXTRA=HOOK)
-attempt(120, repo)
+final = attempt(120, repo)
 for leak in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "SSH_AUTH_SOCK"):
     os.environ.pop(leak)
 fields = (ev.parent / "env.txt").read_text().split("|")
 check("CREDS: the worker gets an empty GH_CONFIG_DIR and GIT_CONFIG_NOSYSTEM=1",
       fields[4].endswith("gh-empty") and Path(fields[4]).is_dir() and not any(Path(fields[4]).iterdir()) and fields[5] == "1", str(fields))  # fmt: skip
-hook = (
-    (ev.parent / "hook-env.txt").read_text().split("|")
-    if (ev.parent / "hook-env.txt").exists()
-    else ["<hook did not run>"]
-)
-check("CREDS: a hook the worker wrote runs in the lander with no token, no ssh agent, an empty gh config and no system git config",
-      hook[:2] == ["unset", "unset"] and hook[2].endswith("gh-empty") and hook[3] == "1", str(hook))  # fmt: skip
+check("HOOKS: a pre-commit hook the worker wrote is never executed on the host at landing",
+      not (ev.parent / "hook-ran.txt").exists(), "the hook ran")  # fmt: skip
+check("HOOKS: the change that carries it is still landed, pushed and held for review",
+      final == "blocked" and "hooks/pre-commit" in task_loop.load(repo, 120)["reason"] and " push " in log.read_text(), f"{final} {task_loop.load(repo, 120)['reason']}")  # fmt: skip
 os.environ.update(GH_TOKEN="tok", SSH_AUTH_SOCK="/tmp/agent.sock")
 repo, log, ev = scenario([])
 attempt(121, repo)
@@ -1274,6 +1272,28 @@ repo, log, ev = scenario([issue(166, "Sandboxed")])
 _, shown = quiet(task_loop.main, ["next", "--dry-run"], repo)
 check("BOX: a dry run prints the container command and starts none",
       "container run --rm --volume" in shown and not (ev.parent / "container-argv.txt").exists(), shown)  # fmt: skip
+
+# Verification runs in the box too, with no key; nothing from the worktree runs on the host.
+repo, log, ev = scenario([])
+final = boxed(167, repo)
+wt = repo / "tmp" / "worktrees" / "issue-167-a1"
+vargv = (ev.parent / "container-argv-verify.txt").read_text().splitlines()
+venv = (ev.parent / "container-env-verify.txt").read_text().split("|")
+check("BOX: verification goes through `container run` with the worktree as the one volume and no --env",
+      vargv[:6] == ["run", "--rm", "--volume", f"{wt}:/work", "vulfpeck-worker", "bash"] and vargv[6] == "-c" and "--env" not in vargv[:6], str(vargv[:8]))  # fmt: skip
+check("BOX: the verification container holds no model key and none of the owner's tokens",
+      venv[:5] == ["unset"] * 5, str(venv))  # fmt: skip
+landing = [
+    argv
+    for name, _, argv in task_loop.plan(repo, cfg_for(repo), plain(167))
+    if name == "land"
+][0]
+check(
+    "BOX: the lander is told to commit with no hooks",
+    landing[-3:] == ["land", "--once", "--no-hooks"],
+    str(landing),
+)
+check("BOX: the sandboxed task still publishes", final == "published", final)
 
 # The default is the sandbox; "none" needs --unsandboxed and prints a warning.
 repo, log, ev = scenario([])

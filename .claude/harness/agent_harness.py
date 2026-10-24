@@ -830,8 +830,11 @@ def verify_landed(worktree, message, before_sha):
     return True, sha, oneline, ""
 
 
-def land_one(root, request_path, timeout, lock_tries=LOCK_TRIES):
+def land_one(root, request_path, timeout, lock_tries=LOCK_TRIES, no_hooks=False):
     """Stage, commit and verify one queued request; append its ledger row.
+
+    `no_hooks` commits with no hooks at all: nothing from the worktree runs on the lander's
+    host, and whoever passes it runs the checks the hook provided somewhere else.
 
     Returns:
         (dict): the ledger record written.
@@ -874,8 +877,12 @@ def land_one(root, request_path, timeout, lock_tries=LOCK_TRIES):
 
     # Resolved here, from this worktree, so the hook that runs is this
     # worktree's own and the ledger names the exact file that gated the commit.
-    hooks_dir, hook, problem = resolve_gate(worktree)
-    record["gate"] = str(hook) if hook else None
+    if no_hooks:
+        hooks_dir, hook, problem = "/dev/null", None, None
+        record["gate"] = "none (--no-hooks)"
+    else:
+        hooks_dir, hook, problem = resolve_gate(worktree)
+        record["gate"] = str(hook) if hook else None
     if problem:
         return fail(problem)
 
@@ -1069,7 +1076,9 @@ def cmd_land(args):
                 time.sleep(args.poll)
                 continue
             for request_path in pending:
-                record = land_one(root, request_path, args.timeout, args.lock_tries)
+                record = land_one(
+                    root, request_path, args.timeout, args.lock_tries, args.no_hooks
+                )
                 os.replace(request_path, root / "done" / request_path.name)
                 if record["status"] == "LANDED":
                     landed += 1
@@ -1222,6 +1231,11 @@ def build_parser():
 
     p = sub.add_parser("land", help="consume the queue as the single lander")
     p.add_argument("--once", action="store_true", help="stop when the queue empties")
+    p.add_argument(
+        "--no-hooks",
+        action="store_true",
+        help="commit with no hooks, so nothing from the worktree runs on this host",
+    )
     p.add_argument("--timeout", type=int, default=GATE_TIMEOUT)
     p.add_argument("--poll", type=float, default=1.0)
     p.add_argument(
