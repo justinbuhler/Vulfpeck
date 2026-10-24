@@ -604,6 +604,41 @@ r18c = land(wt18c)
 check("once idle, the abandoned worktree is pruned", not sierra.exists())
 check("the prune names what it removed", "sierra" in r18c.stdout, r18c.stdout)
 
+# --- without lsof, "nothing is working in it" cannot be known -------------------
+# A missing lsof exits 127, which the prune read as "idle" and force-removed a
+# worktree a live process might be using. The worktree must be kept instead.
+nolsof = Path(tempfile.mkdtemp(prefix="harness-nolsof."))
+for _dir in os.environ["PATH"].split(os.pathsep):
+    for _exe in Path(_dir).glob("*") if Path(_dir).is_dir() else ():
+        if _exe.name != "lsof" and not os.path.lexists(nolsof / _exe.name):
+            (nolsof / _exe.name).symlink_to(_exe)
+d19 = repo()
+wt19 = agent(d19, "nolsof-a")
+land(wt19)
+nolsof_a = Path(LANDER_ROOT) / "nolsof-a"
+git(d19, "worktree", "remove", "--force", str(wt19))
+git(d19, "branch", "-D", "nolsof-a")
+r19 = land(agent(d19, "nolsof-b"), PATH=str(nolsof))
+check("a land still succeeds when lsof is not installed", r19.returncode == 0, r19.stdout + r19.stderr)
+check("an abandoned lander worktree is kept when lsof is not installed",
+      nolsof_a.is_dir(), "nolsof_a was force-removed with no way to tell it was idle")
+
+# lsof exits 1 for "nothing in it" and also for its own errors; only exit 1 with
+# no output is idle. A fake lsof that fails with a message must keep the worktree.
+badlsof = Path(tempfile.mkdtemp(prefix="harness-badlsof."))
+(badlsof / "lsof").write_text("#!/bin/sh\necho 'lsof: cannot read process info' >&2\nexit 1\n")
+(badlsof / "lsof").chmod(0o755)
+d20 = repo()
+wt20 = agent(d20, "badlsof-a")
+land(wt20)
+badlsof_a = Path(LANDER_ROOT) / "badlsof-a"
+git(d20, "worktree", "remove", "--force", str(wt20))
+git(d20, "branch", "-D", "badlsof-a")
+r20 = land(agent(d20, "badlsof-b"), PATH=f"{badlsof}{os.pathsep}{os.environ['PATH']}")
+check("a land still succeeds when lsof itself errors", r20.returncode == 0, r20.stdout + r20.stderr)
+check("an abandoned lander worktree is kept when lsof errors out",
+      badlsof_a.is_dir(), "badlsof_a was force-removed after lsof failed with output")
+
 # --- local main must not fall behind origin/main ---------------------------
 # Two trunks exist: the lander gates local refs/heads/main, while origin/main is
 # what everyone clones and what the merge path writes. Nothing reconciled them,
