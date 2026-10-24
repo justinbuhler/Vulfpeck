@@ -55,7 +55,7 @@ None of the three spells a command, so they cannot drift apart.
 
 ## Adopting it in another repository
 
-Requirements: git, bash, Python 3.11+ and uv for the harness's own scripts, `rsync`, and `flock` or `lockf`. macOS or Linux.
+Requirements: git, bash, Python 3.11+ and uv for the harness's own scripts, `rsync`, `lsof`, and `flock` or `lockf`. macOS or Linux.
 
 1. Copy `AGENTS.md`, `CLAUDE.md`, `.gemini/`, `HARNESS.md`, `harness.toml`, `.claude/`, `.agents/`, `.codex/`, `.githooks/`, `.github/`, `scripts/`, `tests/` and `mutants/` into the repository.
 2. Edit `harness.toml`. For example, a Node project:

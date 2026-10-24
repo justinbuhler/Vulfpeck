@@ -111,6 +111,17 @@ check("a landed-but-dirty worktree is not flagged",
       "STALE" not in r_report.stdout.split("wt-dirty")[1].splitlines()[0])
 check("report mode does not remove anything", wt_landed.is_dir())
 
+# Without lsof every worktree would read as idle, so --prune must remove none.
+nolsof = Path(tempfile.mkdtemp(prefix="harness-nolsof."))
+for _dir in os.environ["PATH"].split(os.pathsep):
+    for _exe in Path(_dir).glob("*") if Path(_dir).is_dir() else ():
+        if _exe.name != "lsof" and not os.path.lexists(nolsof / _exe.name):
+            (nolsof / _exe.name).symlink_to(_exe)
+r_nolsof = subprocess.run(["bash", str(SCRIPT), "--prune"], cwd=str(d), capture_output=True,
+                          text=True, env=scrubbed_env(PATH=str(nolsof)))
+check("prune without lsof exits 0", r_nolsof.returncode == 0, r_nolsof.stdout + r_nolsof.stderr)
+check("prune without lsof removes nothing", wt_landed.is_dir(), r_nolsof.stdout)
+
 r_prune = status(d, "--prune")
 check("prune mode exits 0", r_prune.returncode == 0, r_prune.stdout + r_prune.stderr)
 check("the fully-landed worktree is removed", not wt_landed.exists(), r_prune.stdout)

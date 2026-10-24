@@ -250,6 +250,8 @@ $(printf '%s\n' "$merr" | sed 's/^/       /')"
 prune_landers(){
   parent=$(dirname "$LWT")
   [ -d "$parent" ] || return 0
+  # Without lsof every worktree would read as idle (exit 127), so keep them all.
+  command -v lsof >/dev/null 2>&1 || { say "▶ lsof not installed: keeping every lander worktree"; return 0; }
   live=$(git for-each-ref --format='%(refname:short)' refs/heads \
          | tr -c 'A-Za-z0-9._\n-' '-')
   pruned=0

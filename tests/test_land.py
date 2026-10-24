@@ -604,6 +604,25 @@ r18c = land(wt18c)
 check("once idle, the abandoned worktree is pruned", not sierra.exists())
 check("the prune names what it removed", "sierra" in r18c.stdout, r18c.stdout)
 
+# --- without lsof, "nothing is working in it" cannot be known -------------------
+# A missing lsof exits 127, which the prune read as "idle" and force-removed a
+# worktree a live process might be using. The worktree must be kept instead.
+nolsof = Path(tempfile.mkdtemp(prefix="harness-nolsof."))
+for _dir in os.environ["PATH"].split(os.pathsep):
+    for _exe in Path(_dir).glob("*") if Path(_dir).is_dir() else ():
+        if _exe.name != "lsof" and not os.path.lexists(nolsof / _exe.name):
+            (nolsof / _exe.name).symlink_to(_exe)
+d19 = repo()
+wt19 = agent(d19, "nolsof-a")
+land(wt19)
+nolsof_a = Path(LANDER_ROOT) / "nolsof-a"
+git(d19, "worktree", "remove", "--force", str(wt19))
+git(d19, "branch", "-D", "nolsof-a")
+r19 = land(agent(d19, "nolsof-b"), PATH=str(nolsof))
+check("a land still succeeds when lsof is not installed", r19.returncode == 0, r19.stdout + r19.stderr)
+check("an abandoned lander worktree is kept when lsof is not installed",
+      nolsof_a.is_dir(), "nolsof_a was force-removed with no way to tell it was idle")
+
 # --- local main must not fall behind origin/main ---------------------------
 # Two trunks exist: the lander gates local refs/heads/main, while origin/main is
 # what everyone clones and what the merge path writes. Nothing reconciled them,

@@ -48,6 +48,9 @@ if [ "$PRUNE" != 1 ]; then
   exit 0
 fi
 
+# Without lsof every worktree would read as idle (exit 127), so remove none.
+command -v lsof >/dev/null 2>&1 || { say "▶ lsof not installed: cannot tell whether a worktree is in use; removing none"; exit 0; }
+
 for wt in "${dead[@]}"; do
   # A short-lived Bash subprocess won't show up here (land.sh's prune_landers
   # has the same gap) - "ahead=0" is the real safety bar, this only catches a
