@@ -63,14 +63,30 @@ eval "$FAKE_WORKER_EXTRA"
 printf 'STATUS: %s because\\n' "${FAKE_WORKER_STATUS:-DONE}"
 exit "${FAKE_WORKER_RC:-0}"
 """,
+    "container": """#!/bin/sh
+case "$1" in kill|delete) echo "container $*" >> "$SHIM_LOG"; exit 0;; esac
+n=""; [ -f "$SHIM_DIR/container-argv.txt" ] && n="-verify"
+printf '%s\\n' "$@" > "$SHIM_DIR/container-argv$n.txt"
+printf '%s|%s|%s|%s|%s|%s|%s' "${ANTHROPIC_API_KEY-unset}" "${OPENAI_API_KEY-unset}" "${GEMINI_API_KEY-unset}" "${GH_TOKEN-unset}" "${SSH_AUTH_SOCK-unset}" "${GH_CONFIG_DIR-unset}" "${HOME-unset}" > "$SHIM_DIR/container-env$n.txt"
+if [ "$FAKE_CONTAINER_MODE" = leak ]; then
+  echo "auth failed for key ${ANTHROPIC_API_KEY}${OPENAI_API_KEY}${GEMINI_API_KEY}" >&2
+  exit 1
+fi
+if [ "$FAKE_CONTAINER_MODE" = hang ]; then exec sleep 30; fi
+while [ "$1" != vulfpeck-worker ]; do shift; done
+shift
+exec "$@"
+""",
     "git": """#!/bin/sh
+if [ "$1" = --version ] && [ -n "$FAKE_GIT_VERSION" ]; then echo "git version $FAKE_GIT_VERSION"; exit 0; fi
 for a; do
+  case "$a" in push|commit|add) echo "$a ${GIT_ATTR_SOURCE-unset}" >> "$SHIM_DIR/git-attr.txt";; esac
   if [ "$a" = push ]; then echo "git $*" >> "$SHIM_LOG"; exit 0; fi
 done
 exec "$REAL_GIT" "$@"
 """,
 }
-for name, text in {"gh": SHIM_SOURCES["gh"], "claude": SHIM_SOURCES["worker"],
+for name, text in {"gh": SHIM_SOURCES["gh"], "container": SHIM_SOURCES["container"], "claude": SHIM_SOURCES["worker"],
                    "codex": SHIM_SOURCES["worker"], "gemini": SHIM_SOURCES["worker"],
                    "git": SHIM_SOURCES["git"]}.items():  # fmt: skip
     (SHIMS / name).write_text(text)
@@ -101,6 +117,8 @@ FAKE_VARS = (
     "FAKE_HEAD_OID",
     "FAKE_WORKER_EXTRA",
     "FAKE_TIMELINE_FILE",
+    "FAKE_CONTAINER_MODE",
+    "FAKE_GIT_VERSION",
 )
 os.environ["PATH"] = f"{SHIMS}{os.pathsep}{os.environ['PATH']}"
 os.environ["REAL_GIT"] = REAL_GIT
@@ -166,7 +184,7 @@ def scenario(issues, codex_hooks=False, ignore="tmp/\n", **env):
 
 
 def cfg_for(repo, **over):
-    return {**harness_config.load(repo)["loop"], **over}
+    return {**harness_config.load(repo)["loop"], "sandbox": "none", **over}
 
 
 def lines(path):
@@ -591,7 +609,7 @@ SWAP = (
 repo, log, ev = scenario([], FAKE_VERIFY_RC=1, FAKE_WORKER_EXTRA=SWAP)
 final = attempt(31, repo)
 check("C1: a worker that rewrites plan_tests.py, CI and the commit hook cannot get its change merged",
-      final == "blocked" and "gh pr merge" not in log.read_text(), final)  # fmt: skip
+      final == "failed" and "gh pr merge" not in log.read_text(), final)  # fmt: skip
 
 repo, log, ev = scenario(
     [],
@@ -605,12 +623,8 @@ check(
     str(st),
 )
 check(
-    "C1: a needs-review change is still pushed and opened as a PR",
-    " push " in text and "gh pr create" in text,
-)
-check(
-    "C1: the PR gets a comment saying why",
-    "gh pr comment 42 --body Task loop: needs-review" in text,
+    "C1: a change to the CI workflow is never pushed and no PR is opened",
+    " push " not in text and "gh pr create" not in text,
     text,
 )
 check("C1: a needs-review change is never merged and its checks are not awaited",
@@ -627,6 +641,11 @@ final = attempt(34, repo)
 check("C1: a change outside the docs allowlist blocks the merge and names the path",
       final == "blocked" and "scripts/x.py" in task_loop.load(repo, 34)["reason"] and "gh pr merge" not in log.read_text(),
       str(task_loop.load(repo, 34)))  # fmt: skip
+text = log.read_text()
+check("C1: a held change outside CI is still pushed and opened as a PR",
+      " push " in text and "gh pr create" in text, text)  # fmt: skip
+check("C1: the PR gets a comment saying why",
+      "gh pr comment 42 --body Task loop: needs-review" in text, text)  # fmt: skip
 
 for name in (
     ".gitignore",
@@ -642,10 +661,10 @@ for name in (
 
 # C2: a path ignored at the baseline is never committed, even when the worker edits .gitignore.
 repo, log, ev = scenario(
-    [], ignore="tmp/\noutput/\n", FAKE_WORKER_EXTRA="printf 'tmp/\\n' > .gitignore"
+    [],
+    ignore="tmp/\noutput/\n",
+    FAKE_WORKER_EXTRA="mkdir -p output; echo '{}' > output/confidential.json; printf 'tmp/\\n' > .gitignore",
 )
-(repo / "output").mkdir()
-(repo / "output" / "confidential.json").write_text('{"secret": 1}\n')
 final = attempt(41, repo)
 st, text = task_loop.load(repo, 41), log.read_text()
 check(
@@ -940,6 +959,7 @@ for path in (
     "README.md",
     "docs/sub/deep/x.md",
     "docs/adr/0001-x.md",
+    "docs/a/b.md",
 ):
     repo, log, ev = scenario([], FAKE_WORKER_EXTRA=write(path))
     final = attempt(110, repo)
@@ -953,6 +973,7 @@ HELD = (
     "scripts/guard_lib.py", "scripts/hook_adapter.py", "pyproject.toml", "uv.lock", "ruff.toml", ".python-version",
     "scripts/github_bootstrap.sh", "scripts/x.py", "src/app.py",
     ".agents/skills/review/SKILL.md", ".claude/agents/x.md", "foo/README.md", "pkg/notes.md", "docs/sub/AGENTS.md",
+    "docs/.gitattributes", "docs/ruff.toml", "docs/x.py",
 )  # fmt: skip
 for path in HELD:
     repo, log, ev = scenario([], FAKE_WORKER_EXTRA=write(path))
@@ -1032,24 +1053,21 @@ os.environ.update(
 )
 HOOK = """cat > hooks/pre-commit <<'EOH'
 #!/bin/sh
-printf '%s|%s|%s|%s' "${GH_TOKEN-unset}" "${SSH_AUTH_SOCK-unset}" "${GH_CONFIG_DIR-unset}" "${GIT_CONFIG_NOSYSTEM-unset}" > "$SHIM_DIR/hook-env.txt"
+printf 'ran' > "$SHIM_DIR/hook-ran.txt"
 exit 0
 EOH
 chmod +x hooks/pre-commit"""
 repo, log, ev = scenario([], FAKE_WORKER_EXTRA=HOOK)
-attempt(120, repo)
+final = attempt(120, repo)
 for leak in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "SSH_AUTH_SOCK"):
     os.environ.pop(leak)
 fields = (ev.parent / "env.txt").read_text().split("|")
 check("CREDS: the worker gets an empty GH_CONFIG_DIR and GIT_CONFIG_NOSYSTEM=1",
       fields[4].endswith("gh-empty") and Path(fields[4]).is_dir() and not any(Path(fields[4]).iterdir()) and fields[5] == "1", str(fields))  # fmt: skip
-hook = (
-    (ev.parent / "hook-env.txt").read_text().split("|")
-    if (ev.parent / "hook-env.txt").exists()
-    else ["<hook did not run>"]
-)
-check("CREDS: a hook the worker wrote runs in the lander with no token, no ssh agent, an empty gh config and no system git config",
-      hook[:2] == ["unset", "unset"] and hook[2].endswith("gh-empty") and hook[3] == "1", str(hook))  # fmt: skip
+check("HOOKS: a pre-commit hook the worker wrote is never executed on the host at landing",
+      not (ev.parent / "hook-ran.txt").exists(), "the hook ran")  # fmt: skip
+check("HOOKS: the change that carries it is still landed, pushed and held for review",
+      final == "blocked" and "hooks/pre-commit" in task_loop.load(repo, 120)["reason"] and " push " in log.read_text(), f"{final} {task_loop.load(repo, 120)['reason']}")  # fmt: skip
 os.environ.update(GH_TOKEN="tok", SSH_AUTH_SOCK="/tmp/agent.sock")
 repo, log, ev = scenario([])
 attempt(121, repo)
@@ -1068,19 +1086,19 @@ check(
     str(push),
 )
 
-# C2/M2: ignore rules come from the base commit, the cloned list from provision time.
-A3 = (
-    f"printf 'tmp/\\n' > .gitignore; printf 'tmp/\\n' > {{repo}}/.gitignore; "
-    "m=$(git rev-parse --path-format=absolute --git-common-dir)/agent-harness/tasks/issue-130-a1.json; "
-    "python3 -c \"import json,sys;p=sys.argv[1];d=json.load(open(p));d['cloned_inputs']=[];json.dump(d,open(p,'w'))\" $m"
+# M2: ignore rules come from the base commit.
+# The ignore rules are the base commit's, not the main checkout's file, which the worker can edit.
+repo, log, ev = scenario(
+    [],
+    ignore="tmp/\noutput/\n",
+    FAKE_WORKER_EXTRA="mkdir -p output; echo '{}' > output/confidential.json; printf 'tmp/\\n' > .gitignore; printf 'tmp/\\n' > {repo}/.gitignore",
 )
-repo, log, ev = scenario([], ignore="tmp/\noutput/\n")
-(repo / "output").mkdir()
-(repo / "output" / "confidential.json").write_text('{"secret": 1}\n')
-os.environ["FAKE_WORKER_EXTRA"] = A3.replace("{repo}", str(repo))
+os.environ["FAKE_WORKER_EXTRA"] = os.environ["FAKE_WORKER_EXTRA"].replace(
+    "{repo}", str(repo)
+)
 final = attempt(130, repo)
 st = task_loop.load(repo, 130)
-check("IGNORE: a worker that edits the main checkout's ignore file and its own manifest still cannot commit an ignored input",
+check("IGNORE: a worker that edits the main checkout's ignore file still cannot commit an ignored input",
       final == "failed" and "output/confidential.json" in st["reason"] and "push" not in log.read_text(), f"{final} {st['reason']}")  # fmt: skip
 
 repo, log, ev = scenario(
@@ -1093,14 +1111,18 @@ st = task_loop.load(repo, 131)
 check("IGNORE: a file the base ignores that the worker un-ignored is refused, not merely held for review",
       final == "failed" and "docs/private/new.md" in st["reason"], f"{final} {st['reason']}")  # fmt: skip
 
-repo, log, ev = scenario([], FAKE_WORKER_EXTRA="rm docs/notes/.gitignore")
-(repo / "docs" / "notes").mkdir(parents=True)
-(repo / "docs" / "notes" / ".gitignore").write_text("*\n")
-(repo / "docs" / "notes" / "x.md").write_text("private\n")
+# Nothing ignored is cloned for a task: host-only files in the main checkout never reach the worktree.
+repo, log, ev = scenario(
+    [],
+    ignore="tmp/\n.env.*\n*.har\n",
+    FAKE_WORKER_EXTRA='ls -A > "$SHIM_DIR/wt-ls.txt"',
+)
+(repo / ".env.local").write_text("TOKEN=dummy\n")
+(repo / "x.har").write_text("{}\n")
 final = attempt(132, repo)
-st = task_loop.load(repo, 132)
-check("IGNORE: a path cloned in from the main checkout is refused even when the base does not ignore it",
-      final == "failed" and "docs/notes/x.md" in st["reason"], f"{final} {st['reason']}")  # fmt: skip
+listing = (ev.parent / "wt-ls.txt").read_text().split()
+check("INPUTS: ignored host files (.env.local, x.har) in the main checkout are absent from the task worktree",
+      ".env.local" not in listing and "x.har" not in listing and final == "published", f"{final} {listing}")  # fmt: skip
 
 # M3: the worktree HEAD must be the landed commit even when a forged ledger row names a real commit on the
 # base with the same tree, which passes the parent and path checks.
@@ -1131,6 +1153,274 @@ task_loop.agent_harness.read_ledger = real_ledger
 check("HEAD: a worktree HEAD that is not the ledger's landed commit fails before the push",
       final == "failed" and "push" not in log.read_text(), f"{final} {task_loop.load(repo, 140)['reason']}")  # fmt: skip
 
+
+# --- the worker sandbox: Apple `container`, one mount, one key ------------------
+KEY_VARS = ("LOOP_ANTHROPIC_API_KEY", "LOOP_OPENAI_API_KEY", "LOOP_GEMINI_API_KEY")
+DUMMY = {
+    "LOOP_ANTHROPIC_API_KEY": "sk-ant-dummy-111",
+    "LOOP_OPENAI_API_KEY": "sk-oai-dummy-222",
+    "LOOP_GEMINI_API_KEY": "gem-dummy-333",
+}
+
+
+def with_keys(keys):
+    for name in KEY_VARS:
+        os.environ.pop(name, None)
+    os.environ.update(keys)
+
+
+def boxed(number, repo, runtime="claude", **over):
+    return attempt(number, repo, sandbox="container", runtime=runtime, **over)
+
+
+with_keys(DUMMY)
+os.environ.update(GH_TOKEN="tok", SSH_AUTH_SOCK="/tmp/agent.sock")
+repo, log, ev = scenario([])
+final = boxed(160, repo)
+argv = (ev.parent / "container-argv.txt").read_text().splitlines()
+wt = repo / "tmp" / "worktrees" / "issue-160-a1"
+check("BOX: the worker runs as `container run --rm` with the worktree as the one volume, the key by name, the image, then the command",
+      argv[:9] == ["run", "--rm", "--name", "vulfpeck-issue-160-a1", "--volume", f"{wt}:/work", "--env", "ANTHROPIC_API_KEY", "vulfpeck-worker"] and argv[9:11] == ["claude", "-p"],
+      str(argv[:11]))  # fmt: skip
+check(
+    "BOX: a green task still publishes through the sandbox", final == "published", final
+)
+head = argv[:9]
+check("BOX: exactly one volume, no --mount, no extra --env", head.count("--volume") == 1 and "--mount" not in head and head.count("--env") == 1 and "-e" not in head and "-v" not in head, str(head))  # fmt: skip
+volume = f"{wt}:/work"
+exposed = [
+    a
+    for a in head
+    if a != volume
+    and any(
+        x in a
+        for x in (
+            str(Path.home()),
+            ".ssh",
+            ".config",
+            "hosts.yml",
+            ".git/",
+            "SSH_AUTH_SOCK",
+            "GH_",
+        )
+    )
+]
+check(
+    "BOX: nothing else in the argv names home, ssh, gh config or a git common dir",
+    exposed == [],
+    str(exposed),
+)
+check(
+    "BOX: the key value is never in the argv",
+    all("dummy" not in a for a in argv),
+    str(argv[:9]),
+)
+check(
+    "BOX: no --dangerously flag anywhere in the argv",
+    not any(a.startswith("--dangerously") for a in argv),
+)
+seen = (ev.parent / "container-env.txt").read_text().split("|")
+check("BOX: the container process gets its key and none of the owner's tokens, ssh agent or gh config",
+      seen[0] == DUMMY["LOOP_ANTHROPIC_API_KEY"] and seen[1:3] == ["unset", "unset"] and seen[3:5] == ["unset", "unset"] and seen[5].endswith("gh-empty"), str(seen[1:]))  # fmt: skip
+brief_text = "\n".join(argv[9:])
+check("BOX: the brief names /work, not the host path, and does not ask for plan_tests",
+      "inside /work;" in brief_text and str(wt) not in brief_text and "plan_tests" not in brief_text, brief_text[-400:])  # fmt: skip
+
+for runtime, source, name in (
+    ("codex", "LOOP_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    ("gemini", "LOOP_GEMINI_API_KEY", "GEMINI_API_KEY"),
+):
+    repo, log, ev = scenario([], codex_hooks=runtime == "codex")
+    boxed(161, repo, runtime)
+    argv = (ev.parent / "container-argv.txt").read_text().splitlines()
+    seen = (ev.parent / "container-env.txt").read_text().split("|")
+    names = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"]
+    present = [n for n, v in zip(names, seen[:3]) if v != "unset"]
+    check(f"BOX: the {runtime} worker gets only {name}, from {source}",
+          argv[argv.index("--env") + 1] == name and present == [name] and seen[names.index(name)] == DUMMY[source], f"{argv[:7]} {seen[:3]}")  # fmt: skip
+
+for runtime, source in (
+    ("claude", "LOOP_ANTHROPIC_API_KEY"),
+    ("codex", "LOOP_OPENAI_API_KEY"),
+):
+    with_keys({k: v for k, v in DUMMY.items() if k != source})
+    repo, log, ev = scenario([], codex_hooks=runtime == "codex")
+    final = boxed(162, repo, runtime)
+    st = task_loop.load(repo, 162)
+    check(f"BOX: a missing {source} blocks the {runtime} task before any container starts",
+          final == "blocked" and source in st["reason"] and not (ev.parent / "container-argv.txt").exists(), f"{final} {st['reason']}")  # fmt: skip
+with_keys(DUMMY)
+
+repo, log, ev = scenario([], FAKE_CONTAINER_MODE="leak")
+final = boxed(163, repo)
+st = task_loop.load(repo, 163)
+state_text = (task_loop.state_dir(repo) / "163.json").read_text()
+logs = state_text + log.read_text() + (ev.read_text() if ev.exists() else "")
+check("BOX: a key echoed in the container's error text is redacted from the task reason, state, log and events",
+      final == "failed" and "[redacted]" in st["reason"] and DUMMY["LOOP_ANTHROPIC_API_KEY"] not in logs and DUMMY["LOOP_ANTHROPIC_API_KEY"] not in st["reason"], f"{final} {st['reason']}")  # fmt: skip
+leaked = io.StringIO()
+with contextlib.redirect_stderr(leaked), contextlib.redirect_stdout(leaked):
+    repo, log, ev = scenario([])
+    os.environ["FAKE_CONTAINER_MODE"] = "leak"
+    boxed(164, repo)
+check(
+    "BOX: nothing the loop prints carries the key",
+    DUMMY["LOOP_ANTHROPIC_API_KEY"] not in leaked.getvalue(),
+    leaked.getvalue()[-300:],
+)
+os.environ.pop("FAKE_CONTAINER_MODE", None)
+
+repo, log, ev = scenario(
+    [], FAKE_WORKER_EXTRA='printf "gitdir: /tmp/elsewhere\\n" > .git'
+)
+final = boxed(165, repo)
+check(
+    "BOX: a worker that rewrites the worktree's .git link ends failed",
+    final == "failed" and ".git link" in task_loop.load(repo, 165)["reason"],
+    final,
+)
+
+repo, log, ev = scenario([issue(166, "Sandboxed")])
+_, shown = quiet(task_loop.main, ["next", "--dry-run"], repo)
+check("BOX: a dry run prints the container command and starts none",
+      "container run --rm --volume" in shown and not (ev.parent / "container-argv.txt").exists(), shown)  # fmt: skip
+
+# Verification runs in the box too, with no key; nothing from the worktree runs on the host.
+repo, log, ev = scenario([])
+final = boxed(167, repo)
+wt = repo / "tmp" / "worktrees" / "issue-167-a1"
+verify_argv_file, verify_env_file = (
+    ev.parent / "container-argv-verify.txt",
+    ev.parent / "container-env-verify.txt",
+)
+vargv = verify_argv_file.read_text().splitlines() if verify_argv_file.exists() else []
+venv = verify_env_file.read_text().split("|") if verify_env_file.exists() else []
+check("BOX: verification goes through `container run` with the worktree as the one volume and no --env",
+      vargv[:6] == ["run", "--rm", "--volume", f"{wt}:/work", "vulfpeck-worker", "bash"] and vargv[6] == "-c" and "--env" not in vargv[:6], str(vargv[:8]))  # fmt: skip
+check("BOX: the verification container holds no model key and none of the owner's tokens",
+      venv[:5] == ["unset"] * 5, str(venv))  # fmt: skip
+landing = [
+    argv
+    for name, _, argv in task_loop.plan(repo, cfg_for(repo), plain(167))
+    if name == "land"
+][0]
+check(
+    "BOX: the lander is told to commit with no hooks",
+    landing[-3:] == ["land", "--once", "--no-hooks"],
+    str(landing),
+)
+check("BOX: the sandboxed task still publishes", final == "published", final)
+
+# A worker that outlives its timeout is deleted in the VM, not only at the client.
+real_timeout = task_loop.WORKER_TIMEOUT
+task_loop.WORKER_TIMEOUT = 1
+repo, log, ev = scenario([], FAKE_CONTAINER_MODE="hang")
+final = boxed(168, repo)
+task_loop.WORKER_TIMEOUT = real_timeout
+text = log.read_text()
+check("BOX: a worker that times out has its container force-deleted by name",
+      final == "failed" and "container delete --force vulfpeck-issue-168-a1" in text, f"{final} {text}")  # fmt: skip
+
+# Verification runs for every change, so --no-hooks loses no lint.
+repo, log, ev = scenario(
+    [], FAKE_VERIFY_RC=1, FAKE_WORKER_EXTRA="echo x > scripts/x.py"
+)
+final = attempt(169, repo)
+text = log.read_text()
+check("VERIFY: a change outside the docs allowlist is verified, and a failing lint stops it before any push",
+      final == "failed" and "lint\n" in text and " push " not in text, f"{final} {text}")  # fmt: skip
+
+# Host git reads attributes from the pinned base, never from the worker's worktree.
+repo, log, ev = scenario([])
+final = attempt(170, repo)
+base = subprocess.run(
+    [REAL_GIT, "-C", str(repo), "rev-parse", "origin/main"],
+    capture_output=True,
+    text=True,
+    check=True,
+).stdout.strip()
+lines = (ev.parent / "git-attr.txt").read_text().splitlines()
+steps = {line.split()[0] for line in lines}
+check("ATTR: every host git add, commit and push of a task reads attributes from the pinned base",
+      final == "published" and "push" in steps and len(steps) >= 2 and all(line.split()[1] == base for line in lines), f"{final} {lines}")  # fmt: skip
+
+lfs_ready = (
+    shutil.which("git-lfs")
+    and subprocess.run(
+        [REAL_GIT, "config", "--get", "filter.lfs.clean"], capture_output=True
+    ).returncode
+    == 0
+)
+if lfs_ready:
+    LFS = (
+        "printf 'docs/*.md filter=lfs diff=lfs merge=lfs -text\\n' > .gitattributes; "
+        "printf '[lfs]\\n\\turl = http://127.0.0.1:9/\\n' > .lfsconfig"
+    )
+    repo, log, ev = scenario([], FAKE_WORKER_EXTRA=LFS)
+    attempt(171, repo)
+    landed = subprocess.run(
+        [REAL_GIT, "-C", str(repo), "show", "agent/issue-171-a1:docs/feature.md"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    objects = [f for f in (repo / ".git" / "lfs" / "objects").rglob("*") if f.is_file()]
+    check("ATTR: a worker-written lfs filter neither turns the landed file into a pointer nor writes a host lfs object",
+          landed == "work\n" and not objects, f"{landed!r} {objects}")  # fmt: skip
+else:
+    print(
+        "  SKIP ATTR: git-lfs with a global filter.lfs.clean is not installed on this host"
+    )
+
+# `GIT_ATTR_SOURCE` needs git 2.41 (RelNotes 2.41.0: "git --attr-source=<tree>"); an older git ignores it.
+repo, log, ev = scenario([])
+for command in ("run", "run-one"):
+    for version, ok in (
+        ("2.40.1", False),
+        ("2.41.0", True),
+        ("2.9.5", False),
+        ("3.0.0", True),
+    ):
+        os.environ["FAKE_GIT_VERSION"] = version
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code, out = quiet(task_loop.main, [command], repo)
+        check(f"GITVER: `{command}` with git {version} {'starts' if ok else 'is refused naming 2.41'}",
+              (code == 0 and "queue empty" in out) if ok else (code == 2 and "2.41" in err.getvalue() and "queue empty" not in out), f"{code} {err.getvalue()}")  # fmt: skip
+os.environ.pop("FAKE_GIT_VERSION")
+
+# The default is the sandbox; "none" needs --unsandboxed and prints a warning.
+repo, log, ev = scenario([])
+check(
+    "BOX: sandbox defaults to container",
+    harness_config.load(repo)["loop"]["sandbox"] == "container",
+)
+(repo / "harness.toml").write_text(HARNESS_TOML + '\n[loop]\nsandbox = "elsewhere"\n')
+try:
+    harness_config.load(repo)
+    rejected = False
+except harness_config.ConfigError:
+    rejected = True
+check("BOX: any sandbox value but container or none is rejected", rejected)
+(repo / "harness.toml").write_text(HARNESS_TOML + '\n[loop]\nsandbox = "none"\n')
+for command in ("run", "run-one"):
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        code, _ = quiet(task_loop.main, [command], repo)
+    check(f'BOX: `{command}` refuses sandbox = "none" without --unsandboxed', code == 2 and "--unsandboxed" in err.getvalue() and not (ev.parent / "container-argv.txt").exists(), f"{code} {err.getvalue()}")  # fmt: skip
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        code, out = quiet(task_loop.main, [command, "--unsandboxed"], repo)
+    check(f"BOX: `{command} --unsandboxed` runs and warns", code == 0 and "WARNING: unsandboxed" in err.getvalue() and "queue empty" in out, f"{code} {err.getvalue()} {out}")  # fmt: skip
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    code, _ = quiet(task_loop.main, ["run", "--dry-run"], repo)
+check(
+    "BOX: a dry run needs no flag",
+    code == 0 and err.getvalue() == "",
+    f"{code} {err.getvalue()}",
+)
+for name in KEY_VARS + ("GH_TOKEN", "SSH_AUTH_SOCK"):
+    os.environ.pop(name, None)
 
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

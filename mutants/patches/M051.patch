@@ -1,0 +1,15 @@
+# mutant_id: M051
+# target: scripts/task_loop.py
+# operator: widen-allowlist
+# behaviour: only markdown under docs merges unattended, so no docs dotfile or config can
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -84,7 +84,7 @@
+ # definitions (skills, agents, instruction files) are not documentation, so `*.md` outside docs/
+ # is not allowed; AGENTS.md and CLAUDE.md are read by the runtimes from any directory. Anything
+ # else, renames and deletes included, is pushed and opened as a PR but ends `blocked` as `needs-review`.
+-ALLOW = ("docs/**/*.md", "README.md")
++ALLOW = ("docs/**", "README.md")
+ GIT_MIN = (2, 41)
+ EXCEPT = ("**/AGENTS.md", "**/CLAUDE.md", "docs/agents/**")
+ # Code that runs worker-controlled content (the worker, verification, the lander and its hooks)
