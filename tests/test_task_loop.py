@@ -1084,12 +1084,16 @@ st = task_loop.load(repo, 132)
 check("IGNORE: a path cloned in from the main checkout is refused even when the base does not ignore it",
       final == "failed" and "docs/notes/x.md" in st["reason"], f"{final} {st['reason']}")  # fmt: skip
 
-# M3: the worktree HEAD must be the landed commit even when the PR head agrees with a forged ledger row.
+# M3: the worktree HEAD must be the landed commit even when a forged ledger row names a real commit on the
+# base with the same tree, which passes the parent and path checks.
 real_ledger = task_loop.agent_harness.read_ledger
+repo, log, ev = scenario([])
+twin = subprocess.run([REAL_GIT, "-C", str(repo), "commit-tree", "HEAD^{tree}", "-p", "origin/main", "-m", "twin"],
+                      capture_output=True, text=True, check=True).stdout.strip()  # fmt: skip
+os.environ["FAKE_HEAD_OID"] = twin
 task_loop.agent_harness.read_ledger = lambda d: [
-    {**r, "sha": "1" * 40} if r.get("status") == "LANDED" else r for r in real_ledger(d)
+    {**r, "sha": twin} if r.get("status") == "LANDED" else r for r in real_ledger(d)
 ]
-repo, log, ev = scenario([], FAKE_HEAD_OID="1" * 40)
 final = attempt(140, repo)
 task_loop.agent_harness.read_ledger = real_ledger
 check("HEAD: a worktree HEAD that is not the ledger's landed commit fails before the push",
