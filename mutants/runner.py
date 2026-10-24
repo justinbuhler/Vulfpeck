@@ -24,6 +24,7 @@ import os
 import pathlib
 import re
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -54,8 +55,8 @@ def git(*args, check=True):
     return done.stdout
 
 
-def tree_digest():
-    """Return one digest over the content of every tracked file.
+def tree_digest() -> str:
+    """Fingerprint tracked file kinds, permissions, bytes and literal link targets.
 
     A per-file revert that leaves a stray byte anywhere else in the tree would
     make the next mutant's result a lie, so the check covers the whole tracked
@@ -67,13 +68,29 @@ def tree_digest():
     mutant after the first. The instrument's log is not part of the specimen.
     """
     accumulator = hashlib.sha256()
-    for name in sorted(git("ls-files").splitlines()):
-        if name == LEDGER.relative_to(ROOT).as_posix():
+    for name in sorted(git("ls-files", "-z").split("\0")):
+        if not name or name == LEDGER.relative_to(ROOT).as_posix():
             continue
         path = ROOT / name
-        accumulator.update(name.encode())
-        accumulator.update(path.read_bytes() if path.is_file() else b"<absent>")
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            mode = 0
+        payload = b""
+        if stat.S_ISLNK(mode):
+            payload = os.fsencode(os.readlink(path))
+        elif stat.S_ISREG(mode):
+            payload = path.read_bytes()
+        accumulator.update(os.fsencode(name) + b"\0" + str(mode).encode() + b"\0")
+        accumulator.update(hashlib.sha256(payload).digest())
     return accumulator.hexdigest()
+
+
+def verify_tree(expected: str, subject: str) -> None:
+    """Refuse further results when restoration differs from the specimen baseline."""
+    restored = tree_digest()
+    if restored != expected:
+        raise SystemExit(f"{subject}: tree not identical after restoration ({restored} != {expected})")
 
 
 def dirty():
@@ -302,7 +319,10 @@ def main():
 
     started = time.monotonic()
     baseline_digest = tree_digest()
-    baseline = run_suite(command, paths, args.timeout, args.workers)
+    try:
+        baseline = run_suite(command, paths, args.timeout, args.workers)
+    finally:
+        verify_tree(baseline_digest, "baseline")
     red = sorted(name for name, r in baseline.items() if r["returncode"] != 0)
     checks = sum(r["passed"] for r in baseline.values())
     print(f"baseline: {checks} checks, {len(red)} failing scripts, "
@@ -334,8 +354,24 @@ def main():
         for patch in corpus:
             fields = metadata(patch)
             mutant_id = fields.get("mutant_id", patch.stem)
-            applied = subprocess.run(("git", "apply", str(patch)), cwd=ROOT,
-                                     capture_output=True, text=True)
+            applied = None
+            try:
+                applied = subprocess.run(("git", "apply", str(patch)), cwd=ROOT,
+                                         capture_output=True, text=True)
+                if applied.returncode == 0:
+                    discard_bytecode(fields["target"])
+                    began = time.monotonic()
+                    current = run_suite(command, paths, args.timeout, args.workers)
+                    killed, specs, crashes, tail = compare(baseline, current)
+            finally:
+                # Verify even when apply, tests or bytecode cleanup are interrupted.
+                try:
+                    if applied is not None and applied.returncode == 0:
+                        git("apply", "-R", str(patch), check=False)
+                        discard_bytecode(fields["target"])
+                finally:
+                    verify_tree(baseline_digest, mutant_id)
+
             if applied.returncode != 0:
                 record = {"mutant_id": mutant_id, "round": args.round,
                           "patch": patch.name, "error": "patch did not apply",
@@ -345,25 +381,6 @@ def main():
                 handle.flush()
                 print(f"  {mutant_id} PATCH-FAILED")
                 continue
-
-            discard_bytecode(fields["target"])
-            began = time.monotonic()
-            try:
-                current = run_suite(command, paths, args.timeout, args.workers)
-                killed, specs, crashes, tail = compare(baseline, current)
-            finally:
-                # A runner killed mid-mutant leaves the mutation applied, and every
-                # later result is then measured against poisoned source. So the
-                # revert belongs to `finally`, not to the happy path, and SIGTERM
-                # is turned into an exception for the same reason: the default
-                # handler exits without unwinding and would skip this block.
-                git("apply", "-R", str(patch), check=False)
-                discard_bytecode(fields["target"])
-                after_digest = tree_digest()
-                if after_digest != baseline_digest:
-                    raise SystemExit(
-                        f"{mutant_id}: tree not byte-identical after revert "
-                        f"({after_digest} != {baseline_digest})")
 
             record = {"mutant_id": mutant_id, "round": args.round,
                       "patch": patch.name, "target": fields.get("target"),
