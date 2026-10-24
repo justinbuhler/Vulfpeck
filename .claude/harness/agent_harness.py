@@ -421,7 +421,7 @@ def resolve_gate(worktree):
 # still burning CPU twenty minutes after its lander was stopped, and still able
 # to write to the repository. Each gated command therefore gets its own process
 # group, so the whole tree can be signalled at once.
-_child_pgid = None
+_child = None
 
 
 def _group_gone(pgid):
@@ -484,6 +484,11 @@ def kill_group(pgid, proc=None):
     return False
 
 
+def kill_running_gate():
+    """Kill the gate `run_in_group` is running, if any, reaping its leader."""
+    return kill_group(_child.pid if _child else None, _child)
+
+
 def run_in_group(argv, timeout):
     """Run one command in its own process group, killing the tree on timeout.
 
@@ -498,21 +503,21 @@ def run_in_group(argv, timeout):
         subprocess.TimeoutExpired: after the tree has been killed, not before,
             so a timed-out gate leaves nothing behind.
     """
-    global _child_pgid
+    global _child
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, env=clean_env(), start_new_session=True)
     # start_new_session makes the child its own group leader. getpgid() would say
     # the same, except that on macOS it raises ESRCH for a child that has already
     # exited but is not yet reaped - a `git add` that fails at once on index.lock.
-    _child_pgid = proc.pid
+    _child = proc
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        kill_group(_child_pgid, proc)
+        kill_group(proc.pid, proc)
         out, err = proc.communicate()
         raise subprocess.TimeoutExpired(argv, timeout, output=out, stderr=err)
     finally:
-        _child_pgid = None
+        _child = None
     return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
@@ -800,7 +805,7 @@ def cmd_land(args):
         not - nothing else knows it is there.
         """
         print(f"signal {signum}: killing the running gate and releasing the lock")
-        kill_group(_child_pgid)
+        kill_running_gate()
         raise SystemExit(128 + signum)
 
     previous_handlers = {sig: signal.signal(sig, shutdown)
@@ -832,7 +837,7 @@ def cmd_land(args):
             if args.once:
                 break
     finally:
-        kill_group(_child_pgid)
+        kill_running_gate()
         for sig, handler in previous_handlers.items():
             signal.signal(sig, handler)
         lock.unlink(missing_ok=True)

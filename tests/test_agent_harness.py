@@ -696,8 +696,27 @@ try:
     _elapsed = time.monotonic() - _t0
 finally:
     H.subprocess.Popen, H.os.killpg = _Popen, _killpg
-check("a timed-out gate whose leader is a zombie is not waited on for 4s more",
+check("a timed-out gate whose leader is a zombie is reaped, not polled out",
       _elapsed < 2, f"{_elapsed:.1f}s")
+# The lander's signal handler and finally block kill a gate that is still running.
+# Same zombie-leader probe; the leader must be reaped there too.
+_procs.clear()
+try:
+    H.subprocess.Popen, H.os.killpg = _Tracked, _linux_probe
+    _runner = threading.Thread(target=H.run_in_group, args=(["sleep", "30"], 30))
+    _runner.start()
+    for _ in range(50):
+        if H._child is not None:
+            break
+        time.sleep(0.1)
+    _t0 = time.monotonic()
+    _stopped = H.kill_running_gate()
+    _elapsed = time.monotonic() - _t0
+    _runner.join(10)
+finally:
+    H.subprocess.Popen, H.os.killpg = _Popen, _killpg
+check("stopping the lander mid-gate reaps the zombie leader and reports the group gone",
+      _stopped is True and _elapsed < 2, f"{_stopped} after {_elapsed:.1f}s")
 # On Linux killpg(1) is kill(-1): every process this user owns, the test runner
 # included. Group 1 must be refused before any signal is sent, on every platform,
 # so no check here may pass it to the real killpg.
