@@ -76,6 +76,7 @@ WORKER_TIMEOUT = 3600
 VERIFY_TIMEOUT = 3600
 LAND_TIMEOUT = 1800
 CHECKS_TIMEOUT = 3600
+BOX_DELETE_TIMEOUT = 60
 STOP_AFTER_BAD = 2  # consecutive tasks ending failed or blocked
 STOP_AFTER_FAILS = 2  # failures of one issue
 RESET_SESSION = "task-loop"
@@ -731,10 +732,21 @@ def execute(root, cfg, issue):
             )
         except KeyboardInterrupt:
             if boxed:
-                sh(["container", "delete", "--force", box_name(wt)])
+                gone = sh(
+                    ["container", "delete", "--force", box_name(wt)],
+                    timeout=BOX_DELETE_TIMEOUT,
+                )
+                if gone.returncode:
+                    print(
+                        f"could not delete box {box_name(wt)}: {tail(gone)}",
+                        file=sys.stderr,
+                    )
             raise
         if done.returncode == 124 and boxed:
-            gone = sh(["container", "delete", "--force", box_name(wt)])
+            gone = sh(
+                ["container", "delete", "--force", box_name(wt)],
+                timeout=BOX_DELETE_TIMEOUT,
+            )
             if gone.returncode:
                 raise Halt(
                     "failed",

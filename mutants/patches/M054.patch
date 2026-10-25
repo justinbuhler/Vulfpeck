@@ -4,12 +4,12 @@
 # behaviour: Ctrl-C at the worker deletes the container before re-raising
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -724,7 +724,7 @@
+@@ -731,7 +731,7 @@
                  secret,
              )
          except KeyboardInterrupt:
 -            if boxed:
 +            if False:
-                 sh(["container", "delete", "--force", box_name(wt)])
-             raise
-         if done.returncode == 124 and boxed:
+                 gone = sh(
+                     ["container", "delete", "--force", box_name(wt)],
+                     timeout=BOX_DELETE_TIMEOUT,

@@ -4,10 +4,10 @@
 # behaviour: a failed container delete after a worker timeout halts the task
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -729,7 +729,7 @@
-             raise
-         if done.returncode == 124 and boxed:
-             gone = sh(["container", "delete", "--force", box_name(wt)])
+@@ -747,7 +747,7 @@
+                 ["container", "delete", "--force", box_name(wt)],
+                 timeout=BOX_DELETE_TIMEOUT,
+             )
 -            if gone.returncode:
 +            if False:
                  raise Halt(
