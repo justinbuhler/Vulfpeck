@@ -248,9 +248,14 @@ def refuse_if_dirty(path):
         return
     top = git("rev-parse", "--show-toplevel", cwd=path)
     # A directory inside an enclosing repository is not a worktree of its own.
-    if top.returncode or Path(top.stdout.strip()).resolve() != path.resolve():
+    if top.returncode or not Path(top.stdout.strip()).samefile(path):
         die(f"target directory is not empty ({len(entries)} entries): {path}")
     dirty = porcelain(path)
+    if dirty is None:
+        die(
+            "target is an existing worktree whose status git cannot read; "
+            f"inspect it before removing: {path}"
+        )
     if dirty:
         die(
             f"target is an existing worktree with {len(dirty)} uncommitted "
