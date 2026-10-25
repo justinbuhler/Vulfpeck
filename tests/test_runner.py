@@ -466,5 +466,15 @@ for scenario, received in (
             "tree not" in outcome["stderr"],
         )
 
+# A patch that no longer applies silently stops testing its behaviour (#32).
+stale = [
+    patch.name
+    for patch in sorted((REPO / "mutants/patches").glob("M*.patch"))
+    if subprocess.run(
+        ["git", "apply", "--check", str(patch)], cwd=REPO, env=ENV, capture_output=True
+    ).returncode
+]
+check("every mutant patch applies to the working tree", not stale, f"stale: {stale}")
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 raise SystemExit(bool(FAIL))
