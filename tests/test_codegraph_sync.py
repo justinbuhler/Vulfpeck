@@ -592,10 +592,23 @@ check(
     len(done.stdout.splitlines()) == 1,
     repr(done.stdout),
 )
+
+
+def _toplevel(path):
+    return subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+    ).stdout.strip()
+
+
+ROOT_TOP = _toplevel(ROOT)
 check(
     "--sync-if-stale ran against the scratch repository, not the real checkout",
     calls(LOG_C) == [f"status --json {main_cli}", f"sync --quiet {main_cli}"]
-    and str(ROOT) not in " ".join(calls(LOG_C)),
+    and all(_toplevel(c.rsplit(" ", 1)[1]) != ROOT_TOP for c in calls(LOG_C)),
     str(calls(LOG_C)),
 )
 done = subprocess.run(_cli, cwd=TMP, capture_output=True, text=True, env=env_with(None))
