@@ -592,10 +592,17 @@ check(
     len(done.stdout.splitlines()) == 1,
     repr(done.stdout),
 )
+
+
+ROOT_TOP = git("rev-parse", "--show-toplevel", cwd=ROOT).stdout.strip()
 check(
     "--sync-if-stale ran against the scratch repository, not the real checkout",
     calls(LOG_C) == [f"status --json {main_cli}", f"sync --quiet {main_cli}"]
-    and str(ROOT) not in " ".join(calls(LOG_C)),
+    and all(
+        git("rev-parse", "--show-toplevel", cwd=c.rsplit(" ", 1)[1]).stdout.strip()
+        != ROOT_TOP
+        for c in calls(LOG_C)
+    ),
     str(calls(LOG_C)),
 )
 done = subprocess.run(_cli, cwd=TMP, capture_output=True, text=True, env=env_with(None))

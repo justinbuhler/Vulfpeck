@@ -18,6 +18,7 @@ manifest, queue entry and ledger row below is written by the harness itself.
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -267,7 +268,13 @@ check(
 print("\na live socket in declared inputs is refused before copying")
 sock_path = repo / "func" / "sources" / "live.sock"
 server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-server.bind(str(sock_path))
+# Bind by relative name: a repo-local TMPDIR exceeds the 104-byte sun_path limit.
+_cwd = os.getcwd()
+os.chdir(sock_path.parent)
+try:
+    server.bind(sock_path.name)
+finally:
+    os.chdir(_cwd)
 out = run(
     "provision",
     "--task",
@@ -344,7 +351,26 @@ check(
 dirt_dir.cleanup()
 
 print("\na dirty target directory stops provisioning before anything is created")
-dirty = tmp / "dirty"
+
+
+# The target must sit outside every Git worktree, or porcelain() succeeds against an
+# enclosing repository and provision gives a different refusal (see the next block).
+def outside_any_worktree():
+    for base in (tempfile.gettempdir(), "/tmp", "/var/tmp"):
+        probe = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=base,
+            capture_output=True,
+            text=True,
+            env=_clean_env(),
+        )
+        if probe.returncode:
+            return Path(tempfile.mkdtemp(dir=base))
+    raise SystemExit("no scratch location outside a Git worktree")
+
+
+outside = outside_any_worktree()
+dirty = outside / "dirty"
 dirty.mkdir()
 (dirty / "someones-work.txt").write_text("uncommitted\n")
 out = run(
@@ -359,6 +385,43 @@ check(
 check(
     "and no manifest was written for the refused task",
     not (state / "tasks" / "beta.json").exists(),
+)
+shutil.rmtree(outside)
+
+print("\na non-empty target inside an enclosing repository's ignored area is refused")
+# porcelain() succeeds against the enclosing repo and reads the ignored content as
+# clean, so the refusal is "existing clean worktree", not "not empty".
+(repo / ".git" / "info" / "exclude").write_text("enclosed/\n")
+enclosed = repo / "enclosed"
+enclosed.mkdir()
+(enclosed / "someones-work.txt").write_text("uncommitted\n")
+out = run(
+    "provision",
+    "--task",
+    "enclosed",
+    "--baseline",
+    FIRST,
+    "--path",
+    str(enclosed),
+    cwd=repo,
+)
+check(
+    "provision refuses a non-empty target inside an enclosing repo",
+    out.returncode != 0,
+    out.stdout,
+)
+check(
+    "and the refusal is 'existing clean worktree'",
+    "existing clean worktree" in out.stderr,
+    out.stderr.strip(),
+)
+check(
+    "the enclosed target is left exactly as it was",
+    (enclosed / "someones-work.txt").read_text() == "uncommitted\n",
+)
+check(
+    "and no manifest was written for the enclosed refusal",
+    not (state / "tasks" / "enclosed.json").exists(),
 )
 out = run(
     "provision",
