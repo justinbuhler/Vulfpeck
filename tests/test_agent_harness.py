@@ -389,8 +389,7 @@ check(
 shutil.rmtree(outside)
 
 print("\na non-empty target inside an enclosing repository's ignored area is refused")
-# porcelain() succeeds against the enclosing repo and reads the ignored content as
-# clean, so the refusal is "existing clean worktree", not "not empty".
+# The target is not its own worktree's top level, so it is a plain non-empty directory.
 (repo / ".git" / "info" / "exclude").write_text("enclosed/\n")
 enclosed = repo / "enclosed"
 enclosed.mkdir()
@@ -411,8 +410,8 @@ check(
     out.stdout,
 )
 check(
-    "and the refusal is 'existing clean worktree'",
-    "existing clean worktree" in out.stderr,
+    "and the refusal is 'not empty'",
+    "not empty" in out.stderr,
     out.stderr.strip(),
 )
 check(
