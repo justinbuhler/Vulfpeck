@@ -398,7 +398,7 @@ enclosed.mkdir()
 out = run(
     "provision",
     "--task",
-    "delta",
+    "enclosed",
     "--baseline",
     FIRST,
     "--path",
@@ -411,18 +411,17 @@ check(
     out.stdout,
 )
 check(
-    "and gives one of the two known refusals",
-    "not empty" in out.stderr or "existing clean worktree" in out.stderr,
+    "and the refusal is 'existing clean worktree'",
+    "existing clean worktree" in out.stderr,
     out.stderr.strip(),
 )
-print(f"  (refusal message: {out.stderr.strip()})")
 check(
     "the enclosed target is left exactly as it was",
     (enclosed / "someones-work.txt").read_text() == "uncommitted\n",
 )
 check(
     "and no manifest was written for the enclosed refusal",
-    not (state / "tasks" / "delta.json").exists(),
+    not (state / "tasks" / "enclosed.json").exists(),
 )
 out = run(
     "provision",
