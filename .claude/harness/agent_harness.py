@@ -15,9 +15,11 @@ ledger are the same files whichever directory an agent runs from:
     <common .git>/agent-harness/
         tasks/<task>.json   manifest, including the baseline SHA
         queue/*.json        commit requests waiting for the lander
+        processing/*.json   the request a lander has claimed, with its .owner.json
         done/*.json         requests the lander has consumed
         ledger.jsonl        one LANDED or FAILED record per attempt
-        lander.lock         held by the single running lander
+        lander.lock         flock held for the whole life of the single lander
+        meta.lock           flock held only around short queue/manifest transitions
 
 Subcommands:
     provision   create a worktree for one task from a named baseline commit
@@ -27,6 +29,8 @@ Subcommands:
 """
 
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -144,7 +148,7 @@ def main_checkout():
 def state_root():
     """Return the harness state directory, creating its subdirectories."""
     root = common_git_dir() / "agent-harness"
-    for name in ("tasks", "queue", "done"):
+    for name in ("tasks", "queue", "processing", "done"):
         (root / name).mkdir(parents=True, exist_ok=True)
     return root
 
@@ -158,6 +162,21 @@ def write_json(path, payload):
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(payload, indent=2) + "\n")
     os.replace(tmp, path)
+
+
+@contextlib.contextmanager
+def meta_lock(root):
+    """Hold `meta.lock` for one short state transition.
+
+    Taken after the lander lock, never before it, and never held across a gate,
+    a git commit, a sleep or a network call. Closing the descriptor releases it.
+    """
+    fd = os.open(root / "meta.lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 # A task name becomes a file name under tasks/ and queue/. Anything that could
@@ -341,6 +360,8 @@ def cmd_provision(args):
         "gate": str(gate_hook) if gate_hook else None,
         "branch": branch,
         "worktree": str(path),
+        # A request carries the generation it was queued under; nothing bumps it yet.
+        "generation": 1,
         "cloned_inputs": cloned,
         "created": now(),
     }
@@ -397,18 +418,28 @@ def cmd_enqueue(args):
     if not files:
         die("a commit request must name at least one --file")
 
-    request = {
-        "task": args.task,
-        "message": args.message,
-        "files": files,
-        "worktree": str(worktree),
-        "baseline_sha": manifest["baseline_sha"],
-        "branch": manifest["branch"],
-        "queued": now(),
-        "queued_by_pid": os.getpid(),
-    }
     name = f"{time.time_ns()}-{args.task}-{secrets.token_hex(4)}.json"
-    write_json(root / "queue" / name, request)
+    with meta_lock(root):
+        # Re-read under the lock: the task may have been re-provisioned or removed
+        # while the paths above were being checked.
+        current = load_manifest(root, args.task)
+        for field in ("worktree", "branch", "baseline_sha"):
+            if current.get(field) != manifest.get(field):
+                die(f"task {args.task!r} manifest {field} changed while queueing")
+        if "generation" not in current:
+            die(f"task {args.task!r} manifest has no generation; provision it again")
+        request = {
+            "task": args.task,
+            "message": args.message,
+            "files": files,
+            "worktree": str(worktree),
+            "baseline_sha": current["baseline_sha"],
+            "branch": current["branch"],
+            "generation": current["generation"],
+            "queued": now(),
+            "queued_by_pid": os.getpid(),
+        }
+        write_json(root / "queue" / name, request)
     print(f"queued {name}")
     return 0
 
@@ -595,40 +626,85 @@ def alive(pid_text):
 
 
 def acquire_lander_lock(root):
-    """Take the single-lander lock, taking over one a dead process left behind.
+    """Take the single-lander lock and keep it until the process ends.
 
-    A lander killed between taking the lock and its `finally` leaves the file
-    there, and every later lander then refuses forever: the queue wedges and
-    needs a human. That happened during this harness's own trial run, which is
-    why the check exists. A lock whose process is gone protects nothing, so it
-    is taken over - loudly, never silently.
+    The lock is an advisory flock on an open descriptor, so a lander that dies
+    releases it with no cleanup and the file is never unlinked. The recorded pid
+    is diagnostic only; it is written after the lock is held, never before.
 
     Returns:
-        (Path): the lock file now held by this process.
+        (int): the descriptor holding the lock; closing it releases the lock.
     """
     lock = root / "lander.lock"
-    # ponytail: three attempts, not a real mutex. Two landers that both find the
-    # same dead holder can race here; O_EXCL still means only one wins, and the
-    # loser retries. If landers ever run unattended in numbers, replace this
-    # with a lock whose holder is proven by an open file descriptor.
-    for _ in range(3):
-        try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            holder = ""
-            try:
-                holder = lock.read_text().strip()
-            except OSError:
-                pass
-            if alive(holder):
-                die(f"another lander already holds {lock} (pid {holder})")
-            print(f"taking over {lock} from dead pid {holder or 'unknown'}")
-            lock.unlink(missing_ok=True)
-            continue
-        os.write(fd, f"{os.getpid()}\n".encode())
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        holder = os.pread(fd, 32, 0).decode(errors="replace").strip()
         os.close(fd)
-        return lock
-    die(f"could not take {lock}; another lander keeps reclaiming it")
+        die(
+            f"another lander already holds {lock}"
+            + (f" (pid {holder})" if holder else "")
+        )
+    os.ftruncate(fd, 0)
+    os.pwrite(fd, f"{os.getpid()}\n".encode(), 0)
+    return fd
+
+
+def lander_holder(root):
+    """Return the pid text recorded by the live lander, or None if none holds the lock."""
+    try:
+        fd = os.open(root / "lander.lock", os.O_RDONLY)
+    except FileNotFoundError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return os.pread(fd, 32, 0).decode(errors="replace").strip() or "unknown"
+    finally:
+        os.close(fd)
+    return None
+
+
+def owner_path(claimed):
+    """Return the owner record that sits beside one claimed request."""
+    return claimed.with_name(f"{claimed.name}.owner.json")
+
+
+def requests_in(directory):
+    """Return the request files in one state directory, oldest first."""
+    return sorted(
+        p for p in directory.glob("*.json") if not p.name.endswith(".owner.json")
+    )
+
+
+def claim_next(root, token):
+    """Move the oldest queued request to `processing/` and record who owns it.
+
+    Returns:
+        (Path): the claimed request, or None if the queue is empty.
+    """
+    with meta_lock(root):
+        pending = requests_in(root / "queue")
+        if not pending:
+            return None
+        claimed = root / "processing" / pending[0].name
+        os.replace(pending[0], claimed)
+        write_json(
+            owner_path(claimed),
+            {"pid": os.getpid(), "token": token, "claimed": now()},
+        )
+    return claimed
+
+
+def acknowledge(root, claimed, token):
+    """Move a finished request to `done/`, but only if this lander still owns it."""
+    with meta_lock(root):
+        owner = json.loads(owner_path(claimed).read_text())
+        if owner["token"] != token:
+            die(f"{claimed.name} is owned by another lander (pid {owner['pid']})")
+        os.replace(claimed, root / "done" / claimed.name)
+        owner_path(claimed).unlink()
 
 
 def with_lock_backoff(argv, timeout, tries=LOCK_TRIES):
@@ -778,6 +854,13 @@ def land_one(root, request_path, timeout, lock_tries=LOCK_TRIES, no_hooks=False)
                 f"request {field} {request.get(field)!r} does not match the task "
                 f"manifest's {manifest.get(field)!r}"
             )
+    if request.get("generation") is None or request["generation"] != manifest.get(
+        "generation"
+    ):
+        return fail(
+            f"request generation {request.get('generation')!r} does not match the "
+            f"task manifest's {manifest.get('generation')!r}"
+        )
     landed = [
         r
         for r in read_ledger(root)
@@ -913,14 +996,14 @@ def land_one(root, request_path, timeout, lock_tries=LOCK_TRIES, no_hooks=False)
 def cmd_land(args):
     """Consume the queue as the single lander, one commit at a time."""
     root = state_root()
-    lock = acquire_lander_lock(root)
+    lock_fd = acquire_lander_lock(root)
+    token = secrets.token_hex(8)
 
     def shutdown(signum, _frame):
         """Kill the running gate's tree, then let `finally` release the lock.
 
-        Without this a stopped lander orphans its gate and leaks its lock; the
-        lock is recoverable because a dead holder is taken over, but the gate is
-        not - nothing else knows it is there.
+        Without this a stopped lander orphans its gate; the lock itself is
+        released by the kernel whenever the process ends.
         """
         print(f"signal {signum}: killing the running gate and releasing the lock")
         kill_running_gate()
@@ -941,36 +1024,33 @@ def cmd_land(args):
             )
         )
         while True:
-            pending = sorted((root / "queue").glob("*.json"))
-            if not pending:
+            request_path = claim_next(root, token)
+            if request_path is None:
                 if args.once:
                     break
                 time.sleep(args.poll)
                 continue
-            for request_path in pending:
-                record = land_one(
-                    root, request_path, args.timeout, args.lock_tries, args.no_hooks
+            record = land_one(
+                root, request_path, args.timeout, args.lock_tries, args.no_hooks
+            )
+            acknowledge(root, request_path, token)
+            if record["status"] == "LANDED":
+                landed += 1
+                print(
+                    f"LANDED {record['task']:<22} {record['oneline']}"
+                    f"  (lock retries {record['lock_retries']})"
                 )
-                os.replace(request_path, root / "done" / request_path.name)
-                if record["status"] == "LANDED":
-                    landed += 1
-                    print(
-                        f"LANDED {record['task']:<22} {record['oneline']}"
-                        f"  (lock retries {record['lock_retries']})"
-                    )
-                else:
-                    failed += 1
-                    print(
-                        f"FAILED {record['task']:<22} {record['detail']}"
-                        f"  (lock retries {record['lock_retries']})"
-                    )
-            if args.once:
-                break
+            else:
+                failed += 1
+                print(
+                    f"FAILED {record['task']:<22} {record['detail']}"
+                    f"  (lock retries {record['lock_retries']})"
+                )
     finally:
         kill_running_gate()
         for sig, handler in previous_handlers.items():
             signal.signal(sig, handler)
-        lock.unlink(missing_ok=True)
+        os.close(lock_fd)
 
     print(f"{landed} landed, {failed} failed")
     # The process exit code carries the outcome. Nothing is echoed after this.
@@ -980,12 +1060,13 @@ def cmd_land(args):
 # --- reconcile ---------------------------------------------------------------
 
 
-def classify(manifest, ledger, queued):
+def classify(manifest, ledger, queued, processing, lander_live):
     """Return one task's state and the evidence behind it.
 
     The states are decided in this order, because work in flight outranks work
     already done and unlanded work outranks a clean history:
 
+        PROCESSING   a lander has claimed a request and has not acknowledged it
         QUEUED       a request is waiting for the lander
         ORPHANED     the worktree holds work no request will land
         LANDED       HEAD is exactly the last landed commit, tree clean
@@ -1001,7 +1082,18 @@ def classify(manifest, ledger, queued):
     landed = [r for r in mine if r["status"] == "LANDED"]
     failed = [r for r in mine if r["status"] == "FAILED"]
     waiting = [q for q in queued if q["task"] == task]
+    claimed = [owner for request, owner in processing if request["task"] == task]
 
+    if claimed:
+        pids = ", ".join(
+            sorted({str((o or {}).get("pid", "unknown")) for o in claimed})
+        )
+        stale = (
+            ""
+            if lander_live
+            else "; stale: no live lander holds the lock, awaits recovery"
+        )
+        return "PROCESSING", f"{len(claimed)} request(s), owner pid {pids}{stale}"
     if waiting:
         return "QUEUED", f"{len(waiting)} request(s) waiting"
     if not worktree.is_dir():
@@ -1031,15 +1123,27 @@ def cmd_reconcile(args):
     """Report which tasks landed, which are queued and which are orphaned."""
     root = state_root()
     ledger = read_ledger(root)
-    queued = [
-        json.loads(p.read_text()) for p in sorted((root / "queue").glob("*.json"))
-    ]
+    # One snapshot: a claim moves a request between the two directories.
+    with meta_lock(root):
+        queued = [json.loads(p.read_text()) for p in requests_in(root / "queue")]
+        processing = [
+            (
+                json.loads(p.read_text()),
+                json.loads(owner_path(p).read_text())
+                if owner_path(p).exists()
+                else None,
+            )
+            for p in requests_in(root / "processing")
+        ]
+    holder = lander_holder(root)
     manifests = [
         json.loads(p.read_text()) for p in sorted((root / "tasks").glob("*.json"))
     ]
     rows = []
     for manifest in manifests:
-        state, detail = classify(manifest, ledger, queued)
+        state, detail = classify(
+            manifest, ledger, queued, processing, holder is not None
+        )
         rows.append(
             {
                 "task": manifest["task"],
@@ -1064,9 +1168,8 @@ def cmd_reconcile(args):
             f"  {len(rows)} task(s): "
             + ", ".join(f"{n} {s.lower()}" for s, n in sorted(counts.items()))
         )
-        orphan_lock = root / "lander.lock"
-        if orphan_lock.exists():
-            print(f"  lander.lock held by pid {orphan_lock.read_text().strip()}")
+        if holder is not None:
+            print(f"  lander.lock held by pid {holder}")
     return 0
 
 

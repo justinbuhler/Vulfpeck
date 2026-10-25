@@ -16,8 +16,11 @@ supplied is the harness's *input* - a repository - never its own state: every
 manifest, queue entry and ledger row below is written by the harness itself.
 """
 
+import fcntl
 import json
 import os
+import shlex
+import re
 import shutil
 import socket
 import subprocess
@@ -1468,7 +1471,7 @@ check(
 )
 set_gate(repo, 0)
 
-print("\ntwo live landers cannot run at once, but a dead one cannot wedge the queue")
+print("\nthe lander lock is held by a live process, never by a file that names one")
 check("a running process reads as alive", H.alive(str(os.getpid())))
 # A pid_max of 4194304 makes any fixed pid a possible live process on Linux, so
 # the dead holder is a child that has really exited and been reaped.
@@ -1481,8 +1484,171 @@ check(
     "and neither does an unreadable holder", not H.alive("") and not H.alive("nonsense")
 )
 
+# Holders are real processes. The helper calls the harness's own acquisition, so
+# what it holds is exactly what a lander holds; nothing here writes a pid into a
+# lock file and calls it a holder.
+HELPER = tmp / "lock_helper.py"
+HELPER.write_text(
+    f"""
+import fcntl, os, signal, sys, time
+from pathlib import Path
+sys.path.insert(0, {str(HARNESS.parent)!r})
+import agent_harness as H
+
+signal.alarm(120)  # a wedged helper must not hang the suite
+mode, root = sys.argv[1], Path(sys.argv[2])
+if mode == "hold":
+    held = H.acquire_lander_lock(root)
+    print("HELD", flush=True)
+    sys.stdin.read()
+elif mode == "holdraw":
+    # Holds the flock but has not yet written its pid: the old O_EXCL window.
+    fd = os.open(root / "lander.lock", os.O_RDWR | os.O_CREAT)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    print("HELD", flush=True)
+    sys.stdin.read()
+elif mode == "race":
+    os.read(int(sys.argv[3]), 1)  # released together when the parent closes the pipe
+    try:
+        held = H.acquire_lander_lock(root)
+    except SystemExit:
+        print("REFUSED", time.monotonic_ns(), flush=True)
+        sys.exit(0)
+    print("ACQ", time.monotonic_ns(), flush=True)
+    sys.stdin.readline()
+    print("REL", time.monotonic_ns(), flush=True)
+    os._exit(0)
+elif mode == "probe":
+    fd = os.open(sys.argv[2], os.O_RDWR | os.O_CREAT)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(1)
+"""
+)
+GATE_PROBE = tmp / "gate_probe.py"
+GATE_PROBE.write_text(
+    """
+import fcntl, os, sys
+
+lock = sys.argv[1]
+want = os.stat(lock)
+leaked = []
+for fd in range(3, 256):
+    try:
+        got = os.fstat(fd)
+    except OSError:
+        continue
+    if (got.st_dev, got.st_ino) == (want.st_dev, want.st_ino):
+        leaked.append(fd)
+fd = os.open(lock, os.O_RDONLY)
+try:
+    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    held = "FREE"
+except BlockingIOError:
+    held = "HELD"
+print(f"leaked={leaked} lock={held}")
+"""
+)
+
+
+def helper(mode, *args, **kwargs):
+    return subprocess.Popen(
+        [sys.executable, str(HELPER), mode, *map(str, args)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=_clean_env(),
+        **kwargs,
+    )
+
+
+def lock_free(name):
+    """Return whether no process holds `state/<name>`, asked from a separate process."""
+    return (
+        subprocess.run(
+            [sys.executable, str(HELPER), "probe", str(state / name)],
+            env=_clean_env(),
+        ).returncode
+        == 0
+    )
+
+
+def new_task(name):
+    """Provision one task at SECOND with an edited a.txt, and return its worktree."""
+    wt = tmp / f"wt-{name}"
+    out = run(
+        "provision", "--task", name, "--baseline", SECOND, "--path", str(wt), cwd=repo
+    )
+    check(f"provisioned {name}", out.returncode == 0, out.stderr)
+    (wt / "a.txt").write_text(f"{name} edit\n")
+    return wt
+
+
+def enq(name, message="test: land"):
+    """Enqueue a.txt for one task; return the process and the request it queued."""
+    out = run(
+        "enqueue",
+        "--task",
+        name,
+        "-m",
+        message,
+        "--file",
+        "a.txt",
+        cwd=tmp / f"wt-{name}",
+    )
+    queued = sorted((state / "queue").glob(f"*-{name}-*.json"))
+    return out, (queued[-1] if queued else None)
+
+
+def wait_for(path, seconds=30):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if path.exists():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def blocking_gate(tag):
+    """Install a gate that reports its fds, announces itself, then waits for GO."""
+    go, started, report = (tmp / f"{tag}.{x}" for x in ("go", "started", "report"))
+    hook = repo / "hooks" / "pre-commit"
+    hook.write_text(
+        "#!/bin/sh\n"
+        f"{shlex.quote(sys.executable)} {shlex.quote(str(GATE_PROBE))} "
+        f"{shlex.quote(str(state / 'lander.lock'))} > {shlex.quote(str(report))}\n"
+        f"echo $$ > {shlex.quote(str(started))}\n"
+        "i=0\n"
+        f"while [ ! -f {shlex.quote(str(go))} ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done\n"
+        "exit 0\n"
+    )
+    hook.chmod(0o755)
+    return go, started, report
+
+
+def start_lander(*extra):
+    return subprocess.Popen(
+        [sys.executable, str(HARNESS), "land", "--once", "--timeout", "120", *extra],
+        cwd=repo,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=_clean_env(),
+    )
+
+
 lander_lock = state / "lander.lock"
-lander_lock.write_text(f"{os.getpid()}\n")
+
+new_task("lk")
+_out, _req = enq("lk")
+holder = helper("hold", state)
+check(
+    "a helper takes the lock the way a lander does",
+    holder.stdout.readline().strip() == "HELD",
+)
+_ino = lander_lock.stat().st_ino
 out = run("land", "--once", cwd=repo)
 check(
     "a second lander refuses while a live process holds the lock",
@@ -1490,26 +1656,44 @@ check(
     out.stdout,
 )
 check("and says who holds it", "already holds" in out.stderr, out.stderr.strip())
-
-# A lander killed between taking the lock and releasing it leaves this behind.
-# Before the takeover check, every later lander refused forever and the queue
-# needed a human to unwedge it. That happened during the harness's trial run.
-lander_lock.write_text(f"{DEAD_PID}\n")
-run(
-    "enqueue",
-    "--task",
-    "delta",
-    "-m",
-    "after a crashed lander",
-    "--file",
-    "a.txt",
-    cwd=tmp / "wt-delta",
+check(
+    "and names the holder's pid from the lock file",
+    f"pid {holder.pid}" in out.stderr,
+    out.stderr.strip(),
 )
-(tmp / "wt-delta" / "a.txt").write_text("delta again\n")
+check(
+    "the refused lander left the queued request where it was",
+    _req is not None and _req.exists(),
+)
+check(
+    "reconcile names the holder while it is live",
+    f"lander.lock held by pid {holder.pid}" in run("reconcile", cwd=repo).stdout,
+)
+_again, _other = enq("lk", "test: enqueued while another process holds the lock")
+check(
+    "enqueue succeeds while another process holds the lander lock",
+    _again.returncode == 0 and _other is not None,
+    _again.stderr,
+)
+_req.unlink()  # one request is enough for the landers below
+
+# A lander killed at any point, including between taking the lock and anything it
+# would have cleaned up, must not wedge the queue. The kernel drops the flock; no
+# takeover step exists to run, and none may be reported.
+holder.kill()
+holder.wait()
+holder.stdout.close()
+holder.stderr.close()
+holder.stdin.close()
+check("a SIGKILLed holder leaves the lock file in place", lander_lock.exists())
+check(
+    "reconcile reports no holder once it is dead, though the file remains",
+    "lander.lock held" not in run("reconcile", cwd=repo).stdout,
+)
 out = run("land", "--once", "--timeout", "120", cwd=repo)
 check(
-    "a lock left by a dead process is taken over, not obeyed forever",
-    "taking over" in out.stdout,
+    "the next lander acquires with no takeover message",
+    out.returncode == 0 and "taking over" not in out.stdout + out.stderr,
     out.stdout + out.stderr,
 )
 check(
@@ -1517,7 +1701,288 @@ check(
     not list((state / "queue").glob("*.json")),
     out.stdout,
 )
-check("the lock is released when that lander finishes", not lander_lock.exists())
+check(
+    "the lock file survives the lander that used it",
+    lander_lock.exists() and lander_lock.stat().st_ino == _ino,
+    "the lock file was unlinked or replaced",
+)
+out = run("land", "--once", cwd=repo)
+check(
+    "a later lander still acquires, on the same inode",
+    out.returncode == 0 and lander_lock.exists() and lander_lock.stat().st_ino == _ino,
+    out.stderr,
+)
+
+# A stale file proves nothing: only a live holder blocks a lander.
+for _stale in (f"{DEAD_PID}\n", "not a pid\n", ""):
+    lander_lock.write_text(_stale)
+    out = run("land", "--once", cwd=repo)
+    check(
+        f"a stale lock file ({_stale.strip() or 'empty'}) with no live holder does not block",
+        out.returncode == 0 and "already holds" not in out.stderr,
+        out.stderr,
+    )
+
+print("\ntwo landers reaching the lock together never both own it")
+# The old window, held open: the lock exists and its owner has not written a pid
+# yet. A lander that read an empty file as "dead" took the lock over here.
+_raw_root = tmp / "rawhold"
+_raw_root.mkdir()
+_raw = helper("holdraw", _raw_root)
+_raw.stdout.readline()
+try:
+    H.acquire_lander_lock(_raw_root)
+    _taken = True
+except SystemExit:
+    _taken = False
+check("a lock whose holder has not written its pid yet is still held", not _taken)
+_raw.kill()
+_raw.wait()
+for _f in (_raw.stdin, _raw.stdout, _raw.stderr):
+    _f.close()
+_spans = []
+for _round in range(25):
+    _root = tmp / f"race-{_round}"
+    _root.mkdir()
+    _r, _w = os.pipe()
+    _procs = [helper("race", _root, _r, pass_fds=(_r,)) for _ in range(2)]
+    os.close(_r)
+    os.close(_w)  # EOF on the shared pipe releases both helpers at once
+    _lines = [p.stdout.readline().split() for p in _procs]
+    _winners = [p for p, line in zip(_procs, _lines) if line[:1] == ["ACQ"]]
+    check(
+        f"round {_round}: exactly one lander acquires and the other refuses",
+        len(_winners) == 1 and sum(line[:1] == ["REFUSED"] for line in _lines) == 1,
+        str(_lines),
+    )
+    # Release every acquirer so a double owner cannot hide behind a held lock.
+    for p, line in zip(_procs, _lines):
+        if line[:1] == ["ACQ"]:
+            p.stdin.write("\n")
+            p.stdin.flush()
+            _spans.append((int(line[1]), int(p.stdout.readline().split()[1])))
+    for p in _procs:
+        p.wait(30)
+        p.stdout.close()
+        p.stderr.close()
+_spans.sort()
+check(
+    "no two held intervals overlap across the rounds",
+    all(a[1] <= b[0] for a, b in zip(_spans, _spans[1:])),
+    str(_spans),
+)
+
+print("\na gate runs under the lander without the lock fd and without meta.lock")
+new_task("eps")
+new_task("zeta")
+go, started, report = blocking_gate("g1")
+_out, _req = enq("eps")
+lander = start_lander()
+check("the gate started", wait_for(started))
+_proc = list((state / "processing").glob("*.json"))
+_owners = [p for p in _proc if p.name.endswith(".owner.json")]
+_claimed = [p for p in _proc if not p.name.endswith(".owner.json")]
+check(
+    "the claimed request is in processing/ and no longer in queue/",
+    [p.name for p in _claimed] == [_req.name] and not _req.exists(),
+    str(_proc),
+)
+_owner = json.loads(_owners[0].read_text()) if _owners else {}
+check(
+    "its owner record names the live lander and carries a token and claim time",
+    _owner.get("pid") == lander.pid
+    and bool(_owner.get("token"))
+    and "claimed" in _owner,
+    str(_owner),
+)
+check(
+    "the lock file records the same lander pid",
+    lander_lock.read_text().strip() == str(lander.pid),
+)
+check("meta.lock is free while the gate runs", lock_free("meta.lock"))
+_zeta, _zreq = enq("zeta")
+check(
+    "enqueue completes while a gate runs",
+    _zeta.returncode == 0 and _zreq is not None,
+    _zeta.stderr,
+)
+_rec = run("reconcile", cwd=repo).stdout
+check(
+    "reconcile reads the claimed task as PROCESSING with its owner pid, not stale",
+    re.search(rf"PROCESSING\s+eps\s.*owner pid {lander.pid}$", _rec, re.M) is not None
+    and "stale" not in _rec,
+    _rec,
+)
+check(
+    "reconcile names the live lander as the lock holder",
+    f"lander.lock held by pid {lander.pid}" in _rec,
+    _rec,
+)
+check(
+    "the gate process does not hold the lander lock's descriptor",
+    report.read_text().strip() == "leaked=[] lock=HELD",
+    report.read_text(),
+)
+go.write_text("go\n")
+_stdout, _stderr = lander.communicate(timeout=120)
+check(
+    "the lander lands both requests",
+    lander.returncode == 0 and "2 landed, 0 failed" in _stdout,
+    _stdout + _stderr,
+)
+check(
+    "afterwards processing/ is empty: request acknowledged, owner record removed",
+    not list((state / "processing").glob("*")),
+)
+check("and the request is in done/", (state / "done" / _req.name).exists())
+check(
+    "the lander released the lock when it exited",
+    lock_free("lander.lock") and lock_free("meta.lock"),
+)
+
+print(
+    "\na lander killed mid-gate leaves its claim for recovery, and nobody re-lands it"
+)
+new_task("eta")
+go, started, report = blocking_gate("g2")
+_out, _req = enq("eta")
+lander = start_lander()
+check("the gate started", wait_for(started))
+_hook_pid = int(started.read_text())
+lander.kill()
+lander.communicate()
+go.write_text("go\n")
+for _ in range(300):  # let the orphaned gate finish so cleanup does not race it
+    try:
+        os.kill(_hook_pid, 0)
+    except ProcessLookupError:
+        break
+    time.sleep(0.1)
+_proc = sorted(p.name for p in (state / "processing").glob("*"))
+check(
+    "the request and its owner record are still in processing/",
+    _proc == sorted([_req.name, f"{_req.name}.owner.json"]),
+    str(_proc),
+)
+_rec = run("reconcile", cwd=repo).stdout
+check(
+    "reconcile reports the task PROCESSING and stale",
+    re.search(r"PROCESSING\s+eta\s.*stale", _rec) is not None,
+    _rec,
+)
+_before = len(H.read_ledger(state))
+out = run("land", "--once", "--timeout", "120", cwd=repo)
+check(
+    "a new lander does not re-land the claimed request (recovery is not R1)",
+    out.returncode == 0
+    and "0 landed, 0 failed" in out.stdout
+    and (state / "processing" / _req.name).exists()
+    and len(H.read_ledger(state)) == _before,
+    out.stdout + out.stderr,
+)
+set_gate(repo, 0)
+
+print("\nlock order: the lander holds its lock before it waits on meta.lock")
+new_task("mu")
+_out, _req = enq("mu")
+_meta = os.open(state / "meta.lock", os.O_RDWR | os.O_CREAT)
+fcntl.flock(_meta, fcntl.LOCK_EX)
+lander = start_lander()
+time.sleep(1.5)
+check(
+    "a lander started while meta.lock is held waits instead of finishing",
+    lander.poll() is None,
+)
+check(
+    "and holds the lander lock while it waits, so the order is lander then meta",
+    not lock_free("lander.lock"),
+)
+os.close(_meta)
+_stdout, _stderr = lander.communicate(timeout=120)
+check(
+    "releasing meta.lock lets it finish: no deadlock",
+    lander.returncode == 0 and "1 landed, 0 failed" in _stdout,
+    _stdout + _stderr,
+)
+
+print("\nenqueue re-reads the manifest under meta.lock")
+for _name, _change in (("ka", "gone"), ("kb", "baseline")):
+    _wt = new_task(_name)
+    _meta = os.open(state / "meta.lock", os.O_RDWR | os.O_CREAT)
+    fcntl.flock(_meta, fcntl.LOCK_EX)
+    _enq = subprocess.Popen(
+        [
+            sys.executable,
+            str(HARNESS),
+            "enqueue",
+            "--task",
+            _name,
+            "-m",
+            "test: raced",
+            "--file",
+            "a.txt",
+        ],
+        cwd=_wt,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=_clean_env(),
+    )
+    time.sleep(1.5)  # long enough for enqueue to read the manifest and block
+    _manifest = state / "tasks" / f"{_name}.json"
+    if _change == "gone":
+        _manifest.unlink()
+    else:
+        _data = json.loads(_manifest.read_text())
+        _data["baseline_sha"] = FIRST
+        _manifest.write_text(json.dumps(_data))
+    os.close(_meta)
+    _stdout, _stderr = _enq.communicate(timeout=60)
+    check(
+        f"enqueue is refused when the manifest changed under it ({_change})",
+        _enq.returncode != 0 and not list((state / "queue").glob(f"*-{_name}-*")),
+        _stdout + _stderr,
+    )
+
+print("\na request is bound to the generation of the manifest it was queued under")
+new_task("th")
+_wt = tmp / "wt-th"
+for _label, _gen in (("missing", None), ("different", 2)):
+    _out, _req = enq("th")
+    _forged = json.loads(_req.read_text())
+    if _gen is None:
+        _forged.pop("generation", None)
+    else:
+        _forged["generation"] = _gen
+    _req.write_text(json.dumps(_forged))
+    out = run("land", "--once", "--timeout", "120", cwd=repo)
+    _last = H.read_ledger(state)[-1]
+    check(
+        f"a forged request with a {_label} generation is FAILED and named in the ledger",
+        out.returncode != 0
+        and _last["status"] == "FAILED"
+        and _last["request"] == _req.name
+        and "generation" in _last["detail"],
+        _last.get("detail", ""),
+    )
+    check(
+        f"and nothing was committed for the {_label} generation",
+        git("rev-parse", "HEAD", cwd=_wt).stdout.strip() == SECOND,
+    )
+_out, _req = enq("th")
+check(
+    "a real request carries the manifest's generation",
+    json.loads(_req.read_text()).get("generation")
+    == json.loads((state / "tasks" / "th.json").read_text()).get("generation")
+    == 1,
+)
+out = run("land", "--once", "--timeout", "120", cwd=repo)
+check(
+    "and lands",
+    out.returncode == 0 and "1 landed, 0 failed" in out.stdout,
+    out.stdout + out.stderr,
+)
+
 
 print("\nno git subprocess in this file may inherit the gate's environment")
 # GIT_DIR + GIT_WORK_TREE reaching `git init` writes core.worktree into the

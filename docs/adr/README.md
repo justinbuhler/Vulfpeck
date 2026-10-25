@@ -37,4 +37,5 @@ To change a decision, write a new ADR with `Supersedes: NNNN` and mark the old o
 - 2026-10-23 — [0017. Loop, scope and budget limits are hooks, not prose](0017-loop-scope-and-budget-limits-are-hooks-not-prose.md) — proposed
 - 2026-10-23 — [0018. The task loop turns labelled issues into merged pull requests](0018-the-task-loop-turns-labelled-issues-into-merged-pull-request.md) — proposed
 - 2026-10-23 — [0019. Copy declared inputs into isolated specimens](0019-copy-declared-inputs-into-isolated-specimens.md) — proposed
+- 2026-10-25 — [0020. The lander holds a kernel lock for its lifetime](0020-the-lander-holds-a-kernel-lock-for-its-lifetime.md) — proposed
 <!-- adr-index:end -->
