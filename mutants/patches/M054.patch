@@ -1,0 +1,15 @@
+# mutant_id: M054
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: Ctrl-C at the worker deletes the container before re-raising
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -731,7 +731,7 @@
+                 secret,
+             )
+         except KeyboardInterrupt:
+-            if boxed:
++            if False:
+                 gone = sh(
+                     ["container", "delete", "--force", box_name(wt)],
+                     timeout=BOX_DELETE_TIMEOUT,
