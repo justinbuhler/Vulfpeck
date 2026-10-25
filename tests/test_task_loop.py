@@ -6,6 +6,7 @@ and the commit gate run for real. Every expectation is a literal written here (R
 """
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -64,7 +65,7 @@ printf 'STATUS: %s because\\n' "${FAKE_WORKER_STATUS:-DONE}"
 exit "${FAKE_WORKER_RC:-0}"
 """,
     "container": """#!/bin/sh
-case "$1" in kill|delete) echo "container $*" >> "$SHIM_LOG"; exit 0;; esac
+case "$1" in kill|delete) echo "container $*" >> "$SHIM_LOG"; exit "${FAKE_DELETE_RC:-0}";; esac
 n=""; [ -f "$SHIM_DIR/container-argv.txt" ] && n="-verify"
 printf '%s\\n' "$@" > "$SHIM_DIR/container-argv$n.txt"
 printf '%s|%s|%s|%s|%s|%s|%s' "${ANTHROPIC_API_KEY-unset}" "${OPENAI_API_KEY-unset}" "${GEMINI_API_KEY-unset}" "${GH_TOKEN-unset}" "${SSH_AUTH_SOCK-unset}" "${GH_CONFIG_DIR-unset}" "${HOME-unset}" > "$SHIM_DIR/container-env$n.txt"
@@ -118,6 +119,7 @@ FAKE_VARS = (
     "FAKE_WORKER_EXTRA",
     "FAKE_TIMELINE_FILE",
     "FAKE_CONTAINER_MODE",
+    "FAKE_DELETE_RC",
     "FAKE_GIT_VERSION",
 )
 os.environ["PATH"] = f"{SHIMS}{os.pathsep}{os.environ['PATH']}"
@@ -603,13 +605,15 @@ def attempt(number, repo, **over):
 # C1: the worker cannot approve its own change by rewriting what judges it.
 SWAP = (
     "printf 'import sys\\nsys.exit(0)\\n' > scripts/plan_tests.py; "
-    "mkdir -p .github/workflows; printf 'jobs: {}\\n' > .github/workflows/tests.yml; "
     "printf '#!/bin/sh\\nexit 0\\n' > hooks/pre-commit"
 )
-repo, log, ev = scenario([], FAKE_VERIFY_RC=1, FAKE_WORKER_EXTRA=SWAP)
+repo, log, ev = scenario([], FAKE_WORKER_EXTRA=SWAP)
 final = attempt(31, repo)
-check("C1: a worker that rewrites plan_tests.py, CI and the commit hook cannot get its change merged",
-      final == "failed" and "gh pr merge" not in log.read_text(), final)  # fmt: skip
+st, text = task_loop.load(repo, 31), log.read_text()
+check("C1: a worker that rewrites plan_tests.py and the commit hook ends blocked at the review halt",
+      final == "blocked" and st["reason"].startswith("needs-review: changes outside the docs allowlist"), str(st))  # fmt: skip
+check("C1: that change is commented on its PR and never merged or awaited",
+      "gh pr comment" in text and "gh pr merge" not in text and "--watch" not in text, text)  # fmt: skip
 
 repo, log, ev = scenario(
     [],
@@ -1186,8 +1190,9 @@ repo, log, ev = scenario([])
 final = boxed(160, repo)
 argv = (ev.parent / "container-argv.txt").read_text().splitlines()
 wt = repo / "tmp" / "worktrees" / "issue-160-a1"
+BOX_HASH = lambda path: hashlib.sha1(str(Path(path).resolve()).encode()).hexdigest()[:8]  # noqa: E731
 check("BOX: the worker runs as `container run --rm` with the worktree as the one volume, the key by name, the image, then the command",
-      argv[:9] == ["run", "--rm", "--name", "vulfpeck-issue-160-a1", "--volume", f"{wt}:/work", "--env", "ANTHROPIC_API_KEY", "vulfpeck-worker"] and argv[9:11] == ["claude", "-p"],
+      argv[:9] == ["run", "--rm", "--name", f"vulfpeck-{BOX_HASH(wt)}-issue-160-a1", "--volume", f"{wt}:/work", "--env", "ANTHROPIC_API_KEY", "vulfpeck-worker"] and argv[9:11] == ["claude", "-p"],
       str(argv[:11]))  # fmt: skip
 check(
     "BOX: a green task still publishes through the sandbox", final == "published", final
@@ -1325,8 +1330,59 @@ repo, log, ev = scenario([], FAKE_CONTAINER_MODE="hang")
 final = boxed(168, repo)
 task_loop.WORKER_TIMEOUT = real_timeout
 text = log.read_text()
+name = f"vulfpeck-{BOX_HASH(repo / 'tmp' / 'worktrees' / 'issue-168-a1')}-issue-168-a1"
 check("BOX: a worker that times out has its container force-deleted by name",
-      final == "failed" and "container delete --force vulfpeck-issue-168-a1" in text, f"{final} {text}")  # fmt: skip
+      final == "failed" and f"container delete --force {name}" in text, f"{final} {text}")  # fmt: skip
+
+# A delete that fails leaves a live box holding the key, so it is never silent.
+task_loop.WORKER_TIMEOUT = 1
+repo, log, ev = scenario([], FAKE_CONTAINER_MODE="hang", FAKE_DELETE_RC="1")
+final = boxed(180, repo)
+task_loop.WORKER_TIMEOUT = real_timeout
+reason = task_loop.load(repo, 180)["reason"]
+check("BOX: a failed delete after a worker timeout ends failed and names the live box",
+      final == "failed" and "could not delete box vulfpeck-" in reason and "issue-180-a1" in reason, f"{final} {reason}")  # fmt: skip
+
+# Ctrl-C at the worker deletes the box, then propagates.
+repo, log, ev = scenario([])
+real_sh = task_loop.sh
+
+
+def interrupting_sh(argv, *a, **kw):
+    if list(argv[:2]) == ["container", "run"]:
+        raise KeyboardInterrupt
+    return real_sh(argv, *a, **kw)
+
+
+task_loop.sh = interrupting_sh
+try:
+    boxed(181, repo)
+    interrupted = False
+except KeyboardInterrupt:
+    interrupted = True
+finally:
+    task_loop.sh = real_sh
+name = f"vulfpeck-{BOX_HASH(repo / 'tmp' / 'worktrees' / 'issue-181-a1')}-issue-181-a1"
+check("BOX: Ctrl-C during the worker force-deletes its container and re-raises",
+      interrupted and f"container delete --force {name}" in log.read_text(), f"{interrupted} {log.read_text()}")  # fmt: skip
+
+# A Ctrl-C whose delete fails names the live box on stderr instead of staying silent.
+repo, log, ev = scenario([], FAKE_DELETE_RC="1")
+task_loop.sh = interrupting_sh
+try:
+    with contextlib.redirect_stderr(io.StringIO()) as err:
+        boxed(182, repo)
+except KeyboardInterrupt:
+    pass
+finally:
+    task_loop.sh = real_sh
+check("BOX: a failed delete on Ctrl-C prints the live box name to stderr",
+      "could not delete box vulfpeck-" in err.getvalue() and "issue-182-a1" in err.getvalue(), err.getvalue())  # fmt: skip
+
+# Two repositories with the same issue number never share a box name.
+check("BOX: the box name carries the worktree path, so equal issue numbers in two repos differ",
+      task_loop.box_name("/a/tmp/worktrees/issue-1-a1") != task_loop.box_name("/b/tmp/worktrees/issue-1-a1")
+      and task_loop.box_name("/a/tmp/worktrees/issue-1-a1").endswith("-issue-1-a1"))  # fmt: skip
 
 # Verification runs for every change, so --no-hooks loses no lint.
 repo, log, ev = scenario(

@@ -76,6 +76,7 @@ WORKER_TIMEOUT = 3600
 VERIFY_TIMEOUT = 3600
 LAND_TIMEOUT = 1800
 CHECKS_TIMEOUT = 3600
+BOX_DELETE_TIMEOUT = 60
 STOP_AFTER_BAD = 2  # consecutive tasks ending failed or blocked
 STOP_AFTER_FAILS = 2  # failures of one issue
 RESET_SESSION = "task-loop"
@@ -322,8 +323,9 @@ def next_issue(root, cfg, ask_jev=True):
 
 
 def box_name(worktree):
-    """The container's name: one worker VM per task worktree."""
-    return f"vulfpeck-{Path(worktree).name}"
+    """The container's name: one worker VM per task worktree, hashed by path so repos never share one."""
+    path = Path(worktree)
+    return f"vulfpeck-{hashlib.sha1(str(path.resolve()).encode()).hexdigest()[:8]}-{path.name}"
 
 
 def container_argv(worktree, command, key_name=None, name=None):
@@ -716,12 +718,40 @@ def execute(root, cfg, issue):
                 )
         link = (wt / ".git").read_text()
         env, secret = sandbox_env(cfg) if cfg["sandbox"] == "container" else ({}, None)
-        done = redact(
-            sh(plans["worker"][1], wt, WORKER_TIMEOUT, untrusted=root, extra_env=env),
-            secret,
-        )
-        if done.returncode == 124 and cfg["sandbox"] == "container":
-            sh(["container", "delete", "--force", box_name(wt)])
+        boxed = cfg["sandbox"] == "container"
+        try:
+            done = redact(
+                sh(
+                    plans["worker"][1],
+                    wt,
+                    WORKER_TIMEOUT,
+                    untrusted=root,
+                    extra_env=env,
+                ),
+                secret,
+            )
+        except KeyboardInterrupt:
+            if boxed:
+                gone = sh(
+                    ["container", "delete", "--force", box_name(wt)],
+                    timeout=BOX_DELETE_TIMEOUT,
+                )
+                if gone.returncode:
+                    print(
+                        f"could not delete box {box_name(wt)}: {tail(gone)}",
+                        file=sys.stderr,
+                    )
+            raise
+        if done.returncode == 124 and boxed:
+            gone = sh(
+                ["container", "delete", "--force", box_name(wt)],
+                timeout=BOX_DELETE_TIMEOUT,
+            )
+            if gone.returncode:
+                raise Halt(
+                    "failed",
+                    f"could not delete box {box_name(wt)}: {tail(gone)}",
+                )
         if (wt / ".git").read_text() != link:
             raise Halt("failed", "the worker changed the worktree's .git link")
         status, note = parse_status(done.stdout)
