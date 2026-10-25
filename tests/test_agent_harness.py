@@ -353,8 +353,8 @@ dirt_dir.cleanup()
 print("\na dirty target directory stops provisioning before anything is created")
 
 
-# The target must sit outside every Git worktree, or porcelain() succeeds against an
-# enclosing repository and provision gives a different refusal (see the next block).
+# The target must sit outside every Git worktree, or it is the "inside an enclosing
+# repository" case, which the next block covers on purpose.
 def outside_any_worktree():
     for base in (tempfile.gettempdir(), "/tmp", "/var/tmp"):
         probe = subprocess.run(
@@ -389,8 +389,7 @@ check(
 shutil.rmtree(outside)
 
 print("\na non-empty target inside an enclosing repository's ignored area is refused")
-# porcelain() succeeds against the enclosing repo and reads the ignored content as
-# clean, so the refusal is "existing clean worktree", not "not empty".
+# The target is not its own worktree's top level, so it is a plain non-empty directory.
 (repo / ".git" / "info" / "exclude").write_text("enclosed/\n")
 enclosed = repo / "enclosed"
 enclosed.mkdir()
@@ -411,8 +410,8 @@ check(
     out.stdout,
 )
 check(
-    "and the refusal is 'existing clean worktree'",
-    "existing clean worktree" in out.stderr,
+    "and the refusal is 'not empty'",
+    "not empty" in out.stderr,
     out.stderr.strip(),
 )
 check(
@@ -434,6 +433,55 @@ out = run(
     cwd=repo,
 )
 check("provision refuses an existing worktree as a target", out.returncode != 0)
+check(
+    "and calls the clean one an existing clean worktree",
+    "existing clean worktree" in out.stderr,
+    out.stderr.strip(),
+)
+
+print("\nan existing worktree with uncommitted work is never called clean")
+fixture = tmp / "wt-fixture"
+git("worktree", "add", "-q", "--detach", str(fixture), FIRST, cwd=repo)
+(fixture / "a.txt").write_text("someone's unsaved edit\n")
+out = run(
+    "provision", "--task", "fx1", "--baseline", FIRST, "--path", str(fixture), cwd=repo
+)
+check("provision refuses a worktree with an edit", out.returncode != 0, out.stdout)
+check(
+    "and names the uncommitted work",
+    "uncommitted" in out.stderr,
+    out.stderr.strip(),
+)
+index = Path(
+    git(
+        "rev-parse", "--path-format=absolute", "--git-path", "index", cwd=fixture
+    ).stdout.strip()
+)
+index.write_bytes(b"garbage, not a git index\n" * 8)
+out = run(
+    "provision", "--task", "fx2", "--baseline", FIRST, "--path", str(fixture), cwd=repo
+)
+check(
+    "provision refuses a worktree whose index git cannot read",
+    out.returncode != 0,
+    out.stdout,
+)
+check(
+    "and says git cannot read it",
+    "cannot read" in out.stderr,
+    out.stderr.strip(),
+)
+check(
+    "and does not call that worktree clean",
+    "clean" not in out.stderr,
+    out.stderr.strip(),
+)
+check(
+    "and no manifest is written for either refused fixture task",
+    not (state / "tasks" / "fx1.json").exists()
+    and not (state / "tasks" / "fx2.json").exists(),
+)
+git("worktree", "remove", "--force", str(fixture), cwd=repo)
 check(
     "a task name cannot be provisioned twice",
     run(
