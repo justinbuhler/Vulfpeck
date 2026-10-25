@@ -4,12 +4,12 @@
 # behaviour: a worker that times out has its container deleted, so the VM does not keep the key
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -747,7 +747,7 @@ def execute(root, cfg, issue):
+@@ -742,7 +742,7 @@ def execute(root, cfg, issue):
+                         file=sys.stderr,
+                     )
+             raise
+-        if done.returncode == 124 and boxed:
++        if False:
+             gone = sh(
                  ["container", "delete", "--force", box_name(wt)],
                  timeout=BOX_DELETE_TIMEOUT,
-             )
--            if gone.returncode:
-+            if False:
-                 raise Halt(
-                     "failed",
-                     f"could not delete box {box_name(wt)}: {tail(gone)}",
