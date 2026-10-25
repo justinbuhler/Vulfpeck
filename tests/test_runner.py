@@ -466,5 +466,22 @@ for scenario, received in (
             "tree not" in outcome["stderr"],
         )
 
+# A patch that no longer applies silently stops testing its behaviour (#32).
+# Judged against HEAD via a throwaway index: a runner-applied mutant dirties only the working tree.
+with tempfile.TemporaryDirectory() as index_dir:
+    head_env = {**ENV, "GIT_INDEX_FILE": str(Path(index_dir) / "index")}
+    subprocess.run(["git", "read-tree", "HEAD"], cwd=REPO, env=head_env, check=True)
+    stale = [
+        patch.name
+        for patch in sorted((REPO / "mutants/patches").glob("M*.patch"))
+        if subprocess.run(
+            ["git", "apply", "--check", "--cached", str(patch)],
+            cwd=REPO,
+            env=head_env,
+            capture_output=True,
+        ).returncode
+    ]
+check("every mutant patch applies to HEAD", not stale, f"stale: {stale}")
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 raise SystemExit(bool(FAIL))
