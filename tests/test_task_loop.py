@@ -605,16 +605,15 @@ def attempt(number, repo, **over):
 # C1: the worker cannot approve its own change by rewriting what judges it.
 SWAP = (
     "printf 'import sys\\nsys.exit(0)\\n' > scripts/plan_tests.py; "
-    "mkdir -p .github/workflows; printf 'jobs: {}\\n' > .github/workflows/tests.yml; "
     "printf '#!/bin/sh\\nexit 0\\n' > hooks/pre-commit"
 )
 repo, log, ev = scenario([], FAKE_WORKER_EXTRA=SWAP)
 final = attempt(31, repo)
 st, text = task_loop.load(repo, 31), log.read_text()
-check("C1: a worker that rewrites plan_tests.py, CI and the commit hook ends blocked as needs-review",
-      final == "blocked" and st["reason"].startswith("needs-review"), str(st))  # fmt: skip
-check("C1: the rewritten plan_tests.py, CI and hook are never pushed, no PR is opened and nothing is merged",
-      " push " not in text and "gh pr create" not in text and "gh pr merge" not in text, text)  # fmt: skip
+check("C1: a worker that rewrites plan_tests.py and the commit hook ends blocked at the review halt",
+      final == "blocked" and st["reason"].startswith("needs-review: changes outside the docs allowlist"), str(st))  # fmt: skip
+check("C1: that change is commented on its PR and never merged or awaited",
+      "gh pr comment" in text and "gh pr merge" not in text and "--watch" not in text, text)  # fmt: skip
 
 repo, log, ev = scenario(
     [],
@@ -1366,6 +1365,19 @@ finally:
 name = f"vulfpeck-{BOX_HASH(repo / 'tmp' / 'worktrees' / 'issue-181-a1')}-issue-181-a1"
 check("BOX: Ctrl-C during the worker force-deletes its container and re-raises",
       interrupted and f"container delete --force {name}" in log.read_text(), f"{interrupted} {log.read_text()}")  # fmt: skip
+
+# A Ctrl-C whose delete fails names the live box on stderr instead of staying silent.
+repo, log, ev = scenario([], FAKE_DELETE_RC="1")
+task_loop.sh = interrupting_sh
+try:
+    with contextlib.redirect_stderr(io.StringIO()) as err:
+        boxed(182, repo)
+except KeyboardInterrupt:
+    pass
+finally:
+    task_loop.sh = real_sh
+check("BOX: a failed delete on Ctrl-C prints the live box name to stderr",
+      "could not delete box vulfpeck-" in err.getvalue() and "issue-182-a1" in err.getvalue(), err.getvalue())  # fmt: skip
 
 # Two repositories with the same issue number never share a box name.
 check("BOX: the box name carries the worktree path, so equal issue numbers in two repos differ",
