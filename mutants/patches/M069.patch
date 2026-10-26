@@ -1,0 +1,15 @@
+# mutant_id: M069
+# target: scripts/task_loop.py
+# operator: boundary
+# behaviour: max_usd = 0 turns the claude spend cap off instead of capping it at zero dollars
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -459,7 +459,7 @@
+     """
+     sandboxed = cfg["sandbox"] == "container"
+     argv = shlex.split(cfg["workers"][cfg["runtime"]])
+-    if cfg["runtime"] == "claude" and cfg["max_usd"] > 0:
++    if cfg["runtime"] == "claude" and cfg["max_usd"] >= 0:
+         argv += ["--max-budget-usd", str(cfg["max_usd"])]
+     argv.append(brief(issue, SANDBOX_MOUNT if sandboxed else wt, sandboxed, base_sha))
+     return sandbox_argv(cfg, wt, argv) if sandboxed else argv

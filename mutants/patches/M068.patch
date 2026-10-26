@@ -1,0 +1,15 @@
+# mutant_id: M068
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: the verification script stops at the first failing check (set -e)
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -368,7 +368,7 @@
+     It runs in a box with no key when sandboxed, else on the host. Each check gets its own
+     `bash -c`, as in plan_tests.run, so an `exit` or `cd` in one cannot skip or move the next.
+     """
+-    script = "\n".join(["set -e", *(f"bash -c {shlex.quote(c)}" for c in checks)])
++    script = "\n".join([*(f"bash -c {shlex.quote(c)}" for c in checks)])
+     command = ["bash", "-c", script]
+     return (
+         container_argv(worktree, command) if cfg["sandbox"] == "container" else command

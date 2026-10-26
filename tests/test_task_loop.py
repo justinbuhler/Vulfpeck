@@ -102,8 +102,18 @@ lint = 'echo lint >> "$SHIM_LOG"; printf "%s|%s" "${GH_TOKEN-unset}" "${SSH_AUTH
 test = "true"
 
 [tiers]
-low = ["*.txt"]
+low = ["*.txt", "docs/**", "README.md"]
 high = ["scripts/**", "hooks/**"]
+
+[[mapped_tests]]
+match = "*.py"
+self = "*tests/test_*.py"
+tests = ["tests/test_{name}"]
+command = 'echo mapped {test} >> "$SHIM_LOG"'
+"""
+RUN_STUB = """#!/bin/sh
+echo "run.sh $*" >> "$SHIM_LOG"
+exit "${FAKE_SUITE_RC:-0}"
 """
 TIMELINE = {"data": {"repository": {"issue": {"lastEditedAt": None, "timelineItems": {"nodes": [
     {"createdAt": "2026-01-01T00:00:00Z", "label": {"name": "ready-for-agent"}}]}}}}}  # fmt: skip
@@ -113,6 +123,7 @@ FAKE_VARS = (
     "FAKE_WORKER_STATUS",
     "FAKE_WORKER_RC",
     "FAKE_VERIFY_RC",
+    "FAKE_SUITE_RC",
     "FAKE_CHECKS_JSON",
     "FAKE_CHECKS_JSON_RC",
     "FAKE_HEAD_OID",
@@ -144,8 +155,11 @@ def issue(number, title, *labels, body=""):
     }
 
 
-def scenario(issues, codex_hooks=False, ignore="tmp/\n", toml=HARNESS_TOML, **env):
-    """A fresh repo, remote and shim state; returns (repo path, log path, events path)."""
+def scenario(issues, codex_hooks=False, ignore="tmp/\n", toml=HARNESS_TOML, seed=(), **env):
+    """A fresh repo, remote and shim state; returns (repo path, log path, events path).
+
+    `seed` is (path, text) pairs committed in the base alongside the stubs.
+    """
     s = Path(tempfile.mkdtemp(prefix="s.", dir=TMP))
     repo, remote = s / "repo", s / "remote.git"
     repo.mkdir()
@@ -159,8 +173,11 @@ def scenario(issues, codex_hooks=False, ignore="tmp/\n", toml=HARNESS_TOML, **en
         real("config", key, value, cwd=repo)
     (repo / "scripts").mkdir()
     (repo / "scripts" / "plan_tests.py").write_text(PLAN_STUB)
-    (repo / "scripts" / "run.sh").write_text("#!/bin/sh\nexit 0\n")
+    (repo / "scripts" / "run.sh").write_text(RUN_STUB)
     (repo / "scripts" / "run.sh").chmod(0o755)
+    for rel, text in seed:
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(text)
     (repo / "hooks").mkdir()
     (repo / "hooks" / "pre-commit").write_text("#!/bin/sh\nexit 0\n")
     (repo / "hooks" / "pre-commit").chmod(0o755)
@@ -986,7 +1003,7 @@ for path in HELD:
     check(f"ALLOW: a change to {path} is held for review and never merged",
           final == "blocked" and st["reason"].startswith("needs-review") and not merged_or_pushed(log.read_text()), f"{final} {st['reason']}")  # fmt: skip
 for what, extra in (("a delete of a tracked script", "rm scripts/plan_tests.py"),
-                    ("a rename of a script into docs", "mv scripts/run.sh docs/moved.md")):  # fmt: skip
+                    ("a rename of a script into docs", "mv scripts/plan_tests.py docs/moved.md")):  # fmt: skip
     repo, log, ev = scenario([], FAKE_WORKER_EXTRA=extra)
     final = attempt(112, repo)
     check(
@@ -1235,8 +1252,8 @@ seen = (ev.parent / "container-env.txt").read_text().split("|")
 check("BOX: the container process gets its key and none of the owner's tokens, ssh agent or gh config",
       seen[0] == DUMMY["LOOP_ANTHROPIC_API_KEY"] and seen[1:3] == ["unset", "unset"] and seen[3:5] == ["unset", "unset"] and seen[5].endswith("gh-empty"), str(seen[1:]))  # fmt: skip
 brief_text = "\n".join(argv[9:])
-check("BOX: the brief names /work, not the host path, and does not ask for plan_tests",
-      "inside /work;" in brief_text and str(wt) not in brief_text and "plan_tests" not in brief_text, brief_text[-400:])  # fmt: skip
+check("BOX: the brief names /work, not the host path, and names the checker it can run in the box",
+      "inside /work;" in brief_text and str(wt) not in brief_text and "`python3 scripts/plan_tests.py --base HEAD --run`" in brief_text, brief_text[-400:])  # fmt: skip
 
 for runtime, source, name in (
     ("codex", "LOOP_OPENAI_API_KEY", "OPENAI_API_KEY"),
@@ -1392,6 +1409,189 @@ final = attempt(169, repo)
 text = log.read_text()
 check("VERIFY: a change outside the docs allowlist is verified, and a failing lint stops it before any push",
       final == "failed" and "lint\n" in text and " push " not in text, f"{final} {text}")  # fmt: skip
+
+# --- the worker's checker, the verification plan and the spend cap -------------
+def history_reason(repo, number, state):
+    """The reason recorded when the task entered `state`, or None."""
+    rows = task_loop.load(repo, number)["history"]
+    return next((h.get("reason", "") for h in rows if h["state"] == state), None)
+
+
+def verify_script(ev):
+    """Every line of the argv the verification box was started with, or ''."""
+    path = ev.parent / "container-argv-verify.txt"
+    return path.read_text() if path.exists() else ""
+
+
+def worker_argv(repo, **over):
+    return next(a for n, _, a in task_loop.plan(repo, cfg_for(repo, **over), plain(1)) if n == "worker")
+
+
+def command_part(script):
+    """The verification argv after the image name: what runs in the box."""
+    return script.split("vulfpeck-worker", 1)[-1]
+
+
+repo, log, ev = scenario([])
+boxed(190, repo)
+box_brief = (ev.parent / "brief.txt").read_text()
+repo, log, ev = scenario([])
+attempt(191, repo)
+open_brief = (ev.parent / "brief.txt").read_text()
+pinned = subprocess.run(
+    [REAL_GIT, "-C", str(repo), "rev-parse", "origin/main"], capture_output=True, text=True, check=True
+).stdout.strip()
+check("BRIEF: the sandboxed DONE WHEN names the checker against HEAD, the box's baseline commit",
+      "DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --base HEAD --run` exits 0" in box_brief, box_brief[-500:])  # fmt: skip
+check("BRIEF: the sandboxed brief says the runner re-runs the tier's checks and the worker must not commit",
+      "The runner re-runs the same tier's checks afterwards" in box_brief and "you must not commit" in box_brief, box_brief[-500:])  # fmt: skip
+check("BRIEF: the unsandboxed DONE WHEN names the checker against the pinned base commit",
+      f"DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --base {pinned} --run` exits 0" in open_brief
+      and "--base HEAD" not in open_brief and "re-runs the same tier's checks afterwards" in open_brief, open_brief[-500:])  # fmt: skip
+
+# The checker the sandboxed brief names reports a worker's changes in a directory laid out like the box:
+# GIT_DIR and GIT_WORK_TREE set, a `.git` link to a host path that does not exist, one baseline commit.
+area = Path(tempfile.mkdtemp(prefix="box.", dir=TMP))
+work, gitdir = area / "work", area / "gitdir"
+shutil.copytree(ROOT / "scripts", work / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
+shutil.copy(ROOT / "harness.toml", work / "harness.toml")
+(work / "docs").mkdir()
+(work / "docs" / "a.md").write_text("baseline\n")
+(work / ".git").write_text("gitdir: /host/only/path/does/not/exist\n")
+box_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+# No bytecode: the box fixture has no .gitignore, and a __pycache__ would read as the worker's change.
+box_env.update(GIT_DIR=str(gitdir), GIT_WORK_TREE=str(work), JEV_DISABLE="1", PYTHONDONTWRITEBYTECODE="1")
+
+
+def in_box(*argv):
+    return subprocess.run(argv, cwd=work, env=box_env, capture_output=True, text=True)
+
+
+for step in (
+    [REAL_GIT, "init", "-q", str(gitdir)],
+    [REAL_GIT, "config", "user.email", "worker@sandbox.invalid"],
+    [REAL_GIT, "config", "user.name", "worker"],
+    [REAL_GIT, "add", "-A"],
+    [REAL_GIT, "commit", "-q", "--allow-empty", "-m", "sandbox baseline"],
+):
+    assert in_box(*step).returncode == 0, step
+(work / "docs" / "a.md").write_text("edited\n")
+(work / "docs" / "new.md").write_text("new\n")
+planned = in_box(sys.executable, "scripts/plan_tests.py", "--base", "HEAD")
+try:
+    reported = json.loads(planned.stdout)
+except ValueError:
+    reported = {}
+check("BRIEF: `plan_tests.py --base HEAD` lists a worker's edited and new file in a box-shaped directory",
+      planned.returncode == 0 and reported.get("files") == ["docs/a.md", "docs/new.md"] and reported.get("tier") == "Low",
+      planned.stdout + planned.stderr)  # fmt: skip
+
+# [loop] max_usd: claude gets --max-budget-usd between its command and the brief.
+repo, log, ev = scenario([])
+capped = worker_argv(repo)
+check("CAP: claude gets `--max-budget-usd 10.0` after its configured command and before the brief",
+      capped[:4] == ["claude", "-p", "--max-budget-usd", "10.0"] and capped[4].startswith("TASK:") and len(capped) == 5, str(capped[:5]))  # fmt: skip
+check("CAP: another amount is passed as written",
+      worker_argv(repo, max_usd=2.5)[:4] == ["claude", "-p", "--max-budget-usd", "2.5"])  # fmt: skip
+uncapped = worker_argv(repo, max_usd=0)
+check("CAP: max_usd = 0 leaves the flag out", uncapped[:2] == ["claude", "-p"] and len(uncapped) == 3 and "--max-budget-usd" not in uncapped, str(uncapped[:4]))  # fmt: skip
+for runtime in ("codex", "gemini"):
+    argv = worker_argv(repo, runtime=runtime)
+    check(f"CAP: {runtime} is not given an invented cap flag",
+          argv[:-1] == {"codex": ["codex", "exec"], "gemini": ["gemini", "-p"]}[runtime], str(argv[:-1]))  # fmt: skip
+repo, log, ev = scenario([])
+boxed(192, repo)
+argv = (ev.parent / "container-argv.txt").read_text().splitlines()
+check("CAP: in the box the flag is also between the configured command and the brief",
+      argv[9:13] == ["claude", "-p", "--max-budget-usd", "10.0"] and argv[13].startswith("TASK:"), str(argv[9:14]))  # fmt: skip
+for runtime, hooks, over, notices in (
+    ("codex", True, {}, 1),
+    ("gemini", False, {}, 1),
+    ("codex", True, {"max_usd": 0}, 0),
+    ("claude", False, {}, 0),
+):
+    repo, log, ev = scenario([], codex_hooks=hooks)
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        attempt(193, repo, runtime=runtime, **over)
+    check(f"CAP: a {runtime} task with {over or 'the default cap'} prints {notices} not-enforced notice(s) on stderr",
+          err.getvalue().count(f"is not enforced for the {runtime} runtime") == notices, err.getvalue())  # fmt: skip
+
+# Verification runs the tier plan from the base commit, not lint alone.
+repo, log, ev = scenario([], FAKE_SUITE_RC=1)
+final = attempt(210, repo)
+text = log.read_text()
+check("VERIFY: a docs/*.md change is Low: lint only, so a failing full suite never runs and the task publishes",
+      final == "published" and "lint\n" in text and "run.sh" not in text, f"{final} {text}")  # fmt: skip
+check("VERIFY: the verified reason names the tier and the number of checks",
+      history_reason(repo, 210, "verified") == "verified at Low (checks run: 1); DONE", str(history_reason(repo, 210, "verified")))  # fmt: skip
+
+repo, log, ev = scenario([], FAKE_WORKER_EXTRA="echo x > scripts/x.py")
+final = attempt(211, repo)
+text = log.read_text()
+check("VERIFY: a scripts/ change is High: lint, then the full suite",
+      "lint\n" in text and "run.sh --tests" in text and text.index("lint\n") < text.index("run.sh --tests"), text)  # fmt: skip
+check("VERIFY: the High reason names the tier and two checks",
+      history_reason(repo, 211, "verified") == "verified at High (checks run: 2); needs-review: changes outside the docs allowlist: scripts/x.py",
+      str(history_reason(repo, 211, "verified")))  # fmt: skip
+
+repo, log, ev = scenario([], FAKE_SUITE_RC=1, FAKE_WORKER_EXTRA="echo x > scripts/x.py")
+final = attempt(212, repo)
+check("VERIFY: a scripts/ change whose full suite fails ends failed with nothing pushed",
+      final == "failed" and "exited 1" in task_loop.load(repo, 212)["reason"] and " push " not in log.read_text(), f"{final} {task_loop.load(repo, 212)['reason']}")  # fmt: skip
+repo, log, ev = scenario([], FAKE_VERIFY_RC=1, FAKE_WORKER_EXTRA="echo x > scripts/x.py")
+final = attempt(213, repo)
+check("VERIFY: a failing lint stops the plan before the full suite runs",
+      final == "failed" and "run.sh" not in log.read_text(), f"{final} {log.read_text()}")  # fmt: skip
+
+repo, log, ev = scenario([])
+final = boxed(214, repo)
+wt = repo / "tmp" / "worktrees" / "issue-214-a1"
+script = verify_script(ev)
+check("VERIFY: the box runs a docs change's lint and nothing else, with no host worktree path in its command",
+      final == "published" and "echo lint" in script and "run.sh" not in script and str(wt) not in command_part(script), script)  # fmt: skip
+repo, log, ev = scenario([], FAKE_WORKER_EXTRA="echo x > scripts/x.py")
+boxed(215, repo)
+wt = repo / "tmp" / "worktrees" / "issue-215-a1"
+script = verify_script(ev)
+check("VERIFY: the box gets one `bash -c` that starts with set -e and runs lint, then ./scripts/run.sh --tests, as relative paths",
+      script.splitlines()[4:8] == ["vulfpeck-worker", "bash", "-c", "set -e"] and "echo lint" in script and "./scripts/run.sh --tests" in script
+      and script.index("echo lint") < script.index("./scripts/run.sh --tests") and str(wt) not in command_part(script), script)  # fmt: skip
+
+repo, log, ev = scenario([], FAKE_WORKER_EXTRA="printf '[tiers]\\nlow = [\"**\"]\\n' > harness.toml; echo x > scripts/x.py")
+boxed(216, repo)
+script = verify_script(ev)
+check("VERIFY: a worker that rates everything Low in the worktree's harness.toml is still verified at the base commit's tier",
+      "./scripts/run.sh --tests" in script and str(history_reason(repo, 216, "verified")).startswith("verified at High (checks run: 2)"), f"{history_reason(repo, 216, 'verified')} {script}")  # fmt: skip
+
+PATCH = ("mutants/patches/M900.patch", "--- a/scripts/x.py\n+++ b/scripts/x.py\n@@ -1 +1 @@\n-a\n+b\n")
+repo, log, ev = scenario([], seed=[PATCH], FAKE_WORKER_EXTRA="echo x > scripts/x.py")
+final = boxed(217, repo)
+script, reason = verify_script(ev), str(history_reason(repo, 217, "verified"))
+check("VERIFY: a mutation command never reaches the verify box, the full suite still does",
+      "mutants/runner.py" not in script and "./scripts/run.sh --tests" in script, script)  # fmt: skip
+check("VERIFY: the verified reason says mutation was skipped, names the mutant, and still counts two checks",
+      reason.startswith("verified at High (checks run: 2); skipped mutation (review owns it): python3 mutants/runner.py --only M900;"), reason)  # fmt: skip
+check("VERIFY: skipping mutation leaves the held change blocked for review, not failed", final == "blocked", f"{final} {task_loop.load(repo, 217)['reason']}")  # fmt: skip
+repo, log, ev = scenario([], seed=[PATCH], FAKE_WORKER_EXTRA="echo x > scripts/x.py")
+final = attempt(218, repo)
+check("VERIFY: unsandboxed, the mutation command is not run on the host either",
+      final == "blocked" and "run.sh --tests" in log.read_text(), f"{final} {task_loop.load(repo, 218)['reason']}")  # fmt: skip
+
+repo, log, ev = scenario([], FAKE_WORKER_EXTRA="rm -rf docs; mkdir -p src tests; echo x > src/app.py; echo x > tests/test_app.py")
+boxed(219, repo)
+wt = repo / "tmp" / "worktrees" / "issue-219-a1"
+script = verify_script(ev)
+check("VERIFY: a Medium change runs lint and its mapped test, named relative to /work, and not the full suite",
+      "mapped tests/test_app.py" in script and "run.sh" not in script and str(wt) not in command_part(script)
+      and str(history_reason(repo, 219, "verified")).startswith("verified at Medium (checks run: 2)"), f"{history_reason(repo, 219, 'verified')} {script}")  # fmt: skip
+
+real_consequence = task_loop.jev.consequence
+task_loop.jev.consequence = lambda *a, **k: (_ for _ in ()).throw(AssertionError("Jev was asked"))
+repo, log, ev = scenario([], FAKE_WORKER_EXTRA="echo x > scripts/x.py")
+final = attempt(220, repo)
+task_loop.jev.consequence = real_consequence
+check("VERIFY: the tier is the base commit's floor and Jev is never asked", final == "blocked", f"{final} {task_loop.load(repo, 220)['reason']}")  # fmt: skip
 
 # Host git reads attributes from the pinned base, never from the worker's worktree.
 repo, log, ev = scenario([])

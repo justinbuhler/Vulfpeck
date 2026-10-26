@@ -1,0 +1,15 @@
+# mutant_id: M067
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: mutation commands are left out of loop verification and recorded as skipped
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -582,7 +582,7 @@
+     config = base_config(root, base_sha)
+     tier, _ = jev.floor_tier(paths, config["tiers"])
+     planned = [c["command"] for c in plan_tests.plan(worktree, tier, paths, config)["commands"]]
+-    skipped = [c for c in planned if c.startswith(MUTATION_COMMAND)]
++    skipped = []
+     return tier, [c for c in planned if c not in skipped], skipped
+ 
+ 
