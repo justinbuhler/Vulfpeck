@@ -1612,6 +1612,8 @@ REFUSED_BODIES = {
     "a heading with nothing under it at the end of the body": "Intro\n\n## Done when\n  \n",
     "a label with nothing after its colon before the next heading": "Done when:\n\n## Notes\nx\n",
     "done whenever, which is not the words Done when": "done whenever you like",
+    "done whenever with a line under it, which still is not the words Done when": "Done whenever you like\nbut do it soon.",
+    "a heading that begins with Done whenever, with a list under it": "## Done whenever\n- the widget renders\n",
     "Done when in the middle of a line": "Not done when: the tests pass",
 }
 
