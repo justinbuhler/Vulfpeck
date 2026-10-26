@@ -40,6 +40,7 @@ import os
 import re
 import subprocess
 import sys
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -173,18 +174,34 @@ def read_records(path):
         (list, int, list): (time, hook, decision) records, the count of lines
         that are not records, and the files that exist.
     """
-    records, malformed, files = [], 0, []
-    for source in (path.with_name(path.name + ".1"), path):
-        if not source.is_file():
+    sidecar = path.with_name(path.name + ".lock")
+    while True:
+        try:
+            lock = sidecar.open("rb")
+        except FileNotFoundError:
+            lock = None
+        try:
+            with lock if lock is not None else nullcontext():
+                if lock is not None:
+                    fcntl.flock(lock, fcntl.LOCK_SH)
+                records, malformed, files = [], 0, []
+                for source in (path.with_name(path.name + ".1"), path):
+                    if not source.is_file():
+                        continue
+                    files.append(str(source))
+                    for raw in source.read_bytes().splitlines():
+                        parsed = parse_record(raw)
+                        if parsed is None:
+                            malformed += 1
+                        else:
+                            records.append(parsed)
+        except FileNotFoundError:
+            if lock is not None or not sidecar.exists():
+                raise
             continue
-        files.append(str(source))
-        for raw in source.read_bytes().splitlines():
-            parsed = parse_record(raw)
-            if parsed is None:
-                malformed += 1
-            else:
-                records.append(parsed)
-    return records, malformed, files
+        # A writer may have created the sidecar while we read an imported log.
+        if lock is not None or not sidecar.exists():
+            return records, malformed, files
 
 
 def read_registrations(config):

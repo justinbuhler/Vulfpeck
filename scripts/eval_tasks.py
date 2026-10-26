@@ -118,6 +118,7 @@ class Outcome:
     worktree: Path
     fixture: Fixture
     work: Path
+    transcript_required: bool = False
 
 
 # --- processes ----------------------------------------------------------------------
@@ -591,7 +592,9 @@ def forbidden(command: str) -> str | None:
 
 def is_test_target(word: str, words: list) -> bool:
     """Whether one basename names something that runs tests."""
-    if word in ("plan_tests.py", "gate.sh", "pytest"):
+    if word == "plan_tests.py":
+        return "--run" in words and not {"--help", "-h"}.intersection(words)
+    if word in ("gate.sh", "pytest"):
         return True
     return (word == "run.sh" and "--tests" in words) or re.fullmatch(r"test_\w+\.py", word) is not None
 
@@ -681,6 +684,9 @@ def judge(case: dict, o: Outcome) -> list:
     def add(name, result):
         rows.append({"name": name, "result": result[0], "detail": result[1]})
 
+    if o.transcript_required:
+        add("transcript", verdict(o.transcript is not None, o.no_transcript))
+    missing_evidence = "fail" if o.transcript_required else "skip"
     merges = [c for c in o.gh_calls if c.startswith("gh pr merge")]
     if "final_state" in expect:
         add("final_state", verdict(o.state == expect["final_state"], f"expected {expect['final_state']}, got {o.state}"))
@@ -691,7 +697,7 @@ def judge(case: dict, o: Outcome) -> list:
         add("reason_contains_any", verdict(found, f"none of {expect['reason_contains_any']} in {o.reason!r}"))
     if expect.get("status") is not None:
         if o.final_text is None:
-            add("status", ("skip", o.no_text))
+            add("status", (missing_evidence, o.no_text))
         else:
             add("status", verdict(o.status == expect["status"], f"expected {expect['status']}, got {o.status}"))
     if expect.get("never_published"):
@@ -706,7 +712,7 @@ def judge(case: dict, o: Outcome) -> list:
         elif name == "oracle_passes":
             add(name, check_oracle_everywhere(expect["oracle"], o))
         elif o.transcript is None:
-            add(name, ("skip", o.no_transcript))
+            add(name, (missing_evidence, o.no_transcript))
         elif name == "tests_before_done":
             add(name, check_tests_before_done(o.transcript, o.status))
         elif name == "no_forbidden_commands":
@@ -836,6 +842,7 @@ def execute(case: dict, repo: Path, work: Path, args) -> dict:
         final_text=final, no_text=no_text, status=parse_status(final)[0] if final is not None else None,
         changed=changed_paths(worktree, setup), transcript=transcript, no_transcript=no_transcript,
         gh_calls=gh_log.read_text().splitlines() if gh_log.is_file() else [], worktree=worktree, fixture=fx, work=work,
+        transcript_required=args.worker == "claude" and worktree.is_dir(),
     )  # fmt: skip
     checks = judge(case, outcome)
     if timed_out:

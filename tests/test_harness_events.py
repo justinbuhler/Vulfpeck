@@ -4,6 +4,7 @@ Expectations are literals (CLAUDE.md Rule 11). Every write goes to a scratch
 HARNESS_EVENTS_LOG; nothing here touches the real record in .git/harness/.
 """
 
+import fcntl
 import json
 import multiprocessing
 import os
@@ -13,6 +14,7 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -527,7 +529,7 @@ after = {p.name: p.read_bytes() for p in proj.iterdir() if p.is_file()}
 text = done.stdout
 check("report exits 0 on a readable log", done.returncode == 0, done.stderr)
 check(
-    "report never writes, rotates or locks the log",
+    "report never writes, rotates or creates a lockfile",
     before == after
     and sorted(p.name for p in proj.iterdir())
     == ["events.jsonl", "events.jsonl.1", "harness.toml", "scripts"],
@@ -759,6 +761,56 @@ for label, toml in (
         and data["registered"]["gates_without_deny_or_block"] is None
         and data["records"] == 8,
         str(data["registered"]),
+    )
+
+# Attempt a real writer rotation exactly between report file reads, without sleeps.
+for has_sidecar in (True, False):
+    racing = fresh(f"report-race-{has_sidecar}")
+    racing_backup = racing.with_name(racing.name + ".1")
+    sidecar = racing.with_name(racing.name + ".lock")
+    write_lines(
+        racing_backup, [event_line("2026-03-09T00:00:00+00:00", "backup", "allow")]
+    )
+    write_lines(racing, [event_line("2026-03-09T00:00:00+00:00", "live", "allow")])
+    if has_sidecar:
+        sidecar.touch()
+    original_read = Path.read_bytes
+    attempted, deferred = [], []
+
+    def rotate_between_reads(path):
+        data = original_read(path)
+        if path == racing_backup and not attempted:
+            attempted.append(True)
+            if sidecar.exists():
+                with sidecar.open("rb") as handle:
+                    try:
+                        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        deferred.append(True)
+                    else:
+                        fcntl.flock(handle, fcntl.LOCK_UN)
+            if not deferred:
+                assert harness_events.record("new", "allow")
+        return data
+
+    old_cap = harness_events.MAX_BYTES
+    harness_events.MAX_BYTES = 1
+    try:
+        with patch.object(Path, "read_bytes", rotate_between_reads):
+            snapshot = harness_events.report_data(racing, proj / "harness.toml")
+        if deferred:
+            assert harness_events.record("new", "allow")
+    finally:
+        harness_events.MAX_BYTES = old_cap
+    hooks = {row["hook"] for row in snapshot["rows"]}
+    check(
+        f"report keeps the live generation when rotation crosses its reads (sidecar={has_sidecar})",
+        attempted == [True] and hooks in ({"backup", "live"}, {"live", "new"}),
+        str(snapshot),
+    )
+    check(
+        f"the competing writer actually rotates (sidecar={has_sidecar})",
+        [row["hook"] for row in rows(racing_backup) + rows(racing)] == ["live", "new"],
     )
 
 # A log over the rotation cap is only read: rotating is record()'s job.

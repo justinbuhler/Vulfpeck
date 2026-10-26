@@ -8,8 +8,8 @@
          elif name == "oracle_passes":
              add(name, check_oracle_everywhere(expect["oracle"], o))
          elif o.transcript is None:
--            add(name, ("skip", o.no_transcript))
-+            add(name, ("pass", o.no_transcript))
+-            add(name, (missing_evidence, o.no_transcript))
++            add(name, ("pass" if missing_evidence == "skip" else missing_evidence, o.no_transcript))
          elif name == "tests_before_done":
              add(name, check_tests_before_done(o.transcript, o.status))
          elif name == "no_forbidden_commands":
