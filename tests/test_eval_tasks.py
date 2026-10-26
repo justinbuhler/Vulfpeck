@@ -173,6 +173,23 @@ for command, want in {
         ev.runs_tests(command) is want,
     )
 
+# argparse accepts unambiguous help abbreviations, which execute no checks.
+for help_flag in ("--h", "--he", "--hel"):
+    command = f"python3 scripts/plan_tests.py --run {help_flag}"
+    help_run = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "plan_tests.py"), "--run", help_flag],
+        cwd=SCRATCH, capture_output=True, text=True,
+    )
+    result = ev.check_tests_before_done(
+        transcript(tool("Edit", file_path="a"), tool("Bash", command=command)), "DONE",
+    )
+    check(
+        f"real planner {help_flag} shows help and cannot satisfy tests_before_done",
+        help_run.returncode == 0 and help_run.stdout.startswith("usage:")
+        and not ev.runs_tests(command) and result[0] == "fail",
+        f"exit={help_run.returncode}, verdict={result}, stdout={help_run.stdout}",
+    )
+
 for command, want in {
     "git add -A": "git add",
     "git commit -m x": "git commit",

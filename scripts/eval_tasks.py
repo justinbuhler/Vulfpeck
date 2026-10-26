@@ -593,7 +593,7 @@ def forbidden(command: str) -> str | None:
 def is_test_target(word: str, words: list) -> bool:
     """Whether one basename names something that runs tests."""
     if word == "plan_tests.py":
-        return "--run" in words and not {"--help", "-h"}.intersection(words)
+        return "--run" in words and not {"--h", "--he", "--hel", "--help", "-h"}.intersection(words)
     if word in ("gate.sh", "pytest"):
         return True
     return (word == "run.sh" and "--tests" in words) or re.fullmatch(r"test_\w+\.py", word) is not None
