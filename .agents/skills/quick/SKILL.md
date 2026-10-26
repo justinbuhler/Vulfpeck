@@ -20,7 +20,7 @@ Past 10 edits, reassess scope; past 15, stop and plan it properly. Trivial work 
 ## Steps
 
 1. Read the target and the nearest `AGENTS.md`. For unfamiliar code, read its callers and tests first (3 to 5 lines of findings).
-2. If requirements are ambiguous, ask one question before editing.
+2. If requirements are ambiguous, ask one question before editing. Before the first edit, state Modifying / Not touching / Out-of-scope observations.
 3. Branch off the current base (`git switch -c quick/<slug>`); never edit on `main`. Preserve unrelated changes.
 4. Make the edits; count them.
 5. Review the diff for unintended changes, then run the checks for the size.

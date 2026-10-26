@@ -18,7 +18,7 @@ Size the testing to the consequence of the change (root `AGENTS.md` table). Do n
 | High (matching, identity, authority) | Medium, plus the full suite, plus mutation on the touched High paths only |
 | Critical | High, plus independent re-derivation and full-population evidence |
 
-Mapped tests come from `harness.toml` `[[mapped_tests]]`. Full suite: `./scripts/run.sh --tests`. Mutation: `mutants/runner.py --only <id>` per touched path, never the whole corpus (`docs/mutation-testing.md`). A check that was skipped or timed out is reported as skipped, not passed.
+`python3 scripts/plan_tests.py --run` runs the floor tier's checks; the land gate is always the full suite. Mapped tests come from `harness.toml` `[[mapped_tests]]`. Full suite: `./scripts/run.sh --tests`. Mutation: `mutants/runner.py --only <id>` per touched path, never the whole corpus (`docs/mutation-testing.md`). A check that was skipped or timed out is reported as skipped, not passed.
 
 ## Loop for a bug or feature
 
@@ -30,7 +30,7 @@ Mapped tests come from `harness.toml` `[[mapped_tests]]`. Full suite: `./scripts
 
 ## Test smells
 
-Fix or reject these on sight: asserting private state, mocks that implement the asserted behavior, `!= None` or `> 0` as the only assertion, `sleep` for synchronization, order-dependent tests, skipped tests with no reason, happy-path-only coverage, expected values produced by the code under test.
+A test that cannot fail when the logic changes is wrong. Fix or reject these on sight: asserting private state, mocks that implement the asserted behavior, `!= None` or `> 0` as the only assertion, `sleep` for synchronization, order-dependent tests, skipped tests with no reason, happy-path-only coverage, expected values produced by the code under test.
 
 ## Auditing or pruning tests
 
