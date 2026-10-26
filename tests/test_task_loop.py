@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1596,6 +1597,55 @@ repo, log, ev = scenario([], FAKE_WORKER_EXTRA="echo x > scripts/x.py")
 final = attempt(220, repo)
 task_loop.jev.consequence = real_consequence
 check("VERIFY: the tier is the base commit's floor and Jev is never asked", final == "blocked", f"{final} {task_loop.load(repo, 220)['reason']}")  # fmt: skip
+
+# A failed verification's reason leads with the failing lines. The suite's per-file list ends in `passed`
+# lines and uv prints deprecation warnings on stderr, so the end of the output alone named nothing. Every
+# expected reason below is a literal written here (Rule 11), not computed from the output.
+UV_WARNING = "warning: The `UV_NATIVE_TLS` environment variable is deprecated; use `UV_SYSTEM_CERTS` instead"
+VERIFY_PREFIX = "verify the High plan (2 checks) exited 1: "
+
+
+def failing_suite(out, err=()):
+    """A `scripts/run.sh` seed that prints `out` on stdout and `err` on stderr, then exits 1."""
+    body = "".join(f"echo {shlex.quote(line)} >&2\n" for line in err) + "".join(f"echo {shlex.quote(line)}\n" for line in out)
+    return ("scripts/run.sh", f"#!/bin/sh\n{body}exit 1\n")
+
+
+def verify_reason(number, suite):
+    """The reason of a High-tier task whose full suite is `suite`: the loop must end it failed."""
+    repo, log, ev = scenario([], seed=[suite], FAKE_WORKER_EXTRA="echo x > scripts/x.py")
+    final = attempt(number, repo)
+    return final, task_loop.load(repo, number)["reason"], log.read_text()
+
+
+final, reason, text = verify_reason(221, failing_suite(
+    ["  tests/test_a.py   3 passed", "  tests/test_b.py   FAILED", "  FAIL  the widget frobs", "          expected 2, got 3",
+     "  tests/test_c.py   4 passed", "  tests/test_d.py   5 passed", "  tests/test_e.py   6 passed"],
+    err=[UV_WARNING] * 3))  # fmt: skip
+check("VERIFY: a failing suite with warnings, a passing file list and one FAIL line names the failing file and the FAIL line",
+      final == "failed" and "tests/test_b.py   FAILED\nFAIL  the widget frobs\n" in reason and "warning:" not in reason, f"{final} {reason!r}")  # fmt: skip
+check("VERIFY: the failing lines come first, then the last three lines that are not failing lines, and nothing else",
+      reason == VERIFY_PREFIX + "tests/test_b.py   FAILED\nFAIL  the widget frobs\ntests/test_c.py   4 passed\ntests/test_d.py   5 passed\ntests/test_e.py   6 passed", repr(reason))  # fmt: skip
+check("VERIFY: a failed verification publishes nothing", " push " not in text and "gh pr create" not in text, text)
+
+final, reason, _ = verify_reason(222, failing_suite([f"step {i}" for i in range(1, 6)], err=[UV_WARNING]))
+check("VERIFY: a failure with no FAIL line still shows its last three lines, without the warning",
+      final == "failed" and reason == VERIFY_PREFIX + "step 3\nstep 4\nstep 5", f"{final} {reason!r}")  # fmt: skip
+
+final, reason, _ = verify_reason(223, failing_suite([f"FAIL  case {i:02d}" for i in range(1, 11)] + ["done 1", "done 2", "done 3"]))
+check("VERIFY: at most eight failing lines are kept, in order, followed by the last three lines",
+      reason == VERIFY_PREFIX + "\n".join(f"FAIL  case {i:02d}" for i in range(1, 9)) + "\ndone 1\ndone 2\ndone 3", repr(reason))  # fmt: skip
+
+LONG = ["FAIL  " + "a" * 94, "FAIL  " + "b" * 94]
+final, reason, _ = verify_reason(224, failing_suite(LONG + ["c" * 100, "d" * 100, "e" * 100]))
+shown = reason[len(VERIFY_PREFIX):]
+check("VERIFY: the reason stays inside 300 characters, cut after the failing lines and not before them",
+      reason.startswith(VERIFY_PREFIX) and shown == LONG[0] + "\n" + LONG[1] + "\n" + "c" * 98, f"{len(shown)} {shown!r}")  # fmt: skip
+
+for marker, word in (("Traceback (most recent call last):", "Traceback"), ("ValueError: boom", "Error:"), ("FAIL: test_x (mod.Case)", "FAIL:")):
+    final, reason, _ = verify_reason(225, failing_suite([marker] + [f"pad {i}" for i in range(1, 6)]))
+    check(f"VERIFY: a line with {word!r} is a failing line and leads the reason",
+          reason == VERIFY_PREFIX + marker + "\npad 3\npad 4\npad 5", repr(reason))  # fmt: skip
 
 # --- the intake gate: an issue with no `Done when` section is refused, never dispatched ------
 # The expected verdicts are literal issue bodies written here, not read from task_loop.py.
