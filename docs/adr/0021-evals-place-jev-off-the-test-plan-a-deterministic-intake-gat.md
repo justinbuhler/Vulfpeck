@@ -7,11 +7,11 @@ Supersedes: 0016
 
 ## Context
 
-ADR 0016 gave Jev three jobs, and ADR 0018 a fourth:
+Three decisions gave Jev a job in the harness:
 
-- `plan_tests.py` asked `jev.consequence` for the tier, a floor from the `[tiers]` globs that Jev could raise and never lower;
-- `loop_guard.py` appended `jev.reassess()` advice to a block;
-- the task loop broke a priority tie with a Jev choice over issue titles.
+- ADR 0016: `plan_tests.py` asked `jev.consequence` for the tier, a floor from the `[tiers]` globs that Jev could raise and never lower;
+- ADR 0017: `loop_guard.py` appended `jev.reassess()` advice to a block;
+- ADR 0018: the task loop broke a priority tie with a Jev choice over issue titles.
 
 The decision at the time was made without measurement. `evals/consequence/` now holds the measurement: every merged pull request up to #37, 27 cases reduced to what `plan_tests.change()` sees, rated by two model labellers (agreement 21 of 27, Cohen's kappa 0.69) and adjudicated into a `gold` tier per case. The labels are model-made and not yet reviewed by the owner. `python3 scripts/eval_consequence.py` scores the code floor, and Jev where a recorded answer exists, against gold. Derived twice (the eval, and a separate script over the raw files):
 
@@ -34,7 +34,7 @@ The decision at the time was made without measurement. `evals/consequence/` now 
 
 **Jev leaves the test plan.** `plan_tests.py` plans at the floor, or at `--tier` (refused below the floor unless `--below-floor`). `tier_source` is `floor` or `given`; the `consequence` key and the referral note are gone. `plan(..., mutation=False)` and `--no-mutation` leave the mutation command out and record `mutation: skipped by --no-mutation (review owns it)` in `skipped`. `floor_tier` and `TIERS` stay in `scripts/jev.py`.
 
-**Jev leaves the loop guard.** `loop_guard.py` no longer asks Jev. A trip message is the rule quote, the attempts and the way out. `jev.reassess`, its constants and its command-line subcommand are removed, with `jev._ask`, whose only caller was the tie-break.
+**Jev leaves the loop guard.** `loop_guard.py` no longer asks Jev; this removes the advice ADR 0017 added. A trip message is the rule quote, the attempts and the way out. `jev.reassess`, its constants and its command-line subcommand are removed, with `jev._ask`, whose only caller was the tie-break.
 
 **The task loop chooses without Jev, and gates intake without it.**
 
