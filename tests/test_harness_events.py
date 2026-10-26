@@ -703,12 +703,20 @@ write_lines(
     [
         event_line("2025-12-31T12:00:00+00:00", "h", "allow"),
         event_line("2026-03-08T23:30:00-05:00", "h", "allow"),
+        # No UTC offset: the week is unknowable, so it is malformed, not guessed.
+        event_line("2026-03-09T12:00:00", "h", "allow"),
     ],
 )
+edge = json.loads(run_report(proj, edge_log, "--json").stdout)
 check(
     "report buckets by UTC ISO week: the ISO year, and an offset time after the UTC week turns",
-    json.loads(run_report(proj, edge_log, "--json").stdout)["weeks"]
-    == ["2026-W01", "2026-W11"],
+    edge["weeks"] == ["2026-W01", "2026-W11"] and edge["records"] == 2,
+    str(edge),
+)
+check(
+    "report counts a timestamp with no UTC offset as malformed",
+    edge["malformed"] == 1,
+    str(edge),
 )
 
 absent = run_report(proj, SCRATCH / "absent.jsonl", "--json")
@@ -764,6 +772,7 @@ done = run_report(big, biglog, "--json")
 check(
     "report leaves a log over MAX_BYTES in place and creates no backup",
     size >= harness_events.MAX_BYTES
+    and biglog.is_file()
     and biglog.stat().st_size == size
     and not biglog.with_name("events.jsonl.1").exists()
     and json.loads(done.stdout)["records"] == 5300,
