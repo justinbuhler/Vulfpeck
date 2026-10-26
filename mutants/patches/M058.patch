@@ -4,12 +4,12 @@
 # behaviour: report reads the rotated events.jsonl.1 backup as well as the live log
 --- a/scripts/harness_events.py
 +++ b/scripts/harness_events.py
-@@ -174,7 +174,7 @@
-         that are not records, and the files that exist.
-     """
-     records, malformed, files = [], 0, []
--    for source in (path.with_name(path.name + ".1"), path):
-+    for source in (path,):
-         if not source.is_file():
-             continue
-         files.append(str(source))
+@@ -187,7 +187,7 @@
+                 if lock is not None:
+                     fcntl.flock(lock, fcntl.LOCK_SH)
+                 records, malformed, files = [], 0, []
+-                for source in (path.with_name(path.name + ".1"), path):
++                for source in (path,):
+                     if not source.is_file():
+                         continue
+                     files.append(str(source))
