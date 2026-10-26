@@ -1,0 +1,15 @@
+# mutant_id: M062
+# target: scripts/jev.py
+# operator: drop-check
+# behaviour: a record whose answers fail validation is a miss, never an answer
+--- a/scripts/jev.py
++++ b/scripts/jev.py
+@@ -282,7 +282,7 @@
+     if not isinstance(answers, dict):
+         return None
+     try:
+-        _check_answers(answers, questions)
++        pass
+     except JevError:
+         return None
+     return answers

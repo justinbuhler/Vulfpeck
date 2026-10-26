@@ -1,0 +1,14 @@
+# mutant_id: M061
+# target: scripts/jev.py
+# operator: add-effect
+# behaviour: a payload with a valid record is replayed without a network call
+--- a/scripts/jev.py
++++ b/scripts/jev.py
+@@ -338,6 +338,7 @@
+     directory = record_dir()
+     answers = _replay(directory, key, questions)
+     if answers is not None:
++        _post(body, questions)
+         _log("hit", "", key)
+         return answers, key
+     if os.environ.get("JEV_OFFLINE") == "1":
