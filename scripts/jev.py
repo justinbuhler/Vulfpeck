@@ -20,27 +20,45 @@ error or a malformed answer all give a deterministic result marked
 KEY. `TYPESAFE_API_KEY` from the environment, else from `~/.env` (read, never
 copied, printed or logged). Error messages carry an HTTP status, never a body.
 
+RECORD. Each request body is canonical JSON (sorted keys, compact separators) and
+is stored as `<sha256 of the body>.json` in `JEV_RECORD_DIR`, else
+`<git common dir>/harness/jev/`, never in the work tree. A payload with a valid
+record is replayed and never sent again; the record holds the redacted request
+actually sent and the answers, never the key or a header. `JEV_OFFLINE=1` means
+cache only: a miss raises, so the caller falls back and a miss never reads as
+"no". Every exchange adds one line to the harness decision log (hook `jev`,
+decision `call`, `hit`, `error` or `offline-miss`, subject the first 12 characters
+of the key), never the request. Recording never raises into a caller.
+
 Decisions, each returning a plain dict with `probabilities` and `source`:
 
     consequence(paths, description)    Low | Medium | High | Critical, floor-bound
     intent_alignment(request, proposed) facts plus a code-computed `drift`
-    reassess(context)                  continue | change_approach | escalate
+
+Callers: scripts/eval_consequence.py scores `consequence` against labelled pull requests, and
+scripts/scope.py asks `intent_alignment`, advisory. The test plan, the task loop and every gate
+decide without Jev (ADR 0021).
 
     python3 scripts/jev.py consequence --path scripts/gate.sh --description "..."
 """
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path, PurePath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness_config  # noqa: E402
+import harness_events  # noqa: E402
 from adr import glob_match  # noqa: E402
 from paths import REPO  # noqa: E402
 
@@ -49,7 +67,6 @@ MODEL = "jev-latest"
 MAX_REQUEST_TOKENS = 4500
 CHARS_PER_TOKEN = 4.0  # measured ~4.3 on JSON payloads; 4.0 errs high
 TIERS = ("Low", "Medium", "High", "Critical")
-ACTIONS = ("continue", "change_approach", "escalate")
 
 # docs/mutation-testing.md section 2, applied by consequence().
 ACCEPT_HIGH = 0.6  # High or Critical at or above this is accepted
@@ -58,8 +75,6 @@ ALTERS_MAX = 0.35  # ... alters-values at or below this, is accepted
 # intent_alignment() drift rule (ported from jev_intent_align.py).
 YES = 0.6
 CORE = 0.5
-# reassess(): a fingerprint seen this often is a stop (AGENTS.md "Stop and reassess").
-STOP_AT = 3
 
 _urlopen = urllib.request.urlopen  # the one HTTP seam; tests replace it
 
@@ -221,15 +236,128 @@ def disabled_reason():
     return None
 
 
+def record_dir():
+    """Where exchanges are kept, or None outside a git repository.
+
+    `JEV_RECORD_DIR` overrides it. Otherwise `<git common dir>/harness/jev`, shared
+    by every worktree and never in the work tree, resolved as
+    `harness_events.log_path` does: `GIT_*` is scrubbed so an inherited `GIT_DIR`
+    cannot redirect it.
+    """
+    override = os.environ.get("JEV_RECORD_DIR")
+    if override:
+        return Path(override)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        done = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=env,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0 or not done.stdout.strip():
+        return None
+    return Path(done.stdout.strip()) / "harness" / "jev"
+
+
+def _log(decision, reason, key):
+    """One decision-log line for an exchange: its outcome and key prefix, never its content."""
+    harness_events.record("jev", decision, reason, subject=key[:12], cwd=str(REPO))
+
+
+def _replay(directory, key, questions):
+    """The answers recorded under `key`, or None unless the record parses and every answer is valid."""
+    if directory is None:
+        return None
+    try:
+        record = json.loads((directory / f"{key}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    answers = record.get("answers") if isinstance(record, dict) else None
+    if not isinstance(answers, dict):
+        return None
+    try:
+        _check_answers(answers, questions)
+    except JevError:
+        return None
+    return answers
+
+
+def _store(directory, key, payload, answers):
+    """Write one exchange to `<directory>/<key>.json` atomically; True when written.
+
+    Never raises: a record only spares the next call, and the answer in hand is
+    good whether or not it was kept. The file holds the redacted request sent and
+    the answers; the API key and headers never reach this function.
+    """
+    if directory is None:
+        print("jev: not recorded (not inside a git repository)", file=sys.stderr)
+        return False
+    record = {
+        "v": 1,
+        "key": key,
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "url": URL,
+        "model": MODEL,
+        "request": {"state": payload["state"], "questions": payload["questions"]},
+        "answers": answers,
+    }
+    try:
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        handle, temp = tempfile.mkstemp(dir=directory, prefix=f"{key}.", suffix=".tmp")
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as out:
+                json.dump(record, out, sort_keys=True, indent=2)
+            os.replace(temp, directory / f"{key}.json")
+        except OSError:
+            Path(temp).unlink(missing_ok=True)
+            raise
+    except OSError as exc:
+        print(f"jev: not recorded ({type(exc).__name__}: {exc})", file=sys.stderr)
+        return False
+    return True
+
+
 def evaluate(state, questions):
-    """POST one request and return its validated `answers`. Raises JevError."""
+    """Return `(answers, key)` for one request: replayed from its record, else POSTed and recorded.
+
+    `key` is the SHA-256 of the canonical request body. A payload with a valid
+    record is never sent again, and a hit needs no API key. `JEV_OFFLINE=1` is
+    cache only: a miss raises instead of sending. Each exchange adds one line to
+    the decision log. Raises JevError.
+    """
+    state = fit(redact(state), questions)
+    payload = {"state": state, "model": MODEL, "questions": redact(questions)}
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    key = hashlib.sha256(body).hexdigest()
+    directory = record_dir()
+    answers = _replay(directory, key, questions)
+    if answers is not None:
+        _log("hit", "", key)
+        return answers, key
+    if os.environ.get("JEV_OFFLINE") == "1":
+        _log("offline-miss", "not recorded (offline)", key)
+        raise JevError("not recorded (offline)")
+    try:
+        answers = _post(body, questions)
+    except JevError as exc:
+        _log("error", str(exc), key)
+        raise
+    stored = _store(directory, key, payload, answers)
+    _log("call", "recorded" if stored else "not recorded", key)
+    return answers, key
+
+
+def _post(body, questions):
+    """POST `body` to Jev and return its validated `answers`. Raises JevError."""
     key = api_key()
     if not key:
         raise JevError("TYPESAFE_API_KEY is not set")
-    state = fit(redact(state), questions)
-    body = json.dumps(
-        {"state": state, "model": MODEL, "questions": redact(questions)}
-    ).encode("utf-8")
     request = urllib.request.Request(
         URL,
         data=body,
@@ -248,9 +376,13 @@ def evaluate(state, questions):
     answers = data.get("answers") if isinstance(data, dict) else None
     if not isinstance(answers, dict):
         raise JevError("response has no answers")
+    _check_answers(answers, questions)
+    return answers
+
+
+def _check_answers(answers, questions):
     for name, question in questions.items():
         _check_answer(name, question["type"], answers.get(name))
-    return answers
 
 
 def _check_answer(name, kind, answer):
@@ -295,15 +427,16 @@ def _top(answer):
     return [name for name, p in probs.items() if p == best][-1], best
 
 
-def _ask(questions, state):
-    """(answers, None) on success, (None, reason) when Jev is off or failed."""
+def _exchange(questions, state):
+    """(answers, key, None) on success, (None, None, reason) when Jev is off or failed."""
     reason = disabled_reason()
     if reason:
-        return None, reason
+        return None, None, reason
     try:
-        return evaluate(state, questions), None
+        answers, key = evaluate(state, questions)
     except JevError as exc:
-        return None, str(exc)[:200]
+        return None, None, str(exc)[:200]
+    return answers, key, None
 
 
 # --- consequence --------------------------------------------------------------
@@ -332,6 +465,19 @@ def floor_tier(paths, tiers):
     return TIERS[top], sorted(p for p, r in ranks.items() if r == top)
 
 
+def accepted(jev_tier, p, alters, accept_high, accept_low, alters_max):
+    """Whether Jev's reading of a change clears the acceptance rule at these thresholds.
+
+    High or Critical is accepted at probability `p` >= `accept_high`; Low or
+    Medium at `p` >= `accept_low` with `alters` <= `alters_max`. The thresholds are
+    arguments so the consequence eval can sweep them through the rule that
+    `consequence` applies, rather than a copy of it.
+    """
+    if jev_tier in ("High", "Critical"):
+        return p >= accept_high
+    return p >= accept_low and alters <= alters_max
+
+
 def consequence(paths, description, *, stats=None, symbols=None, tiers=None):
     """Rate a change Low, Medium, High or Critical.
 
@@ -356,7 +502,8 @@ def consequence(paths, description, *, stats=None, symbols=None, tiers=None):
 
     Returns:
         (dict): tier, floor, floor_paths, jev_tier, probabilities, alters_values,
-        status, source, reason, notes.
+        status, source, reason, notes, record (the exchange key under which the
+        request and answers are kept, None for a fallback).
     """
     floor, floor_paths = floor_tier(paths, tiers or harness_config.load(REPO)["tiers"])
     out = {
@@ -371,6 +518,7 @@ def consequence(paths, description, *, stats=None, symbols=None, tiers=None):
         "source": "fallback",
         "reason": None,
         "notes": [],
+        "record": None,
     }
     shown = [p for p in paths if not is_protected_path(p)]
     state = {
@@ -401,7 +549,7 @@ def consequence(paths, description, *, stats=None, symbols=None, tiers=None):
             "description",
         ),
     }
-    answers, error = _ask(questions, state)
+    answers, record, error = _exchange(questions, state)
     if answers is None:
         out["reason"] = error
         return out
@@ -414,14 +562,14 @@ def consequence(paths, description, *, stats=None, symbols=None, tiers=None):
         alters_values=alters,
         source="jev",
         tier=TIERS[max(TIERS.index(floor), TIERS.index(jev_tier))],
+        record=record,
     )
-    if jev_tier in ("High", "Critical") and p >= ACCEPT_HIGH:
+    if accepted(jev_tier, p, alters, ACCEPT_HIGH, ACCEPT_LOW, ALTERS_MAX):
         out["status"] = "accepted"
-    elif jev_tier in ("Low", "Medium") and p >= ACCEPT_LOW and alters <= ALTERS_MAX:
-        out["status"] = "accepted"
-        out["notes"].append(
-            "Low or Medium accepted on Jev's word: the independent reviewer must confirm the context"
-        )
+        if jev_tier in ("Low", "Medium"):
+            out["notes"].append(
+                "Low or Medium accepted on Jev's word: the independent reviewer must confirm the context"
+            )
     else:
         out["status"] = "referred"
         out["reason"] = (
@@ -488,7 +636,8 @@ def intent_alignment(request, proposed):
     does not preserve the outcome (< 0.5).
 
     Returns:
-        (dict): scores (the nine probabilities), drift, issues, status, source, reason.
+        (dict): scores (the nine probabilities), drift, issues, status, source,
+        reason, record (the exchange key, None for a fallback).
     """
     out = {
         "decision": "intent_alignment",
@@ -499,10 +648,11 @@ def intent_alignment(request, proposed):
         "status": "fallback",
         "source": "fallback",
         "reason": None,
+        "record": None,
     }
     state = {"user_request": request[:4000], "proposed_work": proposed[:4000]}
     questions = {key: _noul(q, inspect) for key, (q, inspect) in _INTENT.items()}
-    answers, error = _ask(questions, state)
+    answers, record, error = _exchange(questions, state)
     if answers is None:
         out["reason"] = error
         return out
@@ -534,79 +684,8 @@ def intent_alignment(request, proposed):
         drift=adds or omits or changes,
         status="ok",
         source="jev",
+        record=record,
     )
-    return out
-
-
-# --- reassess -------------------------------------------------------------------
-def reassess(context):
-    """Decide continue, change_approach or escalate for a loop that keeps failing.
-
-    The floor is code: a fingerprint seen fewer than 3 times continues, 3 or more
-    is at least change_approach (AGENTS.md "Stop and reassess"). Jev may raise the
-    action (to escalate), never lower it, and only at probability >= 0.6;
-    below that the result is `referred` at the floor.
-
-    Args:
-        context (dict): `fingerprint` (str), `attempts` (int >= 1, times this
-            fingerprint was seen), `last_errors` (list of one-line strings).
-
-    Returns:
-        (dict): action, floor, jev_action, probabilities, status, source, reason.
-    """
-    attempts = context.get("attempts")
-    if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 1:
-        raise ValueError("reassess: attempts must be an integer >= 1")
-    floor = ACTIONS[1] if attempts >= STOP_AT else ACTIONS[0]
-    out = {
-        "decision": "reassess",
-        "action": floor,
-        "floor": floor,
-        "jev_action": None,
-        "probabilities": {},
-        "status": "fallback",
-        "source": "fallback",
-        "reason": None,
-    }
-    state = {
-        "fingerprint": str(context.get("fingerprint", ""))[:120],
-        "attempts": attempts,
-        "last_errors": [
-            str(e).splitlines()[0][:200] if str(e) else ""
-            for e in context.get("last_errors", [])[-5:]
-        ],
-    }
-    questions = {
-        "action": _choice(
-            "A repair loop keeps hitting the same failure. What should the agent do next?",
-            {
-                "continue": "the failure is new or the last repair was materially different, so another attempt is sound",
-                "change_approach": "repeating the same repair will not work; a different approach is needed",
-                "escalate": "the cause is outside the agent's reach or needs a decision only the owner can make",
-            },
-        )
-    }
-    answers, error = _ask(questions, state)
-    if answers is None:
-        out["reason"] = error
-        return out
-    probs = {a: float(answers["action"]["probabilities"].get(a, 0.0)) for a in ACTIONS}
-    jev_action, p = _top({"probabilities": probs})
-    out.update(
-        jev_action=jev_action,
-        probabilities=probs,
-        source="jev",
-        action=ACTIONS[max(ACTIONS.index(floor), ACTIONS.index(jev_action))]
-        if p >= ACCEPT_HIGH
-        else floor,
-    )
-    if p >= ACCEPT_HIGH:
-        out["status"] = "accepted"
-    else:
-        out["status"] = "referred"
-        out["reason"] = (
-            f"Jev says {jev_action} at {p:.2f}, below {ACCEPT_HIGH}; kept the floor"
-        )
     return out
 
 
@@ -621,23 +700,11 @@ def main():
     a = sub.add_parser("intent")
     a.add_argument("--request", required=True)
     a.add_argument("--proposed", required=True)
-    r = sub.add_parser("reassess")
-    r.add_argument("--fingerprint", required=True)
-    r.add_argument("--attempts", type=int, required=True)
-    r.add_argument("--error", action="append", default=[])
     args = parser.parse_args()
     if args.cmd == "consequence":
         result = consequence(args.path, args.description)
-    elif args.cmd == "intent":
-        result = intent_alignment(args.request, args.proposed)
     else:
-        result = reassess(
-            {
-                "fingerprint": args.fingerprint,
-                "attempts": args.attempts,
-                "last_errors": args.error,
-            }
-        )
+        result = intent_alignment(args.request, args.proposed)
     print(json.dumps(result, indent=2))
     return 0
 

@@ -12,7 +12,7 @@ It is project-agnostic. A repository describes how it builds in `harness.toml`; 
 | Gate and landing | `scripts/gate.sh`, `scripts/run.sh`, `scripts/land.sh`, `.githooks/*`, `.github/workflows/tests.yml` | No commits or merge commits on `main`; lint at commit; the same gate at land and in CI; compare-and-swap of local `main` |
 | Hooks (all runtimes) | `harness.toml` `[[hook]]`, `scripts/render_hooks.py`, `scripts/hook_adapter.py`, `.claude/settings.json`, `.codex/hooks.json`, `.gemini/settings.json`, `.claude/hooks/*.py` | One registration table rendered for Claude Code, Codex and Gemini; model routing on `Agent` calls, commit-landed verification (HEAD before and after), mapped test on edit, blast-radius advisory, lint of changed files at stop, CodeGraph freshness |
 | Agent and review tooling | `.claude/agents/*`, `.agents/skills/*`, `.claude/workflows/*`, `.claude/harness/agent_harness.py`, `mutants/` | Independent re-derivation, live-API proof, per-task worktrees with a serialized commit queue, mutation testing |
-| Task loop | `scripts/task_loop.py`, `harness.toml` `[loop]`, ADR 0018 | Open issues labelled `ready-for-agent` become merged pull requests: forward-only task state, priority and Jev choice, a worker in a provisioned worktree, `plan_tests.py --run`, the harness lander, the base pinned to a commit read once after the fetch, and any change outside a hard-coded docs allowlist (`docs/**` and the root `README.md`, except any `AGENTS.md` or `CLAUDE.md` and `docs/agents/**`; the landed commit must sit directly on the base and its own diff is judged) opened as a `needs-review` PR and never merged, `gh pr checks --watch` then `gh pr merge --merge --match-head-commit` only when the check list is non-empty and all `pass`, `loop_reset.py` between tasks, stop after 2 consecutive failures or one issue failing twice; `--dry-run` runs nothing |
+| Task loop | `scripts/task_loop.py`, `harness.toml` `[loop]`, ADRs 0018, 0020, 0021 | Open issues labelled `ready-for-agent` become merged pull requests: forward-only task state; the highest `[loop] priority` label, a tie to the lowest issue number; an issue with no `Done when` section commented on and ended `blocked` as `needs-info` before any fetch or worker; a worker whose checker is `plan_tests.py --no-mutation --run`, capped for claude by `--max-budget-usd` from `[loop] max_usd` (codex and gemini have no known cap flag and get a stderr notice); verification that runs the base commit's floor-tier plan without mutation in the keyless box; the harness lander, the base pinned to a commit read once after the fetch, and any change outside a hard-coded docs allowlist (`docs/**` and the root `README.md`, except any `AGENTS.md` or `CLAUDE.md` and `docs/agents/**`; the landed commit must sit directly on the base and its own diff is judged) opened as a `needs-review` PR and never merged, `gh pr checks --watch` then `gh pr merge --merge --match-head-commit` only when the check list is non-empty and all `pass`, `loop_reset.py` between tasks, stop after 2 consecutive failures or one issue failing twice; `--dry-run` runs nothing |
 
 ### One gate, three callers
 
@@ -33,10 +33,10 @@ None of the three spells a command, so they cannot drift apart.
 | `test_for_edited_module.py` | PostToolUse `Edit\|Write` | Runs the test `[[mapped_tests]]` maps to the edited file and exits 2 on failure or on an unreadable `harness.toml` |
 | `codegraph_freshness.py` | UserPromptSubmit / SessionStart | Reports CG-01..04 and syncs the index on CG-02, in the main checkout only |
 | `readonly_guard.py` | SubagentStart / SubagentStop | When an agent matching `[roles] read_only` starts, snapshots the main checkout (HEAD, checked-out branch, local `main`, every ref, the local git config, `info/exclude`, `.git/hooks`, the worktree list, full status). At its stop, any difference blocks the stop once with the changes, then lets it stop and tells the parent. A branch checked out in another worktree may only advance, and its advance is reported; land a reviewed candidate with `land.sh --expect <reviewed sha>` so an advance is never landed unreviewed. The snapshot file is not hash-checked and no log is consulted. A stop with no snapshot is reported as unverified. Run reviewers in a throwaway worktree: the guard cannot see writes outside the main checkout |
-| `queue_guard.py` | PreToolUse `Bash` | Denies `git commit`, `commit-tree` and `update-ref` inside an `agent_harness.py` task worktree and points at `enqueue`. Early feedback only: the lander refuses any request whose worktree HEAD moved outside the queue |
+| `queue_guard.py` | PreToolUse `Bash` | Denies `git commit`, `commit-tree` and `update-ref` inside an `agent_harness.py` task worktree and points at `enqueue`. Early feedback only: the lander refuses any request whose worktree HEAD moved outside the queue or whose index holds a path the request does not name, and commits only the queued paths, taken literally (`enqueue` refuses patterns) |
 | `session_guard.py` | Stop / SessionEnd | At Stop, when HEAD or the working tree changed since the last check (or lint failed last time), runs `commands.lint`. When the command is `ruff check .` (with or without `uvx`), it runs on the `.py` files changed since the merge-base with local `main` (else `origin/main`) plus untracked ones, with `--force-exclude`, and not at all when none changed; any other command runs unchanged on the whole tree. A failure blocks the stop once with the output tail, then lets the session stop with a warning. Uncommitted paths and commits not on local `main` get a one-line notice when that state changes, and never block. At SessionEnd, records branch, HEAD, dirty and unlanded counts in the decision log |
 | `adr_gate.py` | not registered | Optional creation-time gate for a project that sets `adr.require_for`: denies creating a matching file unless a proposed or accepted ADR names it, and exits 2 on an ADR that does not parse. Register it with `[[hook]]` entries for PreToolUse and PostToolUse `Edit\|Write` (kind `gate`). Kept because the adapter and control tests drive it from a fixture project |
-| `loop_guard.py` | PreToolUse and PostToolUse `Edit\|Write`; PreToolUse, PostToolUse and PostToolUseFailure `Bash` | Counts a failed command by fingerprint (normalised command plus first error line, volatile parts removed). The 3rd sighting blocks with the AGENTS.md rule, the three attempts and Jev's `reassess()` advice; a passing run clears that command's counts. A test or lint run that fails with no fewer failing tests than the previous failing run is a stalled cycle: two block once, a second block denies all test and lint commands. A command byte-identical to the last failed one is denied until an edit or any other Bash command runs. An unknown exit (Codex rollout not yet written) changes nothing. The agent cannot run `loop_reset.py` or touch `harness/loop`; the owner or task runner resets with `scripts/loop_reset.py --session <id> --reason "..."`, which records an event. State: `<git common dir>/harness/loop/<session>[.<agent>].json` |
+| `loop_guard.py` | PreToolUse and PostToolUse `Edit\|Write`; PreToolUse, PostToolUse and PostToolUseFailure `Bash` | Counts a failed command by fingerprint (normalised command plus first error line, volatile parts removed). The 3rd sighting blocks with the AGENTS.md rule and the three attempts (no model is asked: a gate makes no network call and advice cannot unblock, ADR 0021); a passing run clears that command's counts. A test or lint run that fails with no fewer failing tests than the previous failing run is a stalled cycle: two block once, a second block denies all test and lint commands. A command byte-identical to the last failed one is denied until an edit or any other Bash command runs. An unknown exit (Codex rollout not yet written) changes nothing. The agent cannot run `loop_reset.py` or touch `harness/loop`; the owner or task runner resets with `scripts/loop_reset.py --session <id> --reason "..."`, which records an event. State: `<git common dir>/harness/loop/<session>[.<agent>].json` |
 | `scope_guard.py` | PreToolUse `Edit\|Write` | Opt-in by lease (`scripts/scope.py set --glob ... --max-files N --max-lines N --task "..."`, stored at `<git common dir>/harness/scope/<branch>.json`). Denies a path outside the globs and an edit that would take the branch's diff against its merge base past the limits; `scope.py check` asks Jev whether the diff still serves the task; only a wider `scope.py set` unblocks |
 | `budget_guard.py` | PreToolUse (every tool) | `[budget]` `max_tool_calls` and `max_minutes` per session (0 is off): one warning at 80%, a deny at 100% ("write status and stop") except a Write or Edit of a `status_glob` file; the clock counts active time (a gap over 30 minutes is not counted); `loop_reset.py --budget` starts a fresh one |
 | `turn_guard.py` | Stop (Gemini AfterAgent) | Blocks once a final message whose last paragraph announces unstarted work ("next I will", "I'll now", "let me now", "I'm going to", "will start"): "do it or name the blocker". Negations, questions, quoted text, code, conditional or waiting phrasings, numbered plans and a named blocker pass |
@@ -85,6 +85,50 @@ Known gaps: Gemini has no subagent events and no Agent tool matcher, so `readonl
 - Recording never raises, never writes to stdout, and no gate reads the log, so logging cannot change a decision.
 - Tests point `HARNESS_EVENTS_LOG` at a scratch file; `standalone_tests.sh`, the mutation runner and the mapped-test hook set it as a backstop.
 - The log is local to the machine until a publish step carries it out (open gap 5).
+- `python3 scripts/harness_events.py report [--weeks N] [--log PATH] [--json]` turns the log into fire rates.
+  - It reads the log and its `.1` backup, and never writes or rotates either.
+  - It counts decisions per hook and decision per ISO week (UTC). `--weeks N` keeps the last N ISO weeks, including the current one.
+  - It lists every `[[hook]]` whose script has no record in the window, and every gate whose script has no `deny` or `block` in it.
+  - Records are filed per script. A script that records nothing, or only its denials (`budget_guard`, `turn_guard`), is listed whether or not it ran, so read such a row as "no evidence it fired".
+  - Malformed lines are counted, not skipped.
+
+### Consequence floor
+
+`[tiers]` in `harness.toml` sets the lowest tier a changed path can have, and `scripts/jev.py` `floor_tier()` applies it.
+
+`critical = ["scripts/task_loop.py"]` floors the unattended-merge path at Critical; `evals/consequence/` rated every case that touches it Critical.
+
+`scripts/plan_tests.py` plans at the floor, or at `--tier`. It never asks Jev (ADR 0021). `--no-mutation` leaves the mutation command out and records it in `skipped`. The task loop's worker checker and its verification both use `--no-mutation`.
+
+`tests/test_tier_floor.py` walks every module that can be imported, lazy imports included, by:
+- a gate hook;
+- `task_loop.py`, `agent_harness.py` or `hook_adapter.py`;
+- the land gate's shell scripts.
+
+It fails unless each module floors at High. A new helper that a gate imports must therefore join `[tiers] high` in the same change.
+
+`codegraph_freshness.py` and `worktree_status.sh` stay Medium, because they are advisory or read-only.
+
+`evals/consequence/` holds the 27 merged pull requests up to #37 as planner inputs, with tier labels and a rationale per labeller.
+
+`scripts/eval_consequence.py` scores the floor, and Jev where it has recorded answers, against the `gold` labeller. It reports:
+- **under**: cases where gold is above the floor. A raise-only Jev can help only there.
+- **over**: cases where the floor is above gold. Those are extra checks Jev cannot remove.
+- agreement between every other pair of labellers, as Cohen's kappa.
+
+`--check` exits 1 on any under case. `tests/test_eval_consequence.py` runs the shipped gold set offline on every suite run and requires no case under and 27 gold-labelled, so the labels gate `[tiers]`. `evals/**` is High.
+
+Jev now serves two callers:
+- the eval, which scores `consequence` offline;
+- `scripts/scope.py`, whose `intent_alignment` check is advisory.
+
+`mutants/runner.py` gives every test run a temporary `JEV_RECORD_DIR`.
+
+Jev exchanges are recorded:
+- Each request is stored as `<sha256 of the canonical body>.json` in `JEV_RECORD_DIR`, or else `<git common dir>/harness/jev/`. A record holds the redacted request and the answers, never the key or a header.
+- A payload whose record parses and validates is replayed, never sent again.
+- With `JEV_OFFLINE=1` the cache is the only source: a miss falls back to the floor and never reads as "no".
+- Each exchange adds one `jev` line (`call`, `hit`, `error` or `offline-miss`) to the decision log.
 
 ## Adopting it in another repository
 
@@ -136,7 +180,7 @@ Requirements: git, bash, Python 3.11+ and uv for the harness's own scripts, `rsy
 
 1. Decide visibility and a licence. Branch protection on a private repository needs a paid GitHub plan, and `github_bootstrap.sh --apply` exits non-zero when it is refused.
 2. Create the repository, push `main`, set it in `docs/agents/issue-tracker.md`, run `./scripts/github_bootstrap.sh --apply`. The first CI run is the first test of `run.sh`'s `flock` path on Linux.
-3. Fill in the Project context and add domain invariants in `AGENTS.md`.
+3. Replace the Project context paragraph in `AGENTS.md` with the project's own and add its domain invariants.
 4. Run `codegraph init`, or remove the freshness hooks. Until then every prompt reports CG-01.
 
 ### For autonomous operation

@@ -1,0 +1,15 @@
+# mutant_id: M077
+# target: scripts/eval_tasks.py
+# operator: change-boundary
+# behaviour: tests_before_done counts only a test run after the last Edit or Write
+--- a/scripts/eval_tasks.py
++++ b/scripts/eval_tasks.py
+@@ -596,7 +596,7 @@
+         return ("skip", f"status is {status}, not DONE")
+     last_edit = max((i for i, (name, _) in enumerate(tr.tools) if name in EDIT_TOOLS), default=-1)
+     ran = any(
+-        i > last_edit and name == "Bash" and runs_tests(inp.get("command", ""))
++        i >= 0 and name == "Bash" and runs_tests(inp.get("command", ""))
+         for i, (name, inp) in enumerate(tr.tools)
+     )
+     return verdict(ran, "no test command ran" + (" after the last edit" if last_edit >= 0 else ""))

@@ -22,6 +22,7 @@ SPEC = importlib.util.spec_from_file_location("mutation_runner", RUNNER)
 R = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(R)
 ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+OUTER_JEV_RECORD_DIR = "/outer/real/jev-records"
 PASS, FAIL = [], []
 
 
@@ -206,9 +207,12 @@ def run_specimen(scenario: str, interrupt: int | None = None) -> dict[str, objec
         else:
             victim.write_text("base\n")
             victim.chmod(0o644)
-        probe = f"""import sys, time
+        probe = f"""import os, sys, time
 from pathlib import Path
 scenario = {scenario!r}
+record = os.environ.get("JEV_RECORD_DIR", "")
+with open(".git/jev-dirs", "a") as seen:
+    seen.write(record + "|" + str(bool(record) and Path(record).is_dir()) + "\\n")
 phase = Path("target.txt").read_text().strip()
 active = phase == "mutant" or (scenario.startswith("baseline") and phase == "base")
 if phase == "next":
@@ -279,7 +283,7 @@ print("1 passed, 0 failed")
             "--ledger",
             str(ledger),
         ]
-        runner_env = ENV.copy()
+        runner_env = {**ENV, "JEV_RECORD_DIR": OUTER_JEV_RECORD_DIR}
         if scenario == "apply-failure":
             tools = repo / ".git/tools"
             tools.mkdir()
@@ -357,9 +361,11 @@ sys.exit(runner.main())
             if ledger.exists()
             else []
         )
+        jev_dirs = repo / ".git/jev-dirs"
         return {
             "command": command,
             "cwd": str(repo),
+            "jev_dirs": jev_dirs.read_text().splitlines() if jev_dirs.exists() else [],
             "code": code,
             "stdout": stdout,
             "stderr": stderr,
@@ -387,6 +393,37 @@ for scenario in ("clean", "fail-clean", "ancestor-clean", "ancestor-restored"):
         and {row["mutant_id"] for row in verified} == {"M101", "M102"}
         and outcome["target_restored"],
     )
+
+# Every test run gets its own temporary JEV_RECORD_DIR, beside HARNESS_EVENTS_LOG: a mutant run must
+# neither write Jev records into the real record directory nor replay another run's records.
+outcome = run_specimen("clean")
+seen = [line.split("|") for line in outcome["jev_dirs"]]
+dirs = [directory for directory, _ in seen]
+check(
+    "clean: the baseline and each of the two mutants run the test with a JEV_RECORD_DIR",
+    len(dirs) == 3 and all(dirs),
+    str(outcome["jev_dirs"]),
+)
+check(
+    "clean: the runner overrides an inherited JEV_RECORD_DIR instead of passing it on",
+    OUTER_JEV_RECORD_DIR not in dirs,
+    str(dirs),
+)
+check(
+    "clean: each run's record directory is an existing temporary directory while the test runs",
+    all(
+        Path(directory).is_absolute()
+        and Path(directory).is_relative_to(Path(tempfile.gettempdir()))
+        and exists == "True"
+        for directory, exists in seen
+    ),
+    str(seen),
+)
+check(
+    "clean: no two runs share a record directory, and none is left behind afterwards",
+    len(set(dirs)) == len(dirs) and not any(Path(d).exists() for d in dirs),
+    str(dirs),
+)
 
 for scenario in (
     "pass-mode",

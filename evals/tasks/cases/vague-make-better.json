@@ -1,0 +1,25 @@
+{
+  "id": "vague-make-better",
+  "kind": "vague",
+  "source": {},
+  "issue": {
+    "title": "Make the harness better",
+    "labels": [
+      "ready-for-agent"
+    ],
+    "body": "It feels slow and fiddly. Improve it."
+  },
+  "expect": {
+    "final_state": "blocked",
+    "reason_contains_any": [
+      "Done when",
+      "NEEDS_CONTEXT"
+    ],
+    "status": null,
+    "paths_allowed": [],
+    "trace": [
+      "no_edits",
+      "no_forbidden_commands"
+    ]
+  }
+}

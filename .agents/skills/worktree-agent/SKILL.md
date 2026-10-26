@@ -7,7 +7,7 @@ description: Use when you are an agent dispatched into a git worktree to impleme
 
 Rules for any agent working in a task worktree. This repo's worktrees live under `tmp/worktrees/<name>` and are provisioned with `.claude/harness/agent_harness.py provision`; use that when the lead has not already created one.
 
-1. **Verify the directory.** Run `git rev-parse --show-toplevel` and `git worktree list`. The toplevel must be your task worktree, not the main checkout. If it is the main checkout, stop and report. If `git config --get core.bare` prints `true`, stop and report.
+1. **Verify the directory.** Run `git rev-parse --show-toplevel` and `git worktree list`. The toplevel must be your task worktree, not the main checkout. If it is the main checkout, stop and report. If `git config --get core.bare` prints `true`, stop and report. Report a missing worktree or a broken environment once; do not loop on it.
 2. **Branch first.** Work on a named feature branch, never the detached or default branch. If the name is taken by another worktree, add a unique suffix. To update a branch held by another worktree, work detached from `origin/<branch>` and push with `git push origin HEAD:<branch>`.
 3. **Stay inside.** Write only under your worktree. Build paths from `git rev-parse --show-toplevel`, not absolute paths from the main repo. Never switch branches in the main checkout.
 4. **Commit rules depend on the worktree.** In a task worktree provisioned by `.claude/harness/agent_harness.py`, never stage or commit; hand the change to the lead with `agent_harness.py enqueue --task <id> -m "<message>" --file <path>`, one `--file` per named file, no globs or directories (ORCH-03). In a branch worktree a brief gave you, commit on your own branch: `git add <path>` for each intended file, check `git diff --cached --stat`, never `git add .` or `-A`.
@@ -16,4 +16,4 @@ Rules for any agent working in a task worktree. This repo's worktrees live under
 7. **Check before reporting.** Run the checks your consequence tier asks for (see `testing`); the land runs the full gate. A report is not evidence; the lead re-runs the check.
 8. **Read-only roles.** Reviewers read the candidate with `git diff` or `git show` and never change repository or git state.
 
-After the merge the lead removes the worktree: `git worktree remove <path>`, then `./scripts/worktree_status.sh --prune`.
+After the merge the lead removes the worktree: `git worktree remove <path>`, then `./scripts/worktree_status.sh --prune`. Never remove a worktree an agent still holds.

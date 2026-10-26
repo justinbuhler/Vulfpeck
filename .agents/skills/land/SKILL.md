@@ -56,14 +56,25 @@ no longer appear.
 
 ## Land, and what "landed" means
 
-`./scripts/land.sh` gates the merged tree and moves `refs/heads/main` by
-compare-and-swap. Claim a land only from its exit status, never from narration.
+`./scripts/land.sh` gates the merged tree and moves local `refs/heads/main` by
+compare-and-swap, re-merging when a peer lands first. It exits non-zero unless the
+reviewed candidate is provably reachable from `main`. Claim a land only from its
+exit status, never from narration.
+
+Fast-forward local `main` from `origin/main` before landing onto it or cutting a
+branch from it.
 
 After an adversarial review, land exactly the commit it approved:
 `./scripts/land.sh --expect <reviewed sha>` refuses if the branch tip has moved
 since (a later commit, or one a reviewer made).
 
-It contains no `git push`, so:
+Agents commit freely on their own branch. The pre-commit hook refuses commits made
+while `HEAD` is `main`; a land never trips it, because its merge commit is made in a
+detached scratch worktree.
+
+It contains no `git push` and cannot move `origin/main`, which moves only when a
+pull request is merged. `origin/main` is the one integration target, so a local land
+is never "published":
 
 ```bash
 git merge-base --is-ancestor <sha> origin/main; echo $?

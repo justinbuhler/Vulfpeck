@@ -1,0 +1,15 @@
+# mutant_id: M081
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: a failed verification's reason leads with the failing lines of its output
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -197,7 +197,7 @@
+     characters, which keeps the failing lines.
+     """
+     lines = [x for x in f"{done.stdout}\n{done.stderr}".splitlines() if x.strip() and not TOOL_WARNING.match(x)]
+-    failing = [x for x in lines if FAILING_LINE.search(x)][:8]
++    failing = []
+     last = [x for x in lines[-3:] if x not in failing]
+     return "\n".join(x.strip() for x in failing + last)[:n]
+ 

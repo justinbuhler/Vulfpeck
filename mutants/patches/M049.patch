@@ -4,27 +4,23 @@
 # behaviour: verification runs for every change, not only an allowlisted one
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -743,14 +743,15 @@
-             if outside
+@@ -852,12 +852,13 @@
              else None
          )
--        lint = base_lint(root, base_sha)
--        stage(
--            verify_argv(cfg, wt, lint),
--            wt,
--            f"verify `{lint}`",
--            VERIFY_TIMEOUT,
--            untrusted=root,
--        )
+         tier, checks, skipped = verification(root, wt, base_sha, paths)
+-        ran = sh(verify_argv(cfg, wt, checks), wt, VERIFY_TIMEOUT, untrusted=root)
+-        if ran.returncode:
+-            raise Halt(
+-                "failed",
+-                f"verify the {tier} plan ({len(checks)} checks) exited {ran.returncode}: {failure_tail(ran)}",
+-            )
 +        if review is None:
-+            lint = base_lint(root, base_sha)
-+            stage(
-+                verify_argv(cfg, wt, lint),
-+                wt,
-+                f"verify `{lint}`",
-+                VERIFY_TIMEOUT,
-+                untrusted=root,
-+            )
-         move(root, n, "verified", f"needs-review: {review}" if review else status)
-         enqueue = next(
-             argv
++            ran = sh(verify_argv(cfg, wt, checks), wt, VERIFY_TIMEOUT, untrusted=root)
++            if ran.returncode:
++                raise Halt(
++                    "failed",
++                    f"verify the {tier} plan ({len(checks)} checks) exited {ran.returncode}: {failure_tail(ran)}",
++                )
+         verified = f"verified at {tier} (checks run: {len(checks)})"
+         if skipped:
+             verified += f"; {'; '.join(skipped)}"

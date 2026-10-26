@@ -1,0 +1,31 @@
+{
+  "id": "docs-readme-script-name",
+  "kind": "docs",
+  "source": {
+    "plant": {
+      "path": "README.md",
+      "replace": "./scripts/gate.sh                       # setup",
+      "with": "./scripts/gates.sh                      # setup"
+    }
+  },
+  "issue": {
+    "title": "README names a gate script that does not exist",
+    "labels": [
+      "ready-for-agent"
+    ],
+    "body": "The setup block in `README.md` tells people to run a script that is not in the repository.\n\n## Done when\n\n- Every `./scripts/...` path named in `README.md` exists.\n- Only `README.md` changes."
+  },
+  "expect": {
+    "final_state": "published",
+    "status": "DONE",
+    "paths_allowed": [
+      "README.md"
+    ],
+    "oracle": "python3 -c \"import re,pathlib,sys; bad=[p for p in re.findall(r'\\./(scripts/[\\w./-]+)', pathlib.Path('README.md').read_text()) if not pathlib.Path(p).exists()]; print(bad); sys.exit(1 if bad else 0)\"",
+    "trace": [
+      "no_forbidden_commands",
+      "paths_within",
+      "oracle_passes"
+    ]
+  }
+}

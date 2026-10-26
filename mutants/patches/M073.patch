@@ -1,0 +1,14 @@
+# mutant_id: M073
+# target: mutants/runner.py
+# operator: drop-check
+# behaviour: every mutant test run gets a temporary JEV_RECORD_DIR, never the inherited one
+--- a/mutants/runner.py
++++ b/mutants/runner.py
+@@ -158,7 +158,6 @@
+             os.environ,
+             PYTHONPATH=f"{ROOT}:{ROOT / 'scripts'}",
+             HARNESS_EVENTS_LOG=os.devnull,
+-            JEV_RECORD_DIR=records,
+         )
+         try:
+             done = subprocess.run(

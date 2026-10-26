@@ -1,0 +1,15 @@
+# mutant_id: M063
+# target: scripts/jev.py
+# operator: change-constant
+# behaviour: JEV_OFFLINE=1 sends nothing: a miss raises instead of reaching the network
+--- a/scripts/jev.py
++++ b/scripts/jev.py
+@@ -340,7 +340,7 @@
+     if answers is not None:
+         _log("hit", "", key)
+         return answers, key
+-    if os.environ.get("JEV_OFFLINE") == "1":
++    if os.environ.get("JEV_OFFLINE") == "0":
+         _log("offline-miss", "not recorded (offline)", key)
+         raise JevError("not recorded (offline)")
+     try:

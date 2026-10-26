@@ -3,14 +3,21 @@
 Every expectation is a literal written in this file (Rule 11), never read back
 from jev.py's constants. The HTTP layer is replaced, so no network and no quota
 is used, and the environment is set explicitly so the check count cannot move
-with whether a key happens to be configured.
+with whether a key happens to be configured. Exchanges are recorded under the
+SHA-256 of the request, so every scenario gets its own record directory and the
+decision log goes to a scratch file; nothing here touches the real ones.
 """
 
+import contextlib
+import hashlib
+import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import urllib.error
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -31,9 +38,33 @@ def check(name, cond, detail=""):
 FAKE_KEY = "fake-key-for-tests-0123456789"
 os.environ["TYPESAFE_API_KEY"] = FAKE_KEY
 os.environ["JEV_DISABLE"] = ""
-for seam in ("settings", "_urlopen"):
+os.environ["JEV_OFFLINE"] = ""
+for seam in ("settings", "_urlopen", "record_dir", "harness_events"):
     assert hasattr(jev, seam), seam
+assert hasattr(jev.harness_events, "log_path")
 jev.settings = lambda: {"enabled": True, "timeout": 1.0}
+SCRATCH = Path(tempfile.mkdtemp(prefix="jev-test."))
+EVENTS = SCRATCH / "events.jsonl"
+os.environ["HARNESS_EVENTS_LOG"] = str(EVENTS)
+assert jev.harness_events.log_path() == EVENTS
+
+
+def fresh_records():
+    """Point the record directory at a new empty one and return it."""
+    directory = Path(tempfile.mkdtemp(prefix="rec.", dir=SCRATCH))
+    os.environ["JEV_RECORD_DIR"] = str(directory)
+    assert jev.record_dir() == directory
+    return directory
+
+
+def events():
+    """Every decision-log line written so far, parsed."""
+    if not EVENTS.exists():
+        return []
+    return [json.loads(line) for line in EVENTS.read_text().splitlines()]
+
+
+fresh_records()
 
 TIERS = {
     "low": ["**/*.md", "docs/**"],
@@ -57,8 +88,14 @@ class Reply:
         return json.dumps(self.body).encode()
 
 
-def serve(answers=None, error=None):
-    """Replace the HTTP seam; returns the list of captured requests."""
+def serve(answers=None, error=None, keep_records=False):
+    """Replace the HTTP seam; returns the list of captured requests.
+
+    Each call starts from an empty record directory unless `keep_records`, because
+    two scenarios that send the same request would otherwise replay each other.
+    """
+    if not keep_records:
+        fresh_records()
     sent = []
 
     def fake(request, timeout):
@@ -133,18 +170,37 @@ for path, want in {
     "scripts/harness_config.py": "High",
     "scripts/jev.py": "High",
     "scripts/plan_tests.py": "High",
+    "scripts/task_loop.py": "Critical",
     "scripts/standalone_tests.sh": "High",
     "scripts/gate.sh": "High",
     "mutants/runner.py": "High",
     "mutants/patches/M001.patch": "High",
     "tests/test_jev.py": "High",
+    "scripts/eval_consequence.py": "High",
+    "scripts/eval_tasks.py": "High",
+    "evals/consequence/labels.jsonl": "High",
+    "evals/tasks/cases/budget-cap.json": "High",
     ".github/workflows/tests.yml": "High",
     ".githooks/pre-commit": "High",
     "docs/adr/0016-x.md": "Medium",
     "scripts/adr.py": "High",
     "scripts/harness_env.sh": "High",
     "docs/agents/issue-tracker.md": "High",
-    "scripts/harness_doctor.py": "Medium",
+    "scripts/harness_doctor.py": "High",
+    "scripts/guard_lib.py": "High",
+    "scripts/hook_adapter.py": "High",
+    "scripts/render_hooks.py": "High",
+    "scripts/loop_reset.py": "High",
+    "scripts/scope.py": "High",
+    "scripts/harness_events.py": "High",
+    "scripts/harness_inputs.py": "High",
+    "scripts/harness_install.py": "High",
+    "scripts/github_bootstrap.sh": "High",
+    "pyproject.toml": "High",
+    "uv.lock": "High",
+    ".gitignore": "High",
+    "scripts/codegraph_freshness.py": "Medium",
+    "scripts/worktree_status.sh": "Medium",
     "tests/AGENTS.md": "High",
     "docs/AGENTS.md": "High",
     "docs/mutation-testing.md": "High",
@@ -455,78 +511,341 @@ check(
 )
 
 
-# --- reassess ---------------------------------------------------------------------
-def action(attempts, **probs):
-    full = {"continue": 0.0, "change_approach": 0.0, "escalate": 0.0, **probs}
-    serve({"action": {"probabilities": full, "choice": max(full, key=full.get)}})
-    return jev.reassess(
-        {
-            "fingerprint": "pytest:test_x",
-            "attempts": attempts,
-            "last_errors": ["E assert 1 == 2"],
-        }
-    )
+# --- reassess is gone ---------------------------------------------------------------
+# A loop that keeps failing is stopped by code alone (.claude/hooks/loop_guard.py); no model advises it.
+for name in ("reassess", "_ask", "ACTIONS", "STOP_AT"):
+    check(f"jev no longer has {name}", not hasattr(jev, name))
+done = subprocess.run(
+    [sys.executable, str(Path(jev.__file__)), "reassess", "--fingerprint", "f", "--attempts", "1"],
+    capture_output=True,
+    text=True,
+    check=False,
+)
+check(
+    "the reassess subcommand is gone from the command line",
+    done.returncode == 2 and "invalid choice" in done.stderr,
+    f"{done.returncode} {done.stderr}",
+)
+
+# --- record and replay -------------------------------------------------------------
+# The key is the SHA-256 of the exact bytes sent, so a test derives it from the
+# captured request, never from jev.py; one body and its key are also pinned as literals.
+Q = {"q": {"type": "noul"}}
+LITERAL_BODY = (
+    b'{"model":"jev-latest","questions":{"q":{"type":"noul"}},"state":{"a":1}}'
+)
+LITERAL_KEY = "bb7e2bc814cbcc4618474315d6df2291753ea8e0b2bb2d011f41d383d76410ee"
+OK_ANSWER = {"q": {"noul": 0.25}}
 
 
+def key_of(request):
+    return hashlib.sha256(request.data).hexdigest()
+
+
+def raises(call):
+    """The JevError message `call` raises, or None when it returns."""
+    try:
+        call()
+    except jev.JevError as exc:
+        return str(exc)
+    return None
+
+
+records = fresh_records()
+sent = serve(OK_ANSWER, keep_records=True)
+answers, key = jev.evaluate({"a": 1}, Q)
 check(
-    "first sighting, Jev says continue: continue",
-    action(1, **{"continue": 0.9})["action"] == "continue",
+    "the body is canonical JSON: sorted keys, compact separators",
+    len(sent) == 1 and sent[0].data == LITERAL_BODY,
+    str(sent[0].data),
 )
 check(
-    "third sighting, Jev says continue: still change_approach (Jev cannot lower)",
-    action(3, **{"continue": 0.9})["action"] == "change_approach",
+    "the key is the SHA-256 of the body bytes",
+    key == LITERAL_KEY and key_of(sent[0]) == LITERAL_KEY,
+    key,
+)
+rec = json.loads((records / f"{LITERAL_KEY}.json").read_text())
+check(
+    "a miss records the exact payload sent under its SHA-256, and nothing else",
+    sorted(os.listdir(records)) == [f"{LITERAL_KEY}.json"]
+    and rec["request"] == {"state": {"a": 1}, "questions": Q}
+    and rec["answers"] == OK_ANSWER
+    and answers == OK_ANSWER,
+    str(rec),
 )
 check(
-    "first sighting, Jev says escalate at 0.8: escalate",
-    action(1, escalate=0.8, change_approach=0.2)["action"] == "escalate",
+    "the record names its version, key, url, model and a UTC timestamp",
+    set(rec) == {"v", "key", "ts", "url", "model", "request", "answers"}
+    and rec["v"] == 1
+    and rec["key"] == LITERAL_KEY
+    and rec["url"] == "https://api.typesafe.ai/v1/systemone"
+    and rec["model"] == "jev-latest"
+    and rec["ts"].endswith("+00:00")
+    and datetime.fromisoformat(rec["ts"]).year >= 2026,
+    str(rec),
 )
-r = action(1, escalate=0.5, **{"continue": 0.3, "change_approach": 0.2})
+
+sent = serve({"q": {"noul": 0.99}}, keep_records=True)
+answers, key = jev.evaluate({"a": 1}, Q)
 check(
-    "Jev below 0.6 is a referral at the floor",
-    r["status"] == "referred" and r["action"] == "continue",
+    "a second identical call makes no network call and returns the recorded answer",
+    sent == [] and answers == OK_ANSWER and key == LITERAL_KEY,
+    str(answers),
+)
+del os.environ["TYPESAFE_API_KEY"]
+answers, key = jev.evaluate({"a": 1}, Q)
+os.environ["TYPESAFE_API_KEY"] = FAKE_KEY
+check(
+    "a recorded answer needs no API key", sent == [] and answers == OK_ANSWER, str(sent)
+)
+
+sent = serve(OK_ANSWER, keep_records=True)
+_, first = jev.evaluate({"a": 1, "b": 2}, Q)
+_, second = jev.evaluate({"b": 2, "a": 1}, Q)
+check(
+    "equal requests hash equally whatever the key order: one send, one key",
+    len(sent) == 1
+    and first == second
+    and sent[0].data
+    == b'{"model":"jev-latest","questions":{"q":{"type":"noul"}},"state":{"a":1,"b":2}}',
+    str(sent),
+)
+jev.evaluate({"a": 2}, Q)
+check("a different payload is a miss and is sent", len(sent) == 2)
+
+# A decision's own record: each decision function names it.
+sent = serve({"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}})
+r = cons(["scripts/x.py"])
+check(
+    "consequence names the record of its exchange",
+    r["record"] == key_of(sent[0])
+    and (Path(os.environ["JEV_RECORD_DIR"]) / f"{r['record']}.json").is_file(),
+    str(r["record"]),
+)
+sent = serve({k: {"noul": v} for k, v in GOOD.items()})
+r = jev.intent_alignment("fix the gate", "fix the gate and rewrite land.sh")
+check("intent_alignment names the record of its exchange", r["record"] == key_of(sent[0]))
+serve(error=urllib.error.HTTPError(jev.URL, 500, "boom", {}, None))
+check(
+    "a fallback has no record",
+    cons(["scripts/x.py"])["record"] is None
+    and jev.intent_alignment("a", "b")["record"] is None,
+)
+
+# Offline: cache only, and a miss is an error the caller falls back on, never a "no".
+os.environ["JEV_OFFLINE"] = "1"
+sent = serve({"tier": tier_answers(Critical=0.99), "alters_values": {"noul": 0.99}})
+r = cons(["scripts/x.py"])
+check(
+    "an offline miss falls back: source fallback, the floor, and says why",
+    r["source"] == "fallback"
+    and r["status"] == "fallback"
+    and r["tier"] == "Medium"
+    and r["jev_tier"] is None
+    and r["reason"] == "not recorded (offline)"
+    and r["record"] is None
+    and sent == [],
     str(r),
 )
 check(
-    "Jev may raise change_approach to escalate at 0.7",
-    action(4, escalate=0.7, change_approach=0.3)["action"] == "escalate",
+    "an offline evaluate raises rather than return an answer",
+    raises(lambda: jev.evaluate({"a": 1}, Q)) == "not recorded (offline)",
 )
+os.environ["JEV_OFFLINE"] = ""
+sent = serve({"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}})
+cons(["scripts/x.py"])
+os.environ["JEV_OFFLINE"] = "1"
+del os.environ["TYPESAFE_API_KEY"]
+sent2 = serve(
+    {"tier": tier_answers(Critical=0.99), "alters_values": {"noul": 0.99}},
+    keep_records=True,
+)
+r = cons(["scripts/x.py"])
+os.environ["TYPESAFE_API_KEY"] = FAKE_KEY
+os.environ["JEV_OFFLINE"] = ""
+check(
+    "offline, a recorded answer is replayed with no key and no request",
+    r["source"] == "jev"
+    and r["tier"] == "High"
+    and r["jev_tier"] == "High"
+    and r["record"] == key_of(sent[0])
+    and sent2 == [],
+    str(r),
+)
+
+# A record that does not parse, or whose answers fail validation, is a miss.
+sent = serve({"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}})
+cons(["scripts/x.py"])
+records = Path(os.environ["JEV_RECORD_DIR"])
+path = records / f"{key_of(sent[0])}.json"
+good = json.loads(path.read_text())
+BAD = {
+    "truncated JSON": '{"v": 1, "answers": ',
+    "no content": "",
+    "a JSON list at the top": "[]",
+    "no answers": json.dumps({"v": 1}),
+    "a noul outside 0..1": json.dumps(
+        {**good, "answers": {**good["answers"], "alters_values": {"noul": 1.5}}}
+    ),
+    "a choice with no probabilities": json.dumps(
+        {**good, "answers": {**good["answers"], "tier": {"choice": "High"}}}
+    ),
+    "a question left unanswered": json.dumps(
+        {**good, "answers": {"tier": good["answers"]["tier"]}}
+    ),
+}
+os.environ["JEV_OFFLINE"] = "1"
+for label, text in BAD.items():
+    path.write_text(text)
+    r = cons(["scripts/x.py"])
+    check(
+        f"a record with {label} is a miss, not an answer",
+        r["source"] == "fallback"
+        and r["reason"] == "not recorded (offline)"
+        and len(sent) == 1,
+        str(r),
+    )
+os.environ["JEV_OFFLINE"] = ""
+path.write_text('{"v": 1, "answers": ')
+r = cons(["scripts/x.py"])
+check(
+    "online, a corrupt record is re-fetched and replaced by a valid one",
+    len(sent) == 2
+    and r["source"] == "jev"
+    and json.loads(path.read_text())["answers"] == good["answers"]
+    and os.listdir(records) == [path.name],
+    str(os.listdir(records)),
+)
+
+# The key and headers never reach the file; the request on disk is the redacted one.
+sent = serve({"tier": tier_answers(Medium=0.9), "alters_values": {"noul": 0.1}})
+cons(["scripts/x.py"], "plain description")
+text = (Path(os.environ["JEV_RECORD_DIR"]) / f"{key_of(sent[0])}.json").read_text()
+check(
+    "neither the API key nor the request headers are written to the record",
+    FAKE_KEY not in text
+    and "Authorization" not in text
+    and "Bearer" not in text
+    and "Content-Type" not in text,
+)
+sent = serve({"tier": tier_answers(Medium=0.9), "alters_values": {"noul": 0.1}})
+cons(["scripts/x.py"], secret_text)
+text = (Path(os.environ["JEV_RECORD_DIR"]) / f"{key_of(sent[0])}.json").read_text()
+check(
+    "the recorded request is the redacted one actually sent",
+    "<redacted:" in text
+    and all(
+        needle not in text
+        for needle in (
+            "abcdef1234567890XYZ",
+            "hunter2hunter2",
+            "sk-abcdefghijklmnopqrstuvwxyz0123",
+            FAKE_AWS_KEY,
+        )
+    ),
+)
+
+# The decision log: one line per exchange, never the request content.
+DESCRIPTION = "UNIQUE_DESCRIPTION_7c1e"
+mark = len(events())
+sent = serve({"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}})
+cons(["scripts/x.py"], DESCRIPTION)
+cons(["scripts/x.py"], DESCRIPTION)
+key = key_of(sent[0])
+fresh_records()
+os.environ["JEV_OFFLINE"] = "1"
+cons(["scripts/x.py"], DESCRIPTION)
+os.environ["JEV_OFFLINE"] = ""
+serve(error=urllib.error.HTTPError(jev.URL, 500, "boom", {}, None))
+cons(["scripts/x.py"], DESCRIPTION)
+rows = events()[mark:]
+check(
+    "each exchange logs one jev line: call, hit, offline-miss, error",
+    [(e["hook"], e["decision"]) for e in rows]
+    == [("jev", "call"), ("jev", "hit"), ("jev", "offline-miss"), ("jev", "error")],
+    str([(e["hook"], e["decision"]) for e in rows]),
+)
+check(
+    "every line's subject is the first 12 characters of the exchange key",
+    [e["subject"] for e in rows] == [key[:12]] * 4,
+    str([e["subject"] for e in rows]),
+)
+check(
+    "the reason is a short code: recorded, none, offline, the HTTP status",
+    [e["reason"] for e in rows]
+    == ["recorded", "", "not recorded (offline)", "HTTP 500"],
+    str([e["reason"] for e in rows]),
+)
+raw = EVENTS.read_text()
+check(
+    "the log carries no request content, path or key",
+    DESCRIPTION not in raw and "scripts/x.py" not in raw and FAKE_KEY not in raw,
+)
+
+mark = len(events())
+directory = fresh_records()
 os.environ["JEV_DISABLE"] = "1"
-fb = [
-    jev.reassess({"fingerprint": "f", "attempts": n, "last_errors": []})["action"]
-    for n in (1, 2, 3, 6)
-]
+r = cons(["scripts/x.py"])
 os.environ["JEV_DISABLE"] = ""
 check(
-    "fallback: seen 1 and 2 times continue, 3 and 6 change approach",
-    fb == ["continue", "continue", "change_approach", "change_approach"],
-    str(fb),
+    "disabled short-circuits before any record, key or log line",
+    r["source"] == "fallback"
+    and r["record"] is None
+    and os.listdir(directory) == []
+    and len(events()) == mark,
+    str(r),
 )
-for bad in (0, -1, True, "3", None):
-    try:
-        jev.reassess({"fingerprint": "f", "attempts": bad})
-        ok = False
-    except ValueError:
-        ok = True
-    check(f"attempts={bad!r} is refused", ok)
-sent = serve(
-    {
-        "action": {
-            "probabilities": {"continue": 1.0, "change_approach": 0.0, "escalate": 0.0}
-        }
-    }
-)
-jev.reassess(
-    {
-        "fingerprint": "f",
-        "attempts": 1,
-        "last_errors": ["boom line one\nsecret line two", "token=abcdef123456789 here"],
-    }
-)
-body = json.loads(sent[0].data.decode())
+
+# Recording never raises into a caller.
+blocker = SCRATCH / "not-a-directory"
+blocker.write_text("a file where the record directory should be")
+mark = len(events())
+sent = serve({"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}})
+os.environ["JEV_RECORD_DIR"] = str(blocker / "records")
+stderr = io.StringIO()
+with contextlib.redirect_stderr(stderr):
+    r = cons(["scripts/x.py"])
 check(
-    "errors are cut to their first line and redacted",
-    body["state"]["last_errors"] == ["boom line one", "token=<redacted:kv> here"],
-    str(body["state"]["last_errors"]),
+    "a failing record write does not change the answer",
+    r["source"] == "jev"
+    and r["tier"] == "High"
+    and r["status"] == "accepted"
+    and len(sent) == 1,
+    str(r),
+)
+check(
+    "the failed write is a stderr note without the key, and the log says so",
+    "not recorded" in stderr.getvalue()
+    and FAKE_KEY not in stderr.getvalue()
+    and [(e["decision"], e["reason"]) for e in events()[mark:]]
+    == [("call", "not recorded")],
+    stderr.getvalue(),
+)
+
+# Where the records live when nothing overrides them.
+saved = os.environ.pop("JEV_RECORD_DIR")
+git_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+common = subprocess.run(
+    ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+    cwd=jev.REPO,
+    capture_output=True,
+    text=True,
+    check=True,
+    env=git_env,
+).stdout.strip()
+os.environ["GIT_DIR"] = str(SCRATCH / "no-such-git-dir")
+default_dir = jev.record_dir()
+del os.environ["GIT_DIR"]
+os.environ["JEV_RECORD_DIR"] = saved
+check(
+    "by default records go to <git common dir>/harness/jev, whatever GIT_DIR says",
+    default_dir == Path(common) / "harness" / "jev",
+    str(default_dir),
+)
+check(
+    "and never into the work tree outside .git",
+    not default_dir.is_relative_to(jev.REPO)
+    or default_dir.is_relative_to(jev.REPO / ".git"),
 )
 
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")

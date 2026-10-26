@@ -164,6 +164,51 @@ check(
     ),
 )
 
+# --- mutation=False: the task loop's checker leaves mutation to review ---------------------
+SKIP_MUTATION = "mutation: skipped by --no-mutation (review owns it)"
+nomut = plan_tests.plan(root, "High", ["scripts/a.py"], CONFIG, mutation=False)
+check(
+    "High with mutation=False: lint and the full suite, no mutation command",
+    cmds(nomut) == [LINT, SUITE],
+    str(cmds(nomut)),
+)
+check(
+    "mutation=False records that mutation was skipped, and why",
+    SKIP_MUTATION in nomut["skipped"],
+    str(nomut["skipped"]),
+)
+check(
+    "mutation=False does not claim a missing mutant: it never looked for one",
+    not any("no mutant" in s for s in nomut["skipped"] + nomut["notes"]),
+    str(nomut),
+)
+nomut_b = plan_tests.plan(root, "High", ["scripts/b.py"], CONFIG, mutation=False)
+check(
+    "High with mutation=False and no matching mutant plans the same two commands",
+    cmds(nomut_b) == [LINT, SUITE] and SKIP_MUTATION in nomut_b["skipped"],
+    str(nomut_b),
+)
+nomut_crit = plan_tests.plan(root, "Critical", ["scripts/a.py"], CONFIG, mutation=False)
+check(
+    "Critical with mutation=False runs what High runs and keeps the re-derivation note",
+    cmds(nomut_crit) == [LINT, SUITE]
+    and SKIP_MUTATION in nomut_crit["skipped"]
+    and any("re-derivation" in n for n in nomut_crit["notes"]),
+    str(nomut_crit),
+)
+check(
+    "mutation=True, the default, still plans the mutants that touch a changed file",
+    cmds(plan_tests.plan(root, "High", ["scripts/a.py"], CONFIG, mutation=True))
+    == cmds(high)
+    and SKIP_MUTATION not in high["skipped"],
+)
+check(
+    "Low and Medium never plan mutation, so mutation=False leaves their plans as they are",
+    plan_tests.plan(root, "Low", ["scripts/a.py"], CONFIG, mutation=False) == low
+    and plan_tests.plan(root, "Medium", ["scripts/a.py", "scripts/b.py"], CONFIG, mutation=False)
+    == med,
+)
+
 (root / "scripts/c+d(.py").write_text("x = 1\n")
 (root / "tests/test_plus.py").write_text("uses c+d( here\n")
 check(
@@ -321,7 +366,18 @@ import io  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
 
-os.environ["JEV_DISABLE"] = "1"
+# The plan is the floor, or --tier: Jev is never asked, so any call to it is a failure here.
+for seam in ("consequence", "evaluate"):
+    assert hasattr(plan_tests.jev, seam), seam
+
+
+def jev_was_asked(*args, **kwargs):
+    raise AssertionError("plan_tests asked Jev")
+
+
+plan_tests.jev.consequence = plan_tests.jev.evaluate = jev_was_asked
+# An untracked mutant patch that touches m.py, a changed path, so a High plan has a mutant to run.
+write("mutants/patches/M001.patch", "# mutant_id: M001\n--- a/m.py\n+++ b/m.py\n")
 
 
 def cli(*argv):
@@ -369,10 +425,45 @@ check(
 status, out, err = cli("--base", "main")
 data = json.loads(out)
 check(
-    "with no --tier and Jev off the plan uses the floor, marked fallback",
+    "with no --tier the plan is the floor, marked floor, and Jev is never asked",
     status == 0
     and data["tier"] == "High"
-    and data["tier_source"] == "fallback:fallback",
+    and data["tier_source"] == "floor"
+    and data["floor"] == "High",
+    out[:300],
+)
+check(
+    "the output carries no consequence verdict and no referral note",
+    "consequence" not in data and not any("REFERRAL" in n for n in data["notes"]),
+    out[:300],
+)
+check(
+    "a High plan with a mutant on a changed path runs the mutation command",
+    "python3 mutants/runner.py --only M001" in [c["command"] for c in data["commands"]],
+    str(data["commands"]),
+)
+status, out, err = cli("--base", "main", "--no-mutation")
+data = json.loads(out)
+check(
+    "--no-mutation leaves the mutation command out and records why",
+    status == 0
+    and not any("runner.py" in c["command"] for c in data["commands"])
+    and "mutation: skipped by --no-mutation (review owns it)" in data["skipped"],
+    out[:300],
+)
+check(
+    "--no-mutation keeps the lint and the full suite",
+    [c["command"] for c in data["commands"]] == ["uvx ruff check .", "./scripts/run.sh --tests"],
+    str(data["commands"]),
+)
+status, out, err = cli("--base", "main", "--tier", "Critical", "--no-mutation")
+data = json.loads(out)
+check(
+    "--no-mutation combines with --tier: the tier is given, mutation is left out",
+    status == 0
+    and data["tier_source"] == "given"
+    and data["tier"] == "Critical"
+    and not any("runner.py" in c["command"] for c in data["commands"]),
     out[:300],
 )
 

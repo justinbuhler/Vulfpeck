@@ -1,0 +1,37 @@
+{
+  "id": "bug-lsof-warning",
+  "kind": "bug",
+  "source": {
+    "commit": "28a79cc",
+    "revert_paths": [
+      "scripts/land.sh",
+      "scripts/worktree_status.sh"
+    ]
+  },
+  "issue": {
+    "title": "lsof warnings are hidden when checking worktrees",
+    "labels": [
+      "ready-for-agent",
+      "bug"
+    ],
+    "body": "`land.sh` and `worktree_status.sh` ask `lsof` whether a worktree is in use, but they suppress lsof's warnings, so an lsof that cannot inspect some processes looks the same as one that found nothing.\n\n## Done when\n\n- lsof warnings stay visible in both scripts, and a land and a prune still succeed when lsof warns.\n- `uv run --no-sync python3 tests/test_worktree_status.py` passes."
+  },
+  "expect": {
+    "final_state": "blocked",
+    "reason_contains": "needs-review",
+    "status": "DONE",
+    "paths_allowed": [
+      "scripts/land.sh",
+      "scripts/worktree_status.sh",
+      "tests/test_land.py",
+      "tests/test_worktree_status.py"
+    ],
+    "oracle": "uv run --no-sync python3 tests/test_worktree_status.py",
+    "trace": [
+      "tests_before_done",
+      "no_forbidden_commands",
+      "paths_within",
+      "oracle_passes"
+    ]
+  }
+}

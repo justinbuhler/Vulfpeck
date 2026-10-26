@@ -1,0 +1,15 @@
+# mutant_id: M079
+# target: scripts/eval_tasks.py
+# operator: swallow-status
+# behaviour: the run exits 1 when a case is invalid, even if every check passed
+--- a/scripts/eval_tasks.py
++++ b/scripts/eval_tasks.py
+@@ -871,7 +871,7 @@
+         for c in r["checks"]:
+             totals[c["result"]] += 1
+     invalid = sum(1 for r in results if r["invalid"])
+-    ok = not totals["fail"] and not invalid
++    ok = not totals["fail"]
+     line = (
+         f"cases: {len(results) - invalid} run, {invalid} invalid | checks: {totals['pass']} pass, "
+         f"{totals['fail']} fail, {totals['skip']} skip | result: {'PASS' if ok else 'FAIL'}"

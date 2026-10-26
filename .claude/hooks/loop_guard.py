@@ -20,7 +20,8 @@ Claude Code reports a non-zero Bash exit as PostToolUseFailure; Codex and Gemini
 PostToolUse with the exit status in the response, or in Codex's rollout
 (scripts/guard_lib.py). An exit that stays unknown changes no counter. The guard never
 resets itself, and the agent cannot: the owner or the task runner calls
-scripts/loop_reset.py. Jev's reassess() recommendation is appended to a block as advice.
+scripts/loop_reset.py. A trip message is the rule quote, the attempts and the way out; no
+model is asked, because a gate must not make a network call and advice cannot unblock (ADR 0021).
 
 Registered as a gate: a crash exits 2 (harness.toml [[hook]]). State: scripts/guard_lib.py.
 """
@@ -77,37 +78,15 @@ def runs_reset(cmd):
     return False
 
 
-def jev_advice(fp, attempts, errors):
-    """Return one advisory line from jev.reassess(), or "" when Jev is unavailable."""
-    try:
-        import jev
-
-        out = jev.reassess(
-            {"fingerprint": fp, "attempts": attempts, "last_errors": errors}
-        )
-    except Exception:
-        return ""
-    if out.get("source") != "jev":
-        return ""
-    return f"Jev (advisory only; it cannot unblock) recommends {out['action']}: {out.get('reason') or 'no reason given'}."
-
-
 def trip_fingerprint(state, fp, cmd, entry, session):
     """Set the fingerprint trip and return its message."""
     lines = "\n".join(f"  {i}. {a}" for i, a in enumerate(entry["attempts"], 1))
-    advice = jev_advice(
-        fp[:12], entry["n"], [a.split(" -> ", 1)[-1] for a in entry["attempts"]]
-    )
     message = "\n".join(
-        filter(
-            None,
-            [
-                f"loop_guard: blocked. AGENTS.md: {g.RULE_FINGERPRINT}",
-                f"The {entry['n']} attempts:\n{lines}",
-                advice,
-                g.way_out(session),
-            ],
-        )
+        [
+            f"loop_guard: blocked. AGENTS.md: {g.RULE_FINGERPRINT}",
+            f"The {entry['n']} attempts:\n{lines}",
+            g.way_out(session),
+        ]
     )
     state["tripped"] = {
         "kind": "fingerprint",
@@ -118,16 +97,10 @@ def trip_fingerprint(state, fp, cmd, entry, session):
     return message
 
 
-def trip_no_progress(state, fp, session):
+def trip_no_progress(state, session):
     """Count a no-progress trip; return its message. The second trip denies test and lint commands."""
     state["strikes"] += 1
     state["stalled"] = 0
-    entry = state["fp"].get(fp) or {"n": STALLED_CYCLES + 1, "attempts": []}
-    advice = jev_advice(
-        fp[:12],
-        max(entry["n"], SIGHTINGS),
-        [a.split(" -> ", 1)[-1] for a in entry["attempts"]],
-    )
     if state["strikes"] == 1:
         head = (
             f"loop_guard: blocked once. AGENTS.md: {g.RULE_NO_PROGRESS} Change approach before "
@@ -138,7 +111,7 @@ def trip_no_progress(state, fp, session):
             f"loop_guard: blocked. AGENTS.md: {g.RULE_NO_PROGRESS} This is the second trip: "
             "test and lint commands are denied until the loop state is reset."
         )
-    message = "\n".join(filter(None, [head, advice, g.way_out(session)]))
+    message = "\n".join([head, g.way_out(session)])
     if state["strikes"] >= 2:
         state["tripped"] = {"kind": "no_progress", "message": message}
     return message
@@ -202,7 +175,7 @@ def after_command(state, payload, cmd):
             stalled_cycle(state, norm, status, g.failure_items(payload), fp)
             and not state["tripped"]
         ):
-            message = trip_no_progress(state, fp, session)
+            message = trip_no_progress(state, session)
             g.record(
                 "loop_guard",
                 "block",

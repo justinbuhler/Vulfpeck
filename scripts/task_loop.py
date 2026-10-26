@@ -28,6 +28,16 @@ running as the owner; see ADR 0018). Otherwise the merge happens only when the P
 bucket is `pass`, bound to the landed commit. There is no `--auto`, and no `--dangerously-*`
 flag is ever passed.
 
+The next issue is the highest `[loop] priority` label; a tie goes to the lowest issue number. Jev is never asked
+(ADR 0021). An issue whose body has no `Done when` section is not dispatched: right after the move to `running`
+it is commented on and ends `blocked` as `needs-info`, with no fetch, provision or worker.
+
+The worker's brief names a checker (`plan_tests.py --no-mutation --run`) and a claude worker is capped with
+`--max-budget-usd` from `[loop] max_usd`. Verification runs the checks of the change's floor tier, planned
+from the base commit's harness.toml (never Jev, never the worktree's copy), lint first, with `plan_tests.plan`
+told `mutation=False`: mutation is unbounded in time and belongs to review, and the plan records that it was skipped.
+A failed verification's reason leads with the failing lines of its output (up to 8), then its last 3 lines, without uv's warnings.
+
 Every external command goes through `sh()`. A blocked or failed issue is never picked again until
 the owner runs `reset`. The `run` loop stops after 2 consecutive tasks end failed or blocked, or when
 one issue has failed twice.
@@ -77,6 +87,16 @@ VERIFY_TIMEOUT = 3600
 LAND_TIMEOUT = 1800
 CHECKS_TIMEOUT = 3600
 BOX_DELETE_TIMEOUT = 60
+# An issue is dispatched only when it says how to tell the work is finished: a line starting `Done when`
+# (case-insensitive, after heading marks, a list marker or bold) followed by text after a colon, or by a
+# non-blank line before the next heading. No model is asked: this regex is the baseline any model must beat.
+DONE_WHEN = re.compile(
+    r"[ \t]*(?:#{1,6}[ \t]+)?(?:(?:[-*+]|\d+[.)])[ \t]+)?(?:\*\*|__)?[ \t]*done[ \t]+when\b(.*)",
+    re.IGNORECASE,
+)
+AFTER_COLON = re.compile(r"[ \t*_]*:(.*)")
+HEADING = re.compile(r"[ \t]*#{1,6}[ \t]")
+NEEDS_INFO = "needs-info: no Done when section"
 STOP_AFTER_BAD = 2  # consecutive tasks ending failed or blocked
 STOP_AFTER_FAILS = 2  # failures of one issue
 RESET_SESSION = "task-loop"
@@ -160,6 +180,26 @@ def sh(argv, cwd=None, timeout=None, untrusted=None, extra_env=None):
 def tail(done, n=300):
     """The end of a command's output, for a reason string."""
     return (done.stderr.strip() or done.stdout.strip())[-n:]
+
+
+# A line of test output that names a failure: a standalone test's `FAIL name`, unittest's `FAIL: test`,
+# the suite's `<file> FAILED`, a traceback or an exception. `^warning: ` is uv's deprecation noise.
+FAILING_LINE = re.compile(r"^\s*FAIL\b|\bFAILED\b|Traceback|Error:")
+TOOL_WARNING = re.compile(r"^warning: ")
+
+
+def failure_tail(done, n=300):
+    """A failed verification's output for a reason string: its failing lines first, then its last lines.
+
+    The suite's per-file list ends in `passed` lines and uv's warnings fill stderr, so the end of the
+    output alone can name nothing. Up to 8 failing lines come first, in order, then the last 3 lines
+    that are not among them; `warning:` lines are dropped; the result is cut to its first `n`
+    characters, which keeps the failing lines.
+    """
+    lines = [x for x in f"{done.stdout}\n{done.stderr}".splitlines() if x.strip() and not TOOL_WARNING.match(x)]
+    failing = [x for x in lines if FAILING_LINE.search(x)][:8]
+    last = [x for x in lines[-3:] if x not in failing]
+    return "\n".join(x.strip() for x in failing + last)[:n]
 
 
 # --- state --------------------------------------------------------------------
@@ -271,52 +311,52 @@ def rank(issue, order):
     return min(hits) if hits else len(order)
 
 
-def jev_pick(tied):
-    """The tied issue Jev prefers at probability >= jev.ACCEPT_HIGH, else None.
-
-    Sends issue numbers, titles and labels only.
-    """
-    questions = {
-        "first": jev._choice(
-            "Which of these issues should an agent do first?",
-            {f"issue_{i['number']}": i["title"] for i in tied},
-        )
-    }
-    state = {
-        "issues": [
-            {"number": i["number"], "title": i["title"], "labels": i["labels"]}
-            for i in tied
-        ]
-    }
-    answers, _ = jev._ask(questions, state)
-    if answers is None:
-        return None
-    name, p = jev._top(answers["first"])
-    if p < jev.ACCEPT_HIGH:
-        return None
-    return next((i for i in tied if f"issue_{i['number']}" == name), None)
-
-
-def choose(issues, order, ask_jev=True):
-    """(issue, how): highest priority first; a tie goes to Jev (when asked), else the lowest issue number."""
+def choose(issues, order):
+    """(issue, how): the highest priority label first; a tie goes to the lowest issue number."""
     best = min(rank(i, order) for i in issues)
     tied = sorted(
         (i for i in issues if rank(i, order) == best), key=lambda i: i["number"]
     )
-    if len(tied) == 1:
-        return tied[0], "priority"
-    picked = jev_pick(tied) if ask_jev else None
-    return (picked, "jev") if picked else (tied[0], "oldest")
+    return tied[0], "priority" if len(tied) == 1 else "oldest"
 
 
-def next_issue(root, cfg, ask_jev=True):
+def next_issue(root, cfg):
     """(issue, how) for the next task, or (None, None) when no queued issue is left."""
     queued = []
     for issue in list_issues(root, cfg):
         state = load(root, issue["number"])
         if state is None or state["state"] == "queued":
             queued.append(issue)
-    return choose(queued, cfg["priority"], ask_jev) if queued else (None, None)
+    return choose(queued, cfg["priority"]) if queued else (None, None)
+
+
+def has_done_when(body):
+    """Whether an issue body has a `Done when` section: a line that begins with the words (any case), after
+    optional heading marks, a list marker or bold, with non-blank text after a colon on that line or a
+    non-blank line after it before the next heading."""
+    lines = (body or "").splitlines()
+    for i, line in enumerate(lines):
+        found = DONE_WHEN.match(line)
+        if not found:
+            continue
+        colon = AFTER_COLON.match(found.group(1))
+        if colon and colon.group(1).strip(" \t*_"):
+            return True
+        for following in lines[i + 1 :]:
+            if HEADING.match(following):
+                break
+            if following.strip():
+                return True
+    return False
+
+
+def refusal_command(issue):
+    """The `gh issue comment` that tells the author an issue was not dispatched."""
+    return [
+        "gh", "issue", "comment", issue["number"], "--body",
+        "Task loop: this issue needs a `Done when` section (a line `Done when:` with what proves the work "
+        "finished) and was not dispatched. Add one; the owner can then reset the task.",
+    ]  # fmt: skip
 
 
 # --- the commands one task runs ----------------------------------------------
@@ -355,9 +395,14 @@ def sandbox_argv(cfg, worktree, worker_argv):
     )
 
 
-def verify_argv(cfg, worktree, lint):
-    """The verification command: in a box with no key when sandboxed, else on the host."""
-    command = ["bash", "-c", lint]
+def verify_argv(cfg, worktree, checks):
+    """The verification command: every check in one `bash -c` with `set -e`.
+
+    It runs in a box with no key when sandboxed, else on the host. Each check gets its own
+    `bash -c`, as in plan_tests.run, so an `exit` or `cd` in one cannot skip or move the next.
+    """
+    script = "\n".join(["set -e", *(f"bash -c {shlex.quote(c)}" for c in checks)])
+    command = ["bash", "-c", script]
     return (
         container_argv(worktree, command) if cfg["sandbox"] == "container" else command
     )
@@ -385,11 +430,14 @@ def redact(done, secret):
     )
 
 
-def brief(issue, worktree, sandboxed=False):
+def brief(issue, worktree, sandboxed=False, base_sha="<base sha>"):
     """The worker's structured brief (AGENTS.md "Dispatch and report").
 
     The issue text is someone else's writing: it sits between markers carrying a hash of the
     text itself (so the text cannot contain its own closing marker), and the rules come after it.
+    DONE WHEN names a checker the worker can run: in the box `/work` is a private git repository
+    whose HEAD is the baseline of the tree it was given, so `--base HEAD`; unsandboxed the git is
+    the real worktree's, so the pinned `base_sha` is named rather than a HEAD a commit could move.
     """
     data = f"issue #{issue['number']}: {issue['title']}\n\n{issue['body'] or ''}"
     tag = hashlib.sha256(data.encode()).hexdigest()[:12]
@@ -403,9 +451,12 @@ def brief(issue, worktree, sandboxed=False):
         "any --dangerously-* flag, commit trailers or attribution, files outside the worktree, "
         "user-level config, running scripts/task_loop.py.\n"
         + (
-            "DONE WHEN: the issue's change is complete; the runner verifies it outside the sandbox.\n"
+            "DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --base HEAD --no-mutation --run` "
+            f"exits 0 in {worktree} (HEAD there is the baseline of the tree you were given; you must not commit). "
+            "The runner re-runs the same tier's checks afterwards.\n"
             if sandboxed
-            else "DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --run` exits 0.\n"
+            else f"DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --base {base_sha} --no-mutation --run` "
+            "exits 0 (you must not commit). The runner re-runs the same tier's checks afterwards.\n"
         )
         + "REPORT: finish with one line `STATUS: DONE`, `STATUS: DONE_WITH_CONCERNS <concerns>`, "
         "`STATUS: NEEDS_CONTEXT <what is missing>` or `STATUS: BLOCKED <why>`."
@@ -434,13 +485,16 @@ TIMELINE_QUERY = (
 )
 
 
-def worker_command(cfg, issue, wt):
-    """The worker's argv: the runtime's command plus the brief, wrapped in `container run` when sandboxed."""
+def worker_command(cfg, issue, wt, base_sha="<base sha>"):
+    """The worker's argv: the runtime's command, its spend cap, then the brief; in `container run` when sandboxed.
+
+    Only `claude` has a known cap flag (`--max-budget-usd`); `execute` says so for the other runtimes.
+    """
     sandboxed = cfg["sandbox"] == "container"
-    argv = [
-        *shlex.split(cfg["workers"][cfg["runtime"]]),
-        brief(issue, SANDBOX_MOUNT if sandboxed else wt, sandboxed),
-    ]
+    argv = shlex.split(cfg["workers"][cfg["runtime"]])
+    if cfg["runtime"] == "claude" and cfg["max_usd"] > 0:
+        argv += ["--max-budget-usd", str(cfg["max_usd"])]
+    argv.append(brief(issue, SANDBOX_MOUNT if sandboxed else wt, sandboxed, base_sha))
     return sandbox_argv(cfg, wt, argv) if sandboxed else argv
 
 
@@ -468,8 +522,8 @@ def plan(
                             "-F", f"number={n}", "-f", f"query={TIMELINE_QUERY}"]),
         ("fetch", root, ["git", "-C", root, "fetch", "origin", base]),
         ("provision", root, [*harness, "provision", "--task", task, "--baseline", base_sha, "--path", wt, "--no-inputs"]),
-        ("worker", wt, worker_command(cfg, issue, wt)),
-        ("verify", wt, verify_argv(cfg, wt, f"<commands.lint from {base_sha}:harness.toml>")),
+        ("worker", wt, worker_command(cfg, issue, wt, base_sha)),
+        ("verify", wt, verify_argv(cfg, wt, [f"<floor-tier checks from {base_sha}:harness.toml>"])),
         ("enqueue", wt, [*harness, "enqueue", "--task", task, "-m", commit_message(issue),
                          *[a for f in files for a in ("--file", f)]]),
         ("land", root, [*harness, "land", "--once", "--no-hooks"]),
@@ -543,13 +597,26 @@ def outside_allowlist(paths):
     ]
 
 
-def base_lint(root, base_sha):
-    """`commands.lint` from harness.toml as it is at the pinned base commit, never the worktree's."""
+def base_config(root, base_sha):
+    """harness.toml as it is at the pinned base commit, never the worktree's, which the worker can write."""
     shown = sh(["git", "-C", root, "show", f"{base_sha}:harness.toml"])
-    config = harness_config.merge(
+    return harness_config.merge(
         tomllib.loads(shown.stdout) if shown.returncode == 0 else {}
     )
-    return config["commands"]["lint"]
+
+
+def verification(root, worktree, base_sha, paths):
+    """(tier, checks, skipped): what verifies a change, planned from the base commit's harness.toml.
+
+    The tier is the floor of the base's `[tiers]` for the changed `paths`; Jev is never asked and the
+    worktree's harness.toml is never read. The plan is made with `mutation=False`: its time is unbounded,
+    and mutation belongs to review. `skipped` is the plan's own record of that.
+    """
+    config = base_config(root, base_sha)
+    tier, _ = jev.floor_tier(paths, config["tiers"])
+    planned = plan_tests.plan(worktree, tier, paths, config, mutation=False)
+    skipped = [s for s in planned["skipped"] if s.startswith("mutation:")]
+    return tier, [c["command"] for c in planned["commands"]], skipped
 
 
 def refuse_ignored(root, base_sha, files, cloned):
@@ -686,6 +753,11 @@ def execute(root, cfg, issue):
     base = cfg["base"]
     move(root, n, "running")
     try:
+        if not has_done_when(issue["body"]):
+            sent = sh(refusal_command(issue), root)
+            if sent.returncode:
+                print(f"task_loop: could not comment on #{n}: {tail(sent)}", file=sys.stderr)
+            raise Halt("blocked", NEEDS_INFO)
         why = stale_issue_text(root, cfg, plans)
         if why:
             raise Halt("blocked", why)
@@ -716,6 +788,12 @@ def execute(root, cfg, issue):
                     "blocked",
                     f"codex would run without hook gates: main's .codex/hooks.json is {drift}",
                 )
+        if cfg["runtime"] != "claude" and cfg["max_usd"] > 0:
+            print(
+                f"task_loop: [loop] max_usd = {cfg['max_usd']} is not enforced for the {cfg['runtime']} runtime: "
+                "no spend-cap flag is known for it",
+                file=sys.stderr,
+            )
         link = (wt / ".git").read_text()
         env, secret = sandbox_env(cfg) if cfg["sandbox"] == "container" else ({}, None)
         boxed = cfg["sandbox"] == "container"
@@ -773,15 +851,17 @@ def execute(root, cfg, issue):
             if outside
             else None
         )
-        lint = base_lint(root, base_sha)
-        stage(
-            verify_argv(cfg, wt, lint),
-            wt,
-            f"verify `{lint}`",
-            VERIFY_TIMEOUT,
-            untrusted=root,
-        )
-        move(root, n, "verified", f"needs-review: {review}" if review else status)
+        tier, checks, skipped = verification(root, wt, base_sha, paths)
+        ran = sh(verify_argv(cfg, wt, checks), wt, VERIFY_TIMEOUT, untrusted=root)
+        if ran.returncode:
+            raise Halt(
+                "failed",
+                f"verify the {tier} plan ({len(checks)} checks) exited {ran.returncode}: {failure_tail(ran)}",
+            )
+        verified = f"verified at {tier} (checks run: {len(checks)})"
+        if skipped:
+            verified += f"; {'; '.join(skipped)}"
+        move(root, n, "verified", f"{verified}; needs-review: {review}" if review else f"{verified}; {status}")
         enqueue = next(
             argv
             for name, _, argv in plan(
@@ -940,14 +1020,18 @@ def cmd_intake(root, cfg, args):
 
 
 def cmd_next(root, cfg, args):
-    """Print the issue the loop would take and the commands it would run (a dry run never asks Jev)."""
-    issue, how = next_issue(root, cfg, ask_jev=not args.dry_run)
+    """Print the issue the loop would take and the commands it would run, or the refusal it would make."""
+    issue, how = next_issue(root, cfg)
     if issue is None:
         print("queue empty")
         return 0
     print(
         f"next: #{issue['number']} {issue['title']} (chosen by {how}; labels: {', '.join(issue['labels'])})"
     )
+    if not has_done_when(issue["body"]):
+        print(f"refused: {NEEDS_INFO}; the task would end blocked and run no stage")
+        show([("comment", root, refusal_command(issue))])
+        return 0
     show(plan(root, cfg, issue))
     return 0
 

@@ -1,0 +1,15 @@
+# mutant_id: M064
+# target: scripts/eval_consequence.py
+# operator: swallow-status
+# behaviour: --check exits 1 when a gold-labelled case has a gold tier above its floor
+--- a/scripts/eval_consequence.py
++++ b/scripts/eval_consequence.py
+@@ -382,7 +382,7 @@
+             f'eval_consequence: --check passed vacuously: no case has a gold label from "{args.gold}"',
+             file=sys.stderr,
+         )
+-    return 1 if rep["floor_vs_gold"]["under"] else 0
++    return 0
+ 
+ 
+ if __name__ == "__main__":
