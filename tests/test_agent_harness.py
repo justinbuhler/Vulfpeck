@@ -16,11 +16,13 @@ supplied is the harness's *input* - a repository - never its own state: every
 manifest, queue entry and ledger row below is written by the harness itself.
 """
 
+import atexit
 import fcntl
 import json
 import os
 import shlex
 import re
+import select
 import shutil
 import socket
 import subprocess
@@ -1518,6 +1520,17 @@ elif mode == "race":
     sys.stdin.readline()
     print("REL", time.monotonic_ns(), flush=True)
     os._exit(0)
+elif mode == "enqueue":
+    # Announces it just before it blocks on meta.lock, which enqueue only takes
+    # after its first read of the manifest: a deterministic sync point.
+    marker, real = Path(sys.argv[3]), H.meta_lock
+
+    def arriving(root):
+        marker.write_text("arrived")
+        return real(root)
+
+    H.meta_lock = arriving
+    sys.exit(H.main(sys.argv[4:]))
 elif mode == "probe":
     fd = os.open(sys.argv[2], os.O_RDWR | os.O_CREAT)
     try:
@@ -1552,8 +1565,11 @@ print(f"leaked={leaked} lock={held}")
 )
 
 
+LIVE_HELPERS = []
+
+
 def helper(mode, *args, **kwargs):
-    return subprocess.Popen(
+    proc = subprocess.Popen(
         [sys.executable, str(HELPER), mode, *map(str, args)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -1562,6 +1578,49 @@ def helper(mode, *args, **kwargs):
         env=_clean_env(),
         **kwargs,
     )
+    LIVE_HELPERS.append(proc)
+    return proc
+
+
+def reap(*procs):
+    """Kill and collect helpers, so a failed check never strands a lock holder."""
+    for proc in procs:
+        proc.kill()
+        proc.wait()
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            stream.close()
+        if proc in LIVE_HELPERS:
+            LIVE_HELPERS.remove(proc)
+
+
+atexit.register(lambda: reap(*LIVE_HELPERS))
+
+
+def say(proc, *tokens, seconds=30):
+    """Return the first helper line whose first word is in `tokens`, or None on timeout.
+
+    Other lines are ignored. Reads the descriptor directly so a helper that
+    never speaks fails a check instead of hanging the suite.
+    """
+    end = time.monotonic() + seconds
+    buf = getattr(proc, "pending", b"")
+    while True:
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            words = line.decode(errors="replace").split()
+            if words[:1] and words[0] in tokens:
+                proc.pending = buf
+                return words
+        left = end - time.monotonic()
+        chunk = (
+            os.read(proc.stdout.fileno(), 4096)
+            if left > 0 and select.select([proc.stdout], [], [], left)[0]
+            else b""
+        )
+        if not chunk:
+            proc.pending = buf
+            return None
+        buf += chunk
 
 
 def lock_free(name):
@@ -1646,7 +1705,7 @@ _out, _req = enq("lk")
 holder = helper("hold", state)
 check(
     "a helper takes the lock the way a lander does",
-    holder.stdout.readline().strip() == "HELD",
+    say(holder, "HELD") is not None,
 )
 _ino = lander_lock.stat().st_ino
 out = run("land", "--once", cwd=repo)
@@ -1680,11 +1739,7 @@ _req.unlink()  # one request is enough for the landers below
 # A lander killed at any point, including between taking the lock and anything it
 # would have cleaned up, must not wedge the queue. The kernel drops the flock; no
 # takeover step exists to run, and none may be reported.
-holder.kill()
-holder.wait()
-holder.stdout.close()
-holder.stderr.close()
-holder.stdin.close()
+reap(holder)
 check("a SIGKILLed holder leaves the lock file in place", lander_lock.exists())
 check(
     "reconcile reports no holder once it is dead, though the file remains",
@@ -1729,17 +1784,14 @@ print("\ntwo landers reaching the lock together never both own it")
 _raw_root = tmp / "rawhold"
 _raw_root.mkdir()
 _raw = helper("holdraw", _raw_root)
-_raw.stdout.readline()
+check("the raw holder took the lock", say(_raw, "HELD") is not None)
 try:
     H.acquire_lander_lock(_raw_root)
     _taken = True
 except SystemExit:
     _taken = False
 check("a lock whose holder has not written its pid yet is still held", not _taken)
-_raw.kill()
-_raw.wait()
-for _f in (_raw.stdin, _raw.stdout, _raw.stderr):
-    _f.close()
+reap(_raw)
 _spans = []
 for _round in range(25):
     _root = tmp / f"race-{_round}"
@@ -1748,23 +1800,26 @@ for _round in range(25):
     _procs = [helper("race", _root, _r, pass_fds=(_r,)) for _ in range(2)]
     os.close(_r)
     os.close(_w)  # EOF on the shared pipe releases both helpers at once
-    _lines = [p.stdout.readline().split() for p in _procs]
-    _winners = [p for p, line in zip(_procs, _lines) if line[:1] == ["ACQ"]]
-    check(
-        f"round {_round}: exactly one lander acquires and the other refuses",
-        len(_winners) == 1 and sum(line[:1] == ["REFUSED"] for line in _lines) == 1,
-        str(_lines),
-    )
-    # Release every acquirer so a double owner cannot hide behind a held lock.
-    for p, line in zip(_procs, _lines):
-        if line[:1] == ["ACQ"]:
-            p.stdin.write("\n")
-            p.stdin.flush()
-            _spans.append((int(line[1]), int(p.stdout.readline().split()[1])))
-    for p in _procs:
-        p.wait(30)
-        p.stdout.close()
-        p.stderr.close()
+    try:
+        _lines = [say(p, "ACQ", "REFUSED") or [] for p in _procs]
+        _winners = [p for p, line in zip(_procs, _lines) if line[:1] == ["ACQ"]]
+        check(
+            f"round {_round}: exactly one lander acquires and the other refuses",
+            len(_winners) == 1
+            and sum(line[:1] == ["REFUSED"] for line in _lines) == 1,
+            str(_lines),
+        )
+        # Release every acquirer so a double owner cannot hide behind a held lock.
+        for p, line in zip(_procs, _lines):
+            if line[:1] == ["ACQ"]:
+                p.stdin.write("\n")
+                p.stdin.flush()
+                _rel = say(p, "REL")
+                check(f"round {_round}: the acquirer reports its release", _rel is not None)
+                if _rel:
+                    _spans.append((int(line[1]), int(_rel[1])))
+    finally:
+        reap(*_procs)
 _spans.sort()
 check(
     "no two held intervals overlap across the rounds",
@@ -1880,6 +1935,53 @@ check(
     and len(H.read_ledger(state)) == _before,
     out.stdout + out.stderr,
 )
+
+# Staleness is about the owner, not about whether some lander runs: lander A's
+# claim is still orphaned while lander B is alive and busy with other work.
+_dead_lander_pid = lander.pid
+new_task("iota")
+go, started, report = blocking_gate("g3")
+_out, _req = enq("iota")
+lander_b = start_lander()
+check("a second lander's gate started", wait_for(started))
+_rec = run("reconcile", cwd=repo).stdout
+check(
+    "reconcile keeps the dead lander's claim PROCESSING and stale while another lander runs",
+    re.search(rf"PROCESSING\s+eta\s.*owner pid {_dead_lander_pid}; stale", _rec)
+    is not None,
+    _rec,
+)
+check(
+    "and the live lander's own claim is PROCESSING and not stale",
+    re.search(rf"PROCESSING\s+iota\s.*owner pid {lander_b.pid}$", _rec, re.M)
+    is not None,
+    _rec,
+)
+go.write_text("go\n")
+lander_b.communicate(timeout=120)
+
+print("\na lander that lost its claim does not acknowledge it")
+new_task("kappa")
+go, started, report = blocking_gate("g4")
+_out, _req = enq("kappa")
+lander = start_lander()
+check("the gate started", wait_for(started))
+_claimed = state / "processing" / _req.name
+H.write_json(
+    H.owner_path(_claimed),
+    {**json.loads(H.owner_path(_claimed).read_text()), "token": "forged"},
+)
+go.write_text("go\n")
+_stdout, _stderr = lander.communicate(timeout=120)
+check(
+    "the lander exits non-zero and says another lander owns the request",
+    lander.returncode != 0 and "owned by another lander" in _stderr,
+    _stdout + _stderr,
+)
+check(
+    "the request stays in processing/ and nothing for it reaches done/",
+    _claimed.exists() and not list((state / "done").glob("*-kappa-*")),
+)
 set_gate(repo, 0)
 
 print("\nlock order: the lander holds its lock before it waits on meta.lock")
@@ -1888,14 +1990,16 @@ _out, _req = enq("mu")
 _meta = os.open(state / "meta.lock", os.O_RDWR | os.O_CREAT)
 fcntl.flock(_meta, fcntl.LOCK_EX)
 lander = start_lander()
-time.sleep(1.5)
+_end = time.monotonic() + 30
+while lander.poll() is None and lock_free("lander.lock") and time.monotonic() < _end:
+    time.sleep(0.05)
 check(
-    "a lander started while meta.lock is held waits instead of finishing",
-    lander.poll() is None,
+    "a lander started while meta.lock is held takes the lander lock first",
+    lander.poll() is None and not lock_free("lander.lock"),
 )
 check(
-    "and holds the lander lock while it waits, so the order is lander then meta",
-    not lock_free("lander.lock"),
+    "and waits on meta.lock with its request unclaimed, instead of finishing",
+    lander.poll() is None and _req.exists(),
 )
 os.close(_meta)
 _stdout, _stderr = lander.communicate(timeout=120)
@@ -1910,34 +2014,35 @@ for _name, _change in (("ka", "gone"), ("kb", "baseline")):
     _wt = new_task(_name)
     _meta = os.open(state / "meta.lock", os.O_RDWR | os.O_CREAT)
     fcntl.flock(_meta, fcntl.LOCK_EX)
-    _enq = subprocess.Popen(
-        [
-            sys.executable,
-            str(HARNESS),
-            "enqueue",
-            "--task",
-            _name,
-            "-m",
-            "test: raced",
-            "--file",
-            "a.txt",
-        ],
+    _marker = tmp / f"arrived-{_name}"
+    _enq = helper(
+        "enqueue",
+        state,
+        _marker,
+        "enqueue",
+        "--task",
+        _name,
+        "-m",
+        "test: raced",
+        "--file",
+        "a.txt",
         cwd=_wt,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=_clean_env(),
     )
-    time.sleep(1.5)  # long enough for enqueue to read the manifest and block
+    # The marker is written after enqueue's first read and before its wait on
+    # meta.lock, so the change below lands strictly between the two reads.
+    check(f"enqueue reached meta.lock ({_change})", wait_for(_marker))
     _manifest = state / "tasks" / f"{_name}.json"
     if _change == "gone":
         _manifest.unlink()
     else:
         _data = json.loads(_manifest.read_text())
         _data["baseline_sha"] = FIRST
-        _manifest.write_text(json.dumps(_data))
+        H.write_json(_manifest, _data)
     os.close(_meta)
-    _stdout, _stderr = _enq.communicate(timeout=60)
+    try:
+        _stdout, _stderr = _enq.communicate(timeout=60)
+    finally:
+        reap(_enq)
     check(
         f"enqueue is refused when the manifest changed under it ({_change})",
         _enq.returncode != 0 and not list((state / "queue").glob(f"*-{_name}-*")),
@@ -1969,6 +2074,19 @@ for _label, _gen in (("missing", None), ("different", 2)):
         f"and nothing was committed for the {_label} generation",
         git("rev-parse", "HEAD", cwd=_wt).stdout.strip() == SECOND,
     )
+new_task("ph")
+_pre = state / "tasks" / "ph.json"
+_data = json.loads(_pre.read_text())
+_data.pop("generation")
+H.write_json(_pre, _data)
+out, _ = enq("ph")
+check(
+    "enqueue on a manifest with no generation fails and says how to recover",
+    out.returncode != 0
+    and "main checkout" in out.stderr
+    and "remove the task's manifest and worktree and provision it again" in out.stderr,
+    out.stderr,
+)
 _out, _req = enq("th")
 check(
     "a real request carries the manifest's generation",

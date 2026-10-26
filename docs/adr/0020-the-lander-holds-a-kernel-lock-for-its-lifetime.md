@@ -17,7 +17,7 @@ The first lander then writes into the unlinked inode and also returns as owner, 
 The lander takes an advisory `fcntl.flock(LOCK_EX | LOCK_NB)` on `lander.lock` and keeps the descriptor open for its whole life, including idle polling and every gate.
 The file is opened without truncation and the PID is written only after the lock is held; the PID is diagnostic.
 Nothing unlinks the lock file, on takeover or on exit; closing the descriptor releases it, and the kernel releases it if the process dies.
-The descriptor is non-inheritable and is not passed to the gate.
+The descriptor stays out of the gate because `subprocess` closes inherited descriptors by default (`close_fds`) and the lock descriptor is never listed in `pass_fds`.
 On contention the lander refuses with the existing "another lander already holds" message plus the recorded PID if readable.
 `reconcile` reports a holder only when a non-blocking probe of the lock fails, and releases the probe at once.
 `enqueue` never takes the lander lock.
@@ -34,8 +34,10 @@ The lander claims a request under `meta.lock` with `os.replace(queue/X, processi
 It then releases `meta.lock` and runs the land.
 Acknowledgement, under `meta.lock`, verifies the owner token is still its own, moves `processing/X` to `done/X` and removes the owner record.
 `state_root` creates `processing/`.
-`reconcile` shows a task with a request in `processing/` as `PROCESSING`, which outranks `QUEUED`, with the owner PID; if no live lander holds the lander lock, the detail says the request is stale and awaits recovery.
-`reconcile` mutates nothing.
+`reconcile` shows a task with a request in `processing/` as `PROCESSING`, which outranks `QUEUED`, with the owner PID; a request is stale when its owner record is missing, when the owner PID differs from the PID of the lander that holds the lander lock now, or when no lander holds it, and the detail then says it awaits recovery.
+A live lander therefore does not make another lander's orphaned request look live.
+`reconcile` changes no request state; it may create `processing/` and `meta.lock`.
+Acknowledgement removes the owner record before it moves the request, so an interruption leaves a visible request, not an orphaned owner record.
 
 ## Consequences
 
@@ -48,4 +50,6 @@ This does not cover:
 - A stale `processing/` request is reported, not recovered; replay, reset or quarantine belongs to R2.
 - The generation is never bumped, so the check only catches absent or mismatched values until S1 adds a bump.
 - Advisory locks bind only processes that take them; a process that ignores the lock is not stopped.
+- Every lander that shares the state root must run R1 or later; an older lander can still unlink and recreate `lander.lock` and so take the queue alongside a newer one.
+- Task manifests provisioned before R1 and queued requests without a generation fail by design; `enqueue` tells the agent to run the main checkout's harness, or to remove the task's manifest and worktree and provision it again.
 - The lock is local to one host; it gives no exclusion across machines or over a network filesystem.

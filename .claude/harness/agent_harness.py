@@ -427,7 +427,11 @@ def cmd_enqueue(args):
             if current.get(field) != manifest.get(field):
                 die(f"task {args.task!r} manifest {field} changed while queueing")
         if "generation" not in current:
-            die(f"task {args.task!r} manifest has no generation; provision it again")
+            die(
+                f"task {args.task!r} manifest has no generation (provisioned before "
+                "R1); run the main checkout's harness, or remove the task's "
+                "manifest and worktree and provision it again"
+            )
         request = {
             "task": args.task,
             "message": args.message,
@@ -703,8 +707,10 @@ def acknowledge(root, claimed, token):
         owner = json.loads(owner_path(claimed).read_text())
         if owner["token"] != token:
             die(f"{claimed.name} is owned by another lander (pid {owner['pid']})")
-        os.replace(claimed, root / "done" / claimed.name)
+        # Owner record first: an interruption then leaves a visible request, not
+        # an owner record with no request.
         owner_path(claimed).unlink()
+        os.replace(claimed, root / "done" / claimed.name)
 
 
 def with_lock_backoff(argv, timeout, tries=LOCK_TRIES):
@@ -1060,7 +1066,7 @@ def cmd_land(args):
 # --- reconcile ---------------------------------------------------------------
 
 
-def classify(manifest, ledger, queued, processing, lander_live):
+def classify(manifest, ledger, queued, processing, holder):
     """Return one task's state and the evidence behind it.
 
     The states are decided in this order, because work in flight outranks work
@@ -1083,15 +1089,17 @@ def classify(manifest, ledger, queued, processing, lander_live):
     failed = [r for r in mine if r["status"] == "FAILED"]
     waiting = [q for q in queued if q["task"] == task]
     claimed = [owner for request, owner in processing if request["task"] == task]
+    # A claim is live only while the lander that wrote it still holds the lock.
+    stale_claims = [o for o in claimed if o is None or str(o["pid"]) != holder]
 
     if claimed:
         pids = ", ".join(
             sorted({str((o or {}).get("pid", "unknown")) for o in claimed})
         )
         stale = (
-            ""
-            if lander_live
-            else "; stale: no live lander holds the lock, awaits recovery"
+            "; stale: its owner no longer holds the lander lock, awaits recovery"
+            if stale_claims
+            else ""
         )
         return "PROCESSING", f"{len(claimed)} request(s), owner pid {pids}{stale}"
     if waiting:
@@ -1141,9 +1149,7 @@ def cmd_reconcile(args):
     ]
     rows = []
     for manifest in manifests:
-        state, detail = classify(
-            manifest, ledger, queued, processing, holder is not None
-        )
+        state, detail = classify(manifest, ledger, queued, processing, holder)
         rows.append(
             {
                 "task": manifest["task"],
