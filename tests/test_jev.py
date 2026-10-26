@@ -170,6 +170,7 @@ for path, want in {
     "scripts/harness_config.py": "High",
     "scripts/jev.py": "High",
     "scripts/plan_tests.py": "High",
+    "scripts/task_loop.py": "Critical",
     "scripts/standalone_tests.sh": "High",
     "scripts/gate.sh": "High",
     "mutants/runner.py": "High",
@@ -509,78 +510,20 @@ check(
 )
 
 
-# --- reassess ---------------------------------------------------------------------
-def action(attempts, **probs):
-    full = {"continue": 0.0, "change_approach": 0.0, "escalate": 0.0, **probs}
-    serve({"action": {"probabilities": full, "choice": max(full, key=full.get)}})
-    return jev.reassess(
-        {
-            "fingerprint": "pytest:test_x",
-            "attempts": attempts,
-            "last_errors": ["E assert 1 == 2"],
-        }
-    )
-
-
-check(
-    "first sighting, Jev says continue: continue",
-    action(1, **{"continue": 0.9})["action"] == "continue",
+# --- reassess is gone ---------------------------------------------------------------
+# A loop that keeps failing is stopped by code alone (.claude/hooks/loop_guard.py); no model advises it.
+for name in ("reassess", "_ask", "ACTIONS", "STOP_AT"):
+    check(f"jev no longer has {name}", not hasattr(jev, name))
+done = subprocess.run(
+    [sys.executable, str(Path(jev.__file__)), "reassess", "--fingerprint", "f", "--attempts", "1"],
+    capture_output=True,
+    text=True,
+    check=False,
 )
 check(
-    "third sighting, Jev says continue: still change_approach (Jev cannot lower)",
-    action(3, **{"continue": 0.9})["action"] == "change_approach",
-)
-check(
-    "first sighting, Jev says escalate at 0.8: escalate",
-    action(1, escalate=0.8, change_approach=0.2)["action"] == "escalate",
-)
-r = action(1, escalate=0.5, **{"continue": 0.3, "change_approach": 0.2})
-check(
-    "Jev below 0.6 is a referral at the floor",
-    r["status"] == "referred" and r["action"] == "continue",
-    str(r),
-)
-check(
-    "Jev may raise change_approach to escalate at 0.7",
-    action(4, escalate=0.7, change_approach=0.3)["action"] == "escalate",
-)
-os.environ["JEV_DISABLE"] = "1"
-fb = [
-    jev.reassess({"fingerprint": "f", "attempts": n, "last_errors": []})["action"]
-    for n in (1, 2, 3, 6)
-]
-os.environ["JEV_DISABLE"] = ""
-check(
-    "fallback: seen 1 and 2 times continue, 3 and 6 change approach",
-    fb == ["continue", "continue", "change_approach", "change_approach"],
-    str(fb),
-)
-for bad in (0, -1, True, "3", None):
-    try:
-        jev.reassess({"fingerprint": "f", "attempts": bad})
-        ok = False
-    except ValueError:
-        ok = True
-    check(f"attempts={bad!r} is refused", ok)
-sent = serve(
-    {
-        "action": {
-            "probabilities": {"continue": 1.0, "change_approach": 0.0, "escalate": 0.0}
-        }
-    }
-)
-jev.reassess(
-    {
-        "fingerprint": "f",
-        "attempts": 1,
-        "last_errors": ["boom line one\nsecret line two", "token=abcdef123456789 here"],
-    }
-)
-body = json.loads(sent[0].data.decode())
-check(
-    "errors are cut to their first line and redacted",
-    body["state"]["last_errors"] == ["boom line one", "token=<redacted:kv> here"],
-    str(body["state"]["last_errors"]),
+    "the reassess subcommand is gone from the command line",
+    done.returncode == 2 and "invalid choice" in done.stderr,
+    f"{done.returncode} {done.stderr}",
 )
 
 # --- record and replay -------------------------------------------------------------
@@ -669,23 +612,7 @@ check(
 jev.evaluate({"a": 2}, Q)
 check("a different payload is a miss and is sent", len(sent) == 2)
 
-# scripts/task_loop.py unpacks `_ask` as (answers, error); its own tests replace it with that shape.
-sent = serve(OK_ANSWER)
-asked = jev._ask(Q, {"a": 1})
-os.environ["JEV_DISABLE"] = "1"
-off = jev._ask(Q, {"a": 1})
-os.environ["JEV_DISABLE"] = ""
-serve(error=urllib.error.HTTPError(jev.URL, 503, "x", {}, None))
-failed = jev._ask(Q, {"a": 1})
-check(
-    "_ask keeps its two-value contract: (answers, None), or (None, reason) when off or failed",
-    asked == (OK_ANSWER, None)
-    and off == (None, "JEV_DISABLE=1")
-    and failed == (None, "HTTP 503"),
-    str((asked, off, failed)),
-)
-
-# A decision's own record: the three decision functions each name it.
+# A decision's own record: each decision function names it.
 sent = serve({"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}})
 r = cons(["scripts/x.py"])
 check(
@@ -697,17 +624,11 @@ check(
 sent = serve({k: {"noul": v} for k, v in GOOD.items()})
 r = jev.intent_alignment("fix the gate", "fix the gate and rewrite land.sh")
 check("intent_alignment names the record of its exchange", r["record"] == key_of(sent[0]))
-sent = serve(
-    {"action": {"probabilities": {"continue": 0.9, "change_approach": 0.1, "escalate": 0.0}}}
-)
-r = jev.reassess({"fingerprint": "f", "attempts": 1, "last_errors": []})
-check("reassess names the record of its exchange", r["record"] == key_of(sent[0]))
 serve(error=urllib.error.HTTPError(jev.URL, 500, "boom", {}, None))
 check(
     "a fallback has no record",
     cons(["scripts/x.py"])["record"] is None
-    and jev.intent_alignment("a", "b")["record"] is None
-    and jev.reassess({"fingerprint": "f", "attempts": 1})["record"] is None,
+    and jev.intent_alignment("a", "b")["record"] is None,
 )
 
 # Offline: cache only, and a miss is an error the caller falls back on, never a "no".

@@ -15,11 +15,13 @@ reports. The land gate is unchanged and stays the full suite (scripts/gate.sh).
     python3 scripts/plan_tests.py                     # origin/main..HEAD (plus uncommitted work)
     python3 scripts/plan_tests.py --base integration/phases-0-1
     python3 scripts/plan_tests.py --tier High --run   # run, stop at the first failure
+    python3 scripts/plan_tests.py --no-mutation --run # the same, without the mutation command
 
-Without --tier the tier comes from scripts/jev.py `consequence`: a code floor
-from the harness.toml [tiers] globs, raised (never lowered) by Jev when it can be
-asked. A referral is printed, and the plan uses the provisional tier. A --tier below
-the floor is refused unless --below-floor is given, and the override is recorded.
+Without --tier the tier is the floor: the highest tier any changed path reaches by the
+harness.toml [tiers] globs (scripts/jev.py `floor_tier`). Jev is never asked (ADR 0021).
+A --tier below the floor is refused unless --below-floor is given, and the override is recorded.
+--no-mutation leaves the mutation command out and records that in `skipped`: mutation at High is
+unbounded in time, so a worker's checker and the task loop's verification leave it to review.
 The change is everything since the merge base: commits, staged, unstaged and
 untracked work, with deleted paths and rename sources counted. JSON goes to stdout
 and a human summary to stderr. The plan names the tier it ran and what it skipped.
@@ -148,7 +150,7 @@ def touching_mutants(root, paths):
     return ids
 
 
-def plan(root, tier, paths, config):
+def plan(root, tier, paths, config, mutation=True):
     """Build the plan for one tier.
 
     Args:
@@ -156,6 +158,8 @@ def plan(root, tier, paths, config):
         tier (str): Low, Medium, High or Critical.
         paths (list[str]): every changed path, old and new (deleted ones included).
         config (dict): a loaded harness.toml.
+        mutation (bool): False leaves the High and Critical mutation command out and
+            records that in `skipped`; Low and Medium never plan mutation.
 
     Returns:
         (dict): tier, commands (command and why), skipped, notes.
@@ -203,8 +207,10 @@ def plan(root, tier, paths, config):
         )
     else:
         add(FULL_SUITE, "full suite")
-        ids = touching_mutants(root, paths)
-        if ids:
+        ids = touching_mutants(root, paths) if mutation else []
+        if not mutation:
+            skipped.append("mutation: skipped by --no-mutation (review owns it)")
+        elif ids:
             add(
                 f"python3 mutants/runner.py --only {' '.join(ids)}",
                 "mutants touching changed paths",
@@ -260,12 +266,17 @@ def main(argv=None, root=REPO):
         "--tier",
         type=str.capitalize,
         choices=jev.TIERS,
-        help="skip the consequence call; refused below the floor",
+        help="plan at this tier, not the floor; refused below the floor",
     )
     parser.add_argument(
         "--below-floor",
         action="store_true",
         help="allow --tier below the floor; recorded in the output",
+    )
+    parser.add_argument(
+        "--no-mutation",
+        action="store_true",
+        help="leave the mutation command out and record that it was skipped",
     )
     parser.add_argument(
         "--run",
@@ -276,7 +287,6 @@ def main(argv=None, root=REPO):
     config = harness_config.load(root)
     changed = change(root, args.base)
     floor, floor_paths = jev.floor_tier(changed["paths"], config["tiers"])
-    verdict = None
     if args.tier:
         if jev.TIERS.index(args.tier) < jev.TIERS.index(floor) and not args.below_floor:
             print(
@@ -287,15 +297,8 @@ def main(argv=None, root=REPO):
             return 2
         tier, source = args.tier, "given"
     else:
-        verdict = jev.consequence(
-            changed["paths"],
-            "; ".join(changed["subjects"]),
-            stats=changed["stats"],
-            symbols=changed["symbols"],
-            tiers=config["tiers"],
-        )
-        tier, source = verdict["tier"], f"{verdict['source']}:{verdict['status']}"
-    result = plan(root, tier, changed["paths"], config)
+        tier, source = floor, "floor"
+    result = plan(root, tier, changed["paths"], config, mutation=not args.no_mutation)
     result.update(
         base=args.base,
         files=changed["paths"],
@@ -303,15 +306,10 @@ def main(argv=None, root=REPO):
         floor_paths=floor_paths,
         below_floor_override=jev.TIERS.index(tier) < jev.TIERS.index(floor),
         tier_source=source,
-        consequence=verdict,
     )
     if result["below_floor_override"]:
         result["notes"].append(
             f"OVERRIDE: tier {tier} is below the {floor} floor (--below-floor)"
-        )
-    if verdict and verdict["status"] == "referred":
-        result["notes"].append(
-            f"REFERRAL to the owner: {verdict['reason']}; planned at the provisional {tier}"
         )
     print(json.dumps(result, indent=2))
     print(summary(result), file=sys.stderr)

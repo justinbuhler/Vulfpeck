@@ -33,8 +33,10 @@ To change a decision, write a new ADR with `Supersedes: NNNN` and mark the old o
 - 2026-10-23 — [0013. AGENTS.md is the one rules source for every runtime](0013-agents-md-is-the-one-rules-source-for-every-runtime.md) — proposed
 - 2026-10-23 — [0014. Skills live once in .agents/skills for every runtime](0014-skills-live-once-in-agents-skills-for-every-runtime.md) — proposed
 - 2026-10-23 — [0015. One hook table, rendered for Claude, Codex and Gemini](0015-one-hook-table-rendered-for-claude-codex-and-gemini.md) — proposed
-- 2026-10-23 — [0016. Jev proposes consequence tier, code picks the checks](0016-jev-proposes-consequence-tier-code-picks-the-checks.md) — proposed
+- 2026-10-23 — [0016. Jev proposes consequence tier, code picks the checks](0016-jev-proposes-consequence-tier-code-picks-the-checks.md) — superseded by 0021
 - 2026-10-23 — [0017. Loop, scope and budget limits are hooks, not prose](0017-loop-scope-and-budget-limits-are-hooks-not-prose.md) — proposed
 - 2026-10-23 — [0018. The task loop turns labelled issues into merged pull requests](0018-the-task-loop-turns-labelled-issues-into-merged-pull-request.md) — proposed
 - 2026-10-23 — [0019. Copy declared inputs into isolated specimens](0019-copy-declared-inputs-into-isolated-specimens.md) — proposed
+- 2026-10-26 — [0020. The task loop's worker gets a checker and a spend cap, and verification runs the tier plan](0020-the-task-loop-s-worker-gets-a-checker-and-a-spend-cap-and-ve.md) — proposed
+- 2026-10-26 — [0021. Evals place Jev: off the test plan, a deterministic intake gate](0021-evals-place-jev-off-the-test-plan-a-deterministic-intake-gat.md) — proposed
 <!-- adr-index:end -->

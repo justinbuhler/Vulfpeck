@@ -27,6 +27,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -150,30 +151,33 @@ def run_one(command, path, timeout):
     """Return one test script's outcome as (relative path, record)."""
     name = path.relative_to(ROOT).as_posix()
     # HARNESS_EVENTS_LOG: tests run real hooks; keep mutant runs out of the real
-    # decision record (scripts/harness_events.py).
-    environment = dict(
-        os.environ,
-        PYTHONPATH=f"{ROOT}:{ROOT / 'scripts'}",
-        HARNESS_EVENTS_LOG=os.devnull,
-    )
-    try:
-        done = subprocess.run(
-            [*command, str(path)],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=environment,
+    # decision record (scripts/harness_events.py). JEV_RECORD_DIR: likewise for Jev
+    # exchanges (scripts/jev.py), one directory per run so no run replays another's.
+    with tempfile.TemporaryDirectory(prefix="mutants-jev-") as records:
+        environment = dict(
+            os.environ,
+            PYTHONPATH=f"{ROOT}:{ROOT / 'scripts'}",
+            HARNESS_EVENTS_LOG=os.devnull,
+            JEV_RECORD_DIR=records,
         )
-        code, out, err = done.returncode, done.stdout, done.stderr
-    except subprocess.TimeoutExpired as expired:
-        code = -1
-        out = (
-            (expired.stdout or b"").decode("utf-8", "replace")
-            if isinstance(expired.stdout, bytes)
-            else (expired.stdout or "")
-        )
-        err = f"TIMEOUT after {timeout}s"
+        try:
+            done = subprocess.run(
+                [*command, str(path)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=environment,
+            )
+            code, out, err = done.returncode, done.stdout, done.stderr
+        except subprocess.TimeoutExpired as expired:
+            code = -1
+            out = (
+                (expired.stdout or b"").decode("utf-8", "replace")
+                if isinstance(expired.stdout, bytes)
+                else (expired.stdout or "")
+            )
+            err = f"TIMEOUT after {timeout}s"
     summary = SUMMARY_LINE.search(out)
     return name, {
         "returncode": code,

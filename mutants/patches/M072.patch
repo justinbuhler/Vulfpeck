@@ -1,0 +1,15 @@
+# mutant_id: M072
+# target: scripts/plan_tests.py
+# operator: drop-check
+# behaviour: --no-mutation leaves the mutation command out of the plan
+--- a/scripts/plan_tests.py
++++ b/scripts/plan_tests.py
+@@ -298,7 +298,7 @@
+         tier, source = args.tier, "given"
+     else:
+         tier, source = floor, "floor"
+-    result = plan(root, tier, changed["paths"], config, mutation=not args.no_mutation)
++    result = plan(root, tier, changed["paths"], config, mutation=True)
+     result.update(
+         base=args.base,
+         files=changed["paths"],

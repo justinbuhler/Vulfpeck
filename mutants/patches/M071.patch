@@ -1,0 +1,15 @@
+# mutant_id: M071
+# target: scripts/task_loop.py
+# operator: flip-result
+# behaviour: an issue body with no Done when section is refused, not dispatched
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -326,7 +326,7 @@
+                 break
+             if following.strip():
+                 return True
+-    return False
++    return True
+ 
+ 
+ def refusal_command(issue):

@@ -4,7 +4,7 @@
 # behaviour: verification runs for every change, not only an allowlisted one
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -814,13 +814,14 @@
+@@ -831,13 +831,14 @@
              else None
          )
          tier, checks, skipped = verification(root, wt, base_sha, paths)
@@ -25,4 +25,4 @@
 +            )
          verified = f"verified at {tier} (checks run: {len(checks)})"
          if skipped:
-             verified += f"; skipped mutation (review owns it): {'; '.join(skipped)}"
+             verified += f"; {'; '.join(skipped)}"

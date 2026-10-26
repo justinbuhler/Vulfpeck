@@ -661,5 +661,66 @@ check(
     done.stdout + done.stderr,
 )
 
+# --- the gold set is a gate on the shipped [tiers] --------------------------------------
+# The shipped cases and labels, scored against the shipped harness.toml, offline: every
+# gold-labelled pull request must have a floor at or above its gold tier. An empty record
+# directory means Jev answers nothing, so only the floor is under test.
+gate_env = {
+    k: v
+    for k, v in env.items()
+    if k not in ("TYPESAFE_API_KEY", "JEV_RECORD_DIR", "HARNESS_EVENTS_LOG", "JEV_DISABLE")
+}
+gate_env.update(
+    JEV_RECORD_DIR=str(fresh_records()), HARNESS_EVENTS_LOG=str(SCRATCH / "gate-events.jsonl")
+)
+done = subprocess.run(
+    [
+        sys.executable,
+        str(ROOT / "scripts" / "eval_consequence.py"),
+        "--cases",
+        str(ROOT / "evals" / "consequence" / "cases.jsonl"),
+        "--labels",
+        str(ROOT / "evals" / "consequence" / "labels.jsonl"),
+        "--gold",
+        "gold",
+        "--json",
+        "--check",
+    ],
+    capture_output=True,
+    text=True,
+    env=gate_env,
+    check=False,
+)
+try:
+    gate = json.loads(done.stdout)
+except ValueError:
+    gate = {}
+check(
+    "the shipped gold set carries 27 gold-labelled pull requests",
+    gate.get("with_gold") == 27,
+    done.stdout[:300] + done.stderr,
+)
+check(
+    "no shipped pull request has a gold tier above the shipped floor",
+    gate.get("floor_vs_gold", {}).get("under") == [],
+    str(gate.get("floor_vs_gold", {}).get("under")),
+)
+check(
+    "the same run under --check exits 0",
+    done.returncode == 0,
+    f"{done.returncode} {done.stderr}",
+)
+gate_events = SCRATCH / "gate-events.jsonl"
+sent_lines = [
+    json.loads(line)
+    for line in (gate_events.read_text().splitlines() if gate_events.exists() else [])
+    if json.loads(line)["decision"] == "call"
+]
+check(
+    "the gate ran offline: Jev answered no case and nothing was sent",
+    gate.get("jev", {}).get("answered") == 0 and sent_lines == [],
+    f"{gate.get('jev')} {sent_lines}",
+)
+
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

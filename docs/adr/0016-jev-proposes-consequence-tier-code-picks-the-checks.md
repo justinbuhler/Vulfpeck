@@ -1,8 +1,9 @@
 # 0016. Jev proposes consequence tier, code picks the checks
 
-Status: proposed
+Status: superseded
 Date: 2026-10-23
 Components: scripts/jev.py, scripts/plan_tests.py
+Superseded-by: 0021
 
 ## Context
 

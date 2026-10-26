@@ -28,10 +28,14 @@ running as the owner; see ADR 0018). Otherwise the merge happens only when the P
 bucket is `pass`, bound to the landed commit. There is no `--auto`, and no `--dangerously-*`
 flag is ever passed.
 
-The worker's brief names a checker (`plan_tests.py --run`) and a claude worker is capped with
+The next issue is the highest `[loop] priority` label; a tie goes to the lowest issue number. Jev is never asked
+(ADR 0021). An issue whose body has no `Done when` section is not dispatched: right after the move to `running`
+it is commented on and ends `blocked` as `needs-info`, with no fetch, provision or worker.
+
+The worker's brief names a checker (`plan_tests.py --no-mutation --run`) and a claude worker is capped with
 `--max-budget-usd` from `[loop] max_usd`. Verification runs the checks of the change's floor tier, planned
-from the base commit's harness.toml (never Jev, never the worktree's copy), lint first; mutation commands
-are skipped and recorded, because mutation belongs to review.
+from the base commit's harness.toml (never Jev, never the worktree's copy), lint first, with `plan_tests.plan`
+told `mutation=False`: mutation is unbounded in time and belongs to review, and the plan records that it was skipped.
 
 Every external command goes through `sh()`. A blocked or failed issue is never picked again until
 the owner runs `reset`. The `run` loop stops after 2 consecutive tasks end failed or blocked, or when
@@ -82,8 +86,16 @@ VERIFY_TIMEOUT = 3600
 LAND_TIMEOUT = 1800
 CHECKS_TIMEOUT = 3600
 BOX_DELETE_TIMEOUT = 60
-# plan_tests.plan() emits this command for a High change's mutants; loop verification leaves it out.
-MUTATION_COMMAND = "python3 mutants/runner.py"
+# An issue is dispatched only when it says how to tell the work is finished: a line starting `Done when`
+# (case-insensitive, after heading marks, a list marker or bold) followed by text after a colon, or by a
+# non-blank line before the next heading. No model is asked: this regex is the baseline any model must beat.
+DONE_WHEN = re.compile(
+    r"[ \t]*(?:#{1,6}[ \t]+)?(?:(?:[-*+]|\d+[.)])[ \t]+)?(?:\*\*|__)?[ \t]*done[ \t]+when\b(.*)",
+    re.IGNORECASE,
+)
+AFTER_COLON = re.compile(r"[ \t*_]*:(.*)")
+HEADING = re.compile(r"[ \t]*#{1,6}[ \t]")
+NEEDS_INFO = "needs-info: no Done when section"
 STOP_AFTER_BAD = 2  # consecutive tasks ending failed or blocked
 STOP_AFTER_FAILS = 2  # failures of one issue
 RESET_SESSION = "task-loop"
@@ -278,52 +290,52 @@ def rank(issue, order):
     return min(hits) if hits else len(order)
 
 
-def jev_pick(tied):
-    """The tied issue Jev prefers at probability >= jev.ACCEPT_HIGH, else None.
-
-    Sends issue numbers, titles and labels only.
-    """
-    questions = {
-        "first": jev._choice(
-            "Which of these issues should an agent do first?",
-            {f"issue_{i['number']}": i["title"] for i in tied},
-        )
-    }
-    state = {
-        "issues": [
-            {"number": i["number"], "title": i["title"], "labels": i["labels"]}
-            for i in tied
-        ]
-    }
-    answers, _ = jev._ask(questions, state)
-    if answers is None:
-        return None
-    name, p = jev._top(answers["first"])
-    if p < jev.ACCEPT_HIGH:
-        return None
-    return next((i for i in tied if f"issue_{i['number']}" == name), None)
-
-
-def choose(issues, order, ask_jev=True):
-    """(issue, how): highest priority first; a tie goes to Jev (when asked), else the lowest issue number."""
+def choose(issues, order):
+    """(issue, how): the highest priority label first; a tie goes to the lowest issue number."""
     best = min(rank(i, order) for i in issues)
     tied = sorted(
         (i for i in issues if rank(i, order) == best), key=lambda i: i["number"]
     )
-    if len(tied) == 1:
-        return tied[0], "priority"
-    picked = jev_pick(tied) if ask_jev else None
-    return (picked, "jev") if picked else (tied[0], "oldest")
+    return tied[0], "priority" if len(tied) == 1 else "oldest"
 
 
-def next_issue(root, cfg, ask_jev=True):
+def next_issue(root, cfg):
     """(issue, how) for the next task, or (None, None) when no queued issue is left."""
     queued = []
     for issue in list_issues(root, cfg):
         state = load(root, issue["number"])
         if state is None or state["state"] == "queued":
             queued.append(issue)
-    return choose(queued, cfg["priority"], ask_jev) if queued else (None, None)
+    return choose(queued, cfg["priority"]) if queued else (None, None)
+
+
+def has_done_when(body):
+    """Whether an issue body has a `Done when` section: a line that begins with the words (any case), after
+    optional heading marks, a list marker or bold, with non-blank text after a colon on that line or a
+    non-blank line after it before the next heading."""
+    lines = (body or "").splitlines()
+    for i, line in enumerate(lines):
+        found = DONE_WHEN.match(line)
+        if not found:
+            continue
+        colon = AFTER_COLON.match(found.group(1))
+        if colon and colon.group(1).strip(" \t*_"):
+            return True
+        for following in lines[i + 1 :]:
+            if HEADING.match(following):
+                break
+            if following.strip():
+                return True
+    return False
+
+
+def refusal_command(issue):
+    """The `gh issue comment` that tells the author an issue was not dispatched."""
+    return [
+        "gh", "issue", "comment", issue["number"], "--body",
+        "Task loop: this issue needs a `Done when` section (a line `Done when:` with what proves the work "
+        "finished) and was not dispatched. Add one; the owner can then reset the task.",
+    ]  # fmt: skip
 
 
 # --- the commands one task runs ----------------------------------------------
@@ -418,11 +430,11 @@ def brief(issue, worktree, sandboxed=False, base_sha="<base sha>"):
         "any --dangerously-* flag, commit trailers or attribution, files outside the worktree, "
         "user-level config, running scripts/task_loop.py.\n"
         + (
-            "DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --base HEAD --run` "
+            "DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --base HEAD --no-mutation --run` "
             f"exits 0 in {worktree} (HEAD there is the baseline of the tree you were given; you must not commit). "
             "The runner re-runs the same tier's checks afterwards.\n"
             if sandboxed
-            else f"DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --base {base_sha} --run` "
+            else f"DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --base {base_sha} --no-mutation --run` "
             "exits 0 (you must not commit). The runner re-runs the same tier's checks afterwards.\n"
         )
         + "REPORT: finish with one line `STATUS: DONE`, `STATUS: DONE_WITH_CONCERNS <concerns>`, "
@@ -576,14 +588,14 @@ def verification(root, worktree, base_sha, paths):
     """(tier, checks, skipped): what verifies a change, planned from the base commit's harness.toml.
 
     The tier is the floor of the base's `[tiers]` for the changed `paths`; Jev is never asked and the
-    worktree's harness.toml is never read. Mutation commands are returned as `skipped` instead of
-    `checks`: their time is unbounded, and mutation belongs to review.
+    worktree's harness.toml is never read. The plan is made with `mutation=False`: its time is unbounded,
+    and mutation belongs to review. `skipped` is the plan's own record of that.
     """
     config = base_config(root, base_sha)
     tier, _ = jev.floor_tier(paths, config["tiers"])
-    planned = [c["command"] for c in plan_tests.plan(worktree, tier, paths, config)["commands"]]
-    skipped = [c for c in planned if c.startswith(MUTATION_COMMAND)]
-    return tier, [c for c in planned if c not in skipped], skipped
+    planned = plan_tests.plan(worktree, tier, paths, config, mutation=False)
+    skipped = [s for s in planned["skipped"] if s.startswith("mutation:")]
+    return tier, [c["command"] for c in planned["commands"]], skipped
 
 
 def refuse_ignored(root, base_sha, files, cloned):
@@ -720,6 +732,11 @@ def execute(root, cfg, issue):
     base = cfg["base"]
     move(root, n, "running")
     try:
+        if not has_done_when(issue["body"]):
+            sent = sh(refusal_command(issue), root)
+            if sent.returncode:
+                print(f"task_loop: could not comment on #{n}: {tail(sent)}", file=sys.stderr)
+            raise Halt("blocked", NEEDS_INFO)
         why = stale_issue_text(root, cfg, plans)
         if why:
             raise Halt("blocked", why)
@@ -823,7 +840,7 @@ def execute(root, cfg, issue):
         )
         verified = f"verified at {tier} (checks run: {len(checks)})"
         if skipped:
-            verified += f"; skipped mutation (review owns it): {'; '.join(skipped)}"
+            verified += f"; {'; '.join(skipped)}"
         move(root, n, "verified", f"{verified}; needs-review: {review}" if review else f"{verified}; {status}")
         enqueue = next(
             argv
@@ -983,14 +1000,18 @@ def cmd_intake(root, cfg, args):
 
 
 def cmd_next(root, cfg, args):
-    """Print the issue the loop would take and the commands it would run (a dry run never asks Jev)."""
-    issue, how = next_issue(root, cfg, ask_jev=not args.dry_run)
+    """Print the issue the loop would take and the commands it would run, or the refusal it would make."""
+    issue, how = next_issue(root, cfg)
     if issue is None:
         print("queue empty")
         return 0
     print(
         f"next: #{issue['number']} {issue['title']} (chosen by {how}; labels: {', '.join(issue['labels'])})"
     )
+    if not has_done_when(issue["body"]):
+        print(f"refused: {NEEDS_INFO}; the task would end blocked and run no stage")
+        show([("comment", root, refusal_command(issue))])
+        return 0
     show(plan(root, cfg, issue))
     return 0
 

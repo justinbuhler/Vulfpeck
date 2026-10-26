@@ -33,9 +33,9 @@ enabled = true                          # JEV_DISABLE=1 also turns it off
 timeout = 8.0                           # seconds per request
 
 [tiers]
-# Floor globs for scripts/jev.py consequence, checked critical, high, medium, low;
-# a path matching none is Medium and a change's floor is its highest path. Jev may
-# raise the tier, never lower it. Rules and machinery files are High.
+# Floor globs (scripts/jev.py floor_tier), checked critical, high, medium, low; the tier
+# scripts/plan_tests.py plans at. A path matching none is Medium and a change's floor is
+# its highest path. Rules and machinery files are High.
 low = ["README.md", "ENGINEERING_LOG.md", "HARNESS.md", "docs/**"]
 medium = ["docs/adr/**"]
 high = [".claude/**", ".agents/**", ".codex/**", ".gemini/**", ".github/**", ".githooks/**",
@@ -49,7 +49,7 @@ high = [".claude/**", ".agents/**", ".codex/**", ".gemini/**", ".github/**", ".g
         "scripts/loop_reset.py", "scripts/scope.py", "scripts/harness_events.py",
         "scripts/harness_inputs.py", "scripts/harness_doctor.py", "scripts/harness_install.py",
         "scripts/github_bootstrap.sh", "pyproject.toml", "uv.lock", ".gitignore"]
-critical = []
+critical = ["scripts/task_loop.py"]     # the unattended-merge path; evals/consequence/ rated every case touching it Critical
 
 [loop]
 label = "ready-for-agent"               # open issues with this label are the queue
