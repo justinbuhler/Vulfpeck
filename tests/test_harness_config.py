@@ -292,6 +292,51 @@ for toml, expect in (
     got = config_error(toml) or ""
     check(f"{toml.splitlines()[1]!r} is refused", expect in got, got)
 
+# --- [loop] max_usd: the worker's spend cap -----------------------------------
+check(
+    "loop.max_usd defaults to 10.0 dollars",
+    d0["loop"].get("max_usd") == 10.0 and isinstance(d0["loop"].get("max_usd"), float),
+    repr(d0["loop"].get("max_usd")),
+)
+check(
+    "the repository's harness.toml sets [loop] max_usd = 10.0",
+    __import__("tomllib").loads((REPO / "harness.toml").read_text())["loop"].get("max_usd")
+    == 10.0,
+)
+for toml, want in (
+    ("[loop]\nmax_usd = 2.5\n", 2.5),
+    ("[loop]\nmax_usd = 3\n", 3),
+    ("[loop]\nmax_usd = 0\n", 0),
+):
+    d = Path(tempfile.mkdtemp(prefix="harness-config-usd."))
+    (d / "harness.toml").write_text(toml)
+    try:
+        got = harness_config.load(d)["loop"]["max_usd"]
+    except harness_config.ConfigError as exc:
+        got = str(exc)
+    check(f"{toml.splitlines()[1]!r} is read as {want}", got == want and not isinstance(got, bool), repr(got))
+for toml in (
+    "[loop]\nmax_usd = -1\n",
+    "[loop]\nmax_usd = -0.01\n",
+    "[loop]\nmax_usd = true\n",
+    '[loop]\nmax_usd = "5"\n',
+    "[loop]\nmax_usd = nan\n",
+    "[loop]\nmax_usd = inf\n",
+):
+    got = config_error(toml) or ""
+    check(
+        f"{toml.splitlines()[1]!r} is refused",
+        "loop.max_usd must be a number >= 0 (0 is off)" in got,
+        got,
+    )
+for command in ("claude -p --max-budget-usd 5", "claude --max-budget-usd=5 -p"):
+    got = config_error(f'[loop.workers]\nclaude = "{command}"\n') or ""
+    check(
+        f"loop.workers.claude = {command!r} is refused: [loop] max_usd is the one place",
+        "loop.workers.claude" in got and "[loop] max_usd" in got,
+        got,
+    )
+
 # --- count: last match wins, zero and absence both fail -----------------------
 cfg = harness_config.merge({"tests": {"count_pattern": r"(\d+) passed"}})
 check(

@@ -126,6 +126,9 @@ DEFAULTS = {
         # "container" runs each worker in Apple `container` with only its worktree mounted;
         # "none" runs it as the owner and `task_loop.py run` then needs --unsandboxed.
         "sandbox": "container",
+        # Dollar cap on one worker run: `claude` gets `--max-budget-usd`, the other runtimes have no
+        # known cap flag and the loop says so. A number >= 0; 0 is off.
+        "max_usd": 10.0,
         # Headless worker command per runtime; the brief is appended as the last argument.
         "workers": {
             "claude": "claude -p",
@@ -309,6 +312,13 @@ def merge(raw):
                 ):
                     raise ConfigError("loop.workers must map runtime names to commands")
                 value = {**DEFAULTS["loop"]["workers"], **value}
+            elif (section, key) == ("loop", "max_usd"):
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not 0 <= value < float("inf")  # also refuses nan, which would read as "off"
+                ):
+                    raise ConfigError("loop.max_usd must be a number >= 0 (0 is off)")
             elif section == "budget":
                 if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                     raise ConfigError(
@@ -338,6 +348,10 @@ def merge(raw):
             raise ConfigError(
                 f"loop.workers.{runtime}: a --dangerously-* flag is never allowed"
             )
+    if "--max-budget-usd" in loop["workers"]["claude"]:
+        raise ConfigError(
+            "loop.workers.claude: --max-budget-usd is set by [loop] max_usd, not in the command"
+        )
     for rel in config["land"]["copy_untracked"]:
         safe_relative(rel, "land.copy_untracked")
     adr_dir = safe_relative(config["adr"]["dir"], "adr.dir").strip("/")
