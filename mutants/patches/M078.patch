@@ -1,0 +1,15 @@
+# mutant_id: M078
+# target: scripts/eval_tasks.py
+# operator: drop-check
+# behaviour: the fake gh merge refuses a --match-head-commit that is not the PR head
+--- a/scripts/eval_tasks.py
++++ b/scripts/eval_tasks.py
+@@ -435,7 +435,7 @@
+             print(f"tests: {verdict}")
+             return 0 if verdict == "pass" else 1
+         wanted = option(argv, "--match-head-commit")
+-        if wanted != sha:
++        if not wanted:
+             print(f"fake gh: --match-head-commit {wanted} is not the head {sha}", file=sys.stderr)
+             return 1
+         merge_head(origin, head)
