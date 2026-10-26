@@ -429,6 +429,7 @@ b = res["bug-calc"]
 check("a bug case ends blocked as needs-review", (b["final_state"], b["reason"].startswith("needs-review: changes outside the docs allowlist: src/calc.py")) == ("blocked", True), str(b["reason"]))
 check("the scripted worker's real fix is the only change", b["changed_paths"] == ["src/calc.py"], str(b["changed_paths"]))
 check("the STATUS line is DONE", b["status"] == "DONE")
+check("a repository with no mutant patches removes none in setup", b.get("setup_removed_mutants") == [], str(b.get("setup_removed_mutants")))
 check(
     "a bug case's checks: six pass, the two transcript checks skip",
     verdicts(b) == {"final_state": "pass", "reason_contains": "pass", "status": "pass", "never_published": "pass",
@@ -725,6 +726,63 @@ check("a claude run whose transcript cannot be found skips its transcript checks
       str(res["claude-lost"]["checks"]))  # fmt: skip
 os.environ["HOME"] = real_home
 
+# --- a setup that makes mutant patches stale removes them in its own commit ---------
+# A mutant patch targets exact lines. When a revert or a plant rewrites those lines, the patch no longer
+# applies to the fixture's base and the suite's "every mutant patch applies to HEAD" check fails for a
+# reason that is the fixture's, not the worker's. The expectations are the literal names below.
+MUT_REPO = SCRATCH / "repo-mutants"
+git("clone", "-q", str(REPO_FX), str(MUT_REPO), cwd=SCRATCH)
+for key, value in (("user.name", "t"), ("user.email", "t@example.com"), ("commit.gpgsign", "false")):
+    git("config", key, value, cwd=MUT_REPO)
+MUTANTS = {
+    # M001 and M003 mutate `return a + b`, the line the C2 revert rewrites; M002 mutates src/names.py, which it does not touch.
+    "M001": "--- a/src/calc.py\n+++ b/src/calc.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return a + b\n+    return a * b\n",
+    "M002": "--- a/src/names.py\n+++ b/src/names.py\n@@ -1,2 +1,2 @@\n def tidy(x):\n-    return x.strip().title()\n+    return x.strip()\n",
+    "M003": "--- a/src/calc.py\n+++ b/src/calc.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return a + b\n+    return 0\n",
+}
+(MUT_REPO / "mutants" / "patches").mkdir(parents=True)
+for name, text in MUTANTS.items():
+    (MUT_REPO / "mutants" / "patches" / f"{name}.patch").write_text(f"# mutant_id: {name}\n" + text)
+git("add", "-A", cwd=MUT_REPO)
+git("commit", "-q", "-m", "test: mutants", cwd=MUT_REPO)
+MUT_HEAD = git("rev-parse", "HEAD", cwd=MUT_REPO).stdout.strip()
+check("the mutant patches all apply to the synthetic repository's HEAD before any setup",
+      all(subprocess.run(["git", "apply", "--check", str(MUT_REPO / "mutants" / "patches" / f"{n}.patch")], cwd=MUT_REPO).returncode == 0 for n in MUTANTS))  # fmt: skip
+
+PLANT_MUT = case(
+    "plant-mut", title="Fix the casing", source={"plant": {"path": "src/names.py", "replace": "x.strip().title()", "with": "x.strip().upper()"}},
+    final_state="blocked", paths_allowed=["src/names.py"], trace=["paths_within"],
+)  # fmt: skip
+code, text, res, out = run([BUG, PLANT_MUT, DOCS_NEW], "--keep", repo=MUT_REPO)
+check("a run whose setups remove stale mutants still exits 0", code == 0, text)
+check("a revert that rewrites the lines two mutants target records exactly those two, in name order",
+      res["bug-calc"].get("setup_removed_mutants") == ["M001", "M003"], str(res["bug-calc"].get("setup_removed_mutants")))  # fmt: skip
+check("a plant that rewrites the line a mutant targets records exactly that mutant",
+      res["plant-mut"].get("setup_removed_mutants") == ["M002"], str(res["plant-mut"].get("setup_removed_mutants")))  # fmt: skip
+check("a case that touches no mutant's lines records none", res["docs-new"].get("setup_removed_mutants") == [], str(res["docs-new"].get("setup_removed_mutants")))
+check("the summary names the removed mutants under their case", "  bug-calc setup removed stale mutants: M001, M003" in text and "  plant-mut setup removed stale mutants: M002" in text, text)
+check("a case that removed none prints no such line", "docs-new setup removed" not in text, text)
+mut_kept = dict(re.findall(r"^\s*kept (\S+): (\S+)$", text, re.M))
+mut_origin = {cid: Path(path) / "origin.git" for cid, path in mut_kept.items()}
+
+
+def patches_in(cid):
+    return git("ls-tree", "-r", "--name-only", "main", "--", "mutants/patches", cwd=mut_origin[cid]).stdout.split()
+
+
+check("the revert's setup commit on the origin's main keeps the untouched patch and drops the stale two",
+      patches_in("bug-calc") == ["mutants/patches/M002.patch"], str(patches_in("bug-calc")))  # fmt: skip
+check("the plant's setup commit keeps the patches it left applicable and drops the stale one",
+      patches_in("plant-mut") == ["mutants/patches/M001.patch", "mutants/patches/M003.patch"], str(patches_in("plant-mut")))  # fmt: skip
+check("a case that rewrote nothing keeps every patch",
+      patches_in("docs-new") == ["mutants/patches/M001.patch", "mutants/patches/M002.patch", "mutants/patches/M003.patch"], str(patches_in("docs-new")))  # fmt: skip
+changes = sorted(git("diff", "--name-status", MUT_HEAD, "main", cwd=mut_origin["bug-calc"]).stdout.splitlines())
+check("the removals are in the one setup commit with the revert, no other file changes",
+      changes == ["D\tmutants/patches/M001.patch", "D\tmutants/patches/M003.patch", "M\tsrc/calc.py"]
+      and git("rev-list", "--count", f"{MUT_HEAD}..main", cwd=mut_origin["bug-calc"]).stdout.strip() == "1", str(changes))  # fmt: skip
+for path in mut_kept.values():
+    shutil.rmtree(path)
+
 # --- --validate: the oracle must fail on the setup and pass with the real fix ------
 V_OK = BUG
 V_GREEN = case("green-at-setup", kind="bug", source={"commit": C2, "revert_paths": ["src/calc.py"]}, oracle="true", final_state="blocked")
@@ -735,8 +793,8 @@ V_STALE_NO = case("stale-no-oracle", kind="bug", source={"commit": C3, "revert_p
 V_SKIP = DOCS_NEW
 
 
-def validate(rows, *extra):
-    argv = ["--repo", str(REPO_FX), "--cases", str(write_cases(rows)), "--validate", *extra]
+def validate(rows, *extra, repo=REPO_FX):
+    argv = ["--repo", str(repo), "--cases", str(write_cases(rows)), "--validate", *extra]
     return quiet(ev.main, argv)
 
 
@@ -750,6 +808,15 @@ check("validate: a commit case with no oracle still fails when its revert does n
 check("validate: a revert that does not apply is invalid", any(ln.startswith("stale: invalid: setup does not apply") for ln in lines), text)
 check("validate: a case with no source.commit is skipped, not valid", "docs-new: skipped: no source.commit" in lines, text)
 check("validate exits 1 when any case is invalid", code == 1)
+code, text, _ = validate([V_OK, V_NONE, V_SKIP], repo=MUT_REPO)
+lines = text.splitlines()
+check("validate: a bug case whose setup removes stale mutants is valid and names them",
+      "bug-calc: valid; setup removes stale mutants: M001, M003" in lines, text)  # fmt: skip
+check("validate: a commit case with no oracle also names the mutants its setup removes",
+      "no-oracle-commit: skipped: no expect.oracle; the setup applies; setup removes stale mutants: M001, M003" in lines, text)  # fmt: skip
+check("validate: a case with no source.commit says nothing about mutants", "docs-new: skipped: no source.commit" in lines, text)
+code, text, _ = validate([V_OK])
+check("validate: a case whose setup removes nothing prints plain valid", "bug-calc: valid" in text.splitlines(), text)
 code, text, _ = validate([V_OK, V_SKIP])
 check("validate exits 0 when every case is valid or skipped", code == 0 and "bug-calc: valid" in text.splitlines(), text)
 code, text, _ = validate([V_OK, V_GREEN], "--only", "bug-calc")

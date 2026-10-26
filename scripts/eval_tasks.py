@@ -7,6 +7,8 @@ temp directory, this script:
   1. clones the repository under test (`--repo`, at its HEAD) into a fixture with a bare `origin`
      of its own, so no real remote is ever contacted;
   2. applies the case's `source` (reverts a real fix, or plants a text edit), commits it and pushes main;
+     the same commit removes every `mutants/patches/M*.patch` the setup made stale, so the fixture's
+     base passes the suite apart from the case's own oracle (the result's `setup_removed_mutants`);
   3. writes `[loop]`, with the worker command, into the fixture's own harness.toml and leaves it
      uncommitted: the loop reads it there, while the task worktree, cut from the pushed commit, keeps
      the repository's harness.toml, whose tests pin `[loop]` and run in the verify stage;
@@ -24,7 +26,7 @@ the case's real fix, makes the minimal edit the case allows, or asks for context
 writes no transcript, so the checks that read one are reported as skipped, never as passed.
 
 `--validate` runs no worker: for each case with `source.commit` it checks the case itself, that the
-oracle fails on the broken setup and passes once the real fix is applied.
+oracle fails on the broken setup and passes once the real fix is applied, and lists the stale mutants its setup removes.
 
     python3 scripts/eval_tasks.py [--cases DIR] [--only ID ...] [--worker scripted|claude] [--model M]
                                   [--ci gate|pass] [--out DIR] [--keep] [--validate] [--repo PATH]
@@ -233,14 +235,38 @@ def commit_all(root: Path, message: str) -> str:
     return git("rev-parse", "HEAD", cwd=root).stdout.strip()
 
 
-def apply_source(root: Path, case: dict) -> str | None:
+def stale_mutants(root: Path) -> list:
+    """The ids of the `mutants/patches/M*.patch` files that do not apply to the fixture's working tree.
+
+    Judged as tests/test_runner.py judges "every mutant patch applies to HEAD": `git apply --check
+    --cached` against a throwaway index, here one holding the working tree, so the setup is not yet
+    committed when this runs.
+    """
+    patches = sorted((root / "mutants" / "patches").glob("M*.patch"))
+    if not patches:
+        return []
+    with tempfile.TemporaryDirectory(prefix="eval-index-") as index_dir:
+        env = {**clean_env(), "GIT_INDEX_FILE": str(Path(index_dir) / "index")}
+        for argv in (["read-tree", "HEAD"], ["add", "-A"]):
+            subprocess.run(["git", *argv], cwd=root, env=env, check=True, capture_output=True)
+        return [
+            p.stem
+            for p in patches
+            if subprocess.run(["git", "apply", "--check", "--cached", str(p)], cwd=root, env=env, capture_output=True).returncode
+        ]
+
+
+def apply_source(root: Path, case: dict) -> tuple:
     """Apply the case's `source` to the fixture and commit it as `eval: setup <id>`.
 
     A revert applies `git diff <commit>^ <commit> -- <revert_paths>` in reverse; a plant replaces a
-    text that must occur exactly once.
+    text that must occur exactly once. Either can rewrite lines a mutant patch targets, and a patch
+    that no longer applies fails the suite's own check, so the same commit removes such patches: the
+    fixture's base then passes the suite apart from the case's own oracle.
 
     Returns:
-        (str | None): the forward diff of a revert, the case's real fix, else None.
+        (tuple): the forward diff of a revert, the case's real fix, else None; and the ids of the
+        mutant patches the setup removed, in name order.
 
     Raises:
         Invalid: the setup cannot be applied.
@@ -267,8 +293,11 @@ def apply_source(root: Path, case: dict) -> str | None:
         if found != 1:
             raise Invalid(f"plant text found {found} times in {plant['path']}, need exactly 1")
         path.write_text(text.replace(plant["replace"], plant["with"]))
+    removed = stale_mutants(root)
+    if removed:
+        git("rm", "--quiet", "--", *[f"mutants/patches/{m}.patch" for m in removed], cwd=root)
     commit_all(root, f"eval: setup {case['id']}")
-    return fix
+    return fix, removed
 
 
 def loop_cap(case: dict, supported: bool) -> float | None:
@@ -720,7 +749,8 @@ def prepare(case: dict, repo: Path, work: Path, args, session: str) -> tuple:
 
     Returns:
         (tuple): the Fixture, the case directory (issue, logs, worker spec), the setup commit the
-        worker starts from, and the `max_usd` written (None when the loop has none).
+        worker starts from, the `max_usd` written (None when the loop has none), and the ids of the
+        stale mutant patches the setup removed.
 
     Raises:
         Invalid: the setup does not apply, or the case needs a cap the loop cannot apply.
@@ -728,7 +758,7 @@ def prepare(case: dict, repo: Path, work: Path, args, session: str) -> tuple:
     case_dir = work / "case"
     case_dir.mkdir()
     fx = make_fixture(repo, work)
-    fix = apply_source(fx.root, case)
+    fix, removed = apply_source(fx.root, case)
     setup = git("rev-parse", "HEAD", cwd=fx.root).stdout.strip()
     patch = None
     if fix:
@@ -745,7 +775,7 @@ def prepare(case: dict, repo: Path, work: Path, args, session: str) -> tuple:
     harness = fx.root / "harness.toml"
     old = harness.read_text() if harness.is_file() else ""
     harness.write_text(with_loop_config(old, loop_toml(command, cap)))
-    return fx, case_dir, setup, cap
+    return fx, case_dir, setup, cap, removed
 
 
 def loop_env(case: dict, fx: Fixture, case_dir: Path, ci: str) -> dict:
@@ -789,7 +819,7 @@ def execute(case: dict, repo: Path, work: Path, args) -> dict:
     from task_loop import parse_status
 
     session = str(uuid.uuid4())
-    fx, case_dir, setup, cap = prepare(case, repo, work, args, session)
+    fx, case_dir, setup, cap, removed = prepare(case, repo, work, args, session)
     timeout = case_timeout()
     code, output, timed_out = run_group(
         [sys.executable, str(SCRIPTS / "eval_tasks.py"), "--run-loop", str(fx.root)], loop_env(case, fx, case_dir, args.ci), timeout
@@ -814,7 +844,7 @@ def execute(case: dict, repo: Path, work: Path, args) -> dict:
         "final_state": outcome.state, "reason": outcome.reason, "status": outcome.status, "changed_paths": outcome.changed,
         "cost_usd": transcript.cost if transcript else None, "timed_out": timed_out, "loop_exit": code,
         "loop_output": output.strip()[-2000:], "checks": checks, "gh_calls": outcome.gh_calls, "setup_sha": setup,
-        "transcript": str(transcript_path) if transcript_path else None, "max_usd": cap,
+        "transcript": str(transcript_path) if transcript_path else None, "max_usd": cap, "setup_removed_mutants": removed,
     }  # fmt: skip
 
 
@@ -824,6 +854,7 @@ def run_case(case: dict, repo: Path, args) -> dict:
         "id": case["id"], "kind": case.get("kind"), "invalid": case_problem(case), "final_state": None, "reason": "",
         "status": None, "changed_paths": [], "cost_usd": None, "timed_out": False, "loop_exit": None, "loop_output": "",
         "checks": [], "gh_calls": [], "transcript": None, "worker": args.worker, "model": args.model, "ci": args.ci,
+        "setup_removed_mutants": [],
     }  # fmt: skip
     started = time.monotonic()
     work = Path(tempfile.mkdtemp(prefix=f"eval-{case['id']}-"))
@@ -858,6 +889,8 @@ def render(results: list) -> str:
             cells = " ".join(f"{c['name']}:{c['result']}" for c in r["checks"])
         cost = f"${r['cost_usd']:.2f}" if r["cost_usd"] is not None else "-"
         lines.append(f"{r['id']:<26} {state:<10} {cost:>7} {r['seconds']:>6.1f}  {cells}")
+        if r["setup_removed_mutants"]:
+            details.append(f"  {r['id']} setup removed stale mutants: {', '.join(r['setup_removed_mutants'])}")
         details += [f"  {r['id']} {c['name']} [{c['result']}]: {c['detail']}" for c in r["checks"] if c["result"] != "pass"]
         if r.get("kept_dir"):
             details.append(f"  kept {r['id']}: {r['kept_dir']}")
@@ -901,19 +934,20 @@ def validate_case(case: dict, repo: Path) -> tuple:
     try:
         fx = make_fixture(repo, work)
         try:
-            fix = apply_source(fx.root, case)
+            fix, removed = apply_source(fx.root, case)
         except Invalid as exc:
             return "invalid", str(exc)
+        notes = [f"setup removes stale mutants: {', '.join(removed)}"] if removed else []
         if not oracle:
             # A case judged by its run alone (a spend cap) has nothing to turn green; its setup still must apply.
-            return "skipped", "no expect.oracle; the setup applies"
+            return "skipped", "; ".join(["no expect.oracle; the setup applies", *notes])
         if oracle_result(oracle, fx.root)[0]:
             return "invalid", "the oracle passes at the setup commit"
         git("apply", "-", cwd=fx.root, input=fix)
         passed, why = oracle_result(oracle, fx.root)
         if not passed:
             return "invalid", f"the oracle still fails with the real fix applied: {why}"
-        return "valid", ""
+        return "valid", "; ".join(notes)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -949,7 +983,7 @@ def main(argv: list | None = None) -> int:
         for case in cases:
             kind, why = validate_case(case, repo)
             verdicts.append(kind)
-            print(f"{case['id']}: {kind}" + (f": {why}" if why else ""), flush=True)
+            print(f"{case['id']}: {kind}" + (f"{';' if kind == 'valid' else ':'} {why}" if why else ""), flush=True)
         return 1 if "invalid" in verdicts else 0
     out = args.out or default_out(repo)
     out.mkdir(parents=True, exist_ok=True)
