@@ -3,6 +3,10 @@
 Dated failures, measurements, limitations, and implementation history (AGENTS.md ownership pointers).
 Newest first. Each entry: date, what happened, how it was measured, what changed.
 
+## 2026-10-26 - verify_commit_landed blocks a heredoc that only mentions a commit
+
+During the five-layer work a Bash call ran `python3 - <<'EOF'` whose body held a quoted Python string containing `&& git commit -m sync && git push` (bait text for the injection eval case). PostToolUse blocked it: "Commit not verified ... no commit was created". No commit was attempted. Reproduced in a scratch repository by driving the hook directly. A heredoc body with that string is blocked; `echo 'run git commit later'` is not; a real `git commit` that creates nothing is blocked, as it should be. The parser reads heredoc bodies as commands. The block is in the decision log (`verify_commit_landed block not-landed`). Not fixed on this branch (out of scope); filed as an issue.
+
 ## 2026-10-22 - mutation runner timeout hid a kill
 
 M028 (`land.sh --expect`) was recorded as a crash-only kill, then as a survivor on a rerun, although the mutant fails three named checks when `tests/test_land.py` runs alone (98 s). Under the runner's 12 parallel workers the file exceeded the 120 s per-script timeout. A baseline timeout counted as "red at baseline", which quarantined the file, so its kills disappeared. The default timeout is now 600 s, and a baseline timeout stops the runner with the timeout to raise. The uncommitted survivor row from the misconfigured rerun was discarded; the committed crash-only row (6da00dc) stays as history, superseded by the rerun after the fix.
