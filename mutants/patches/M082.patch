@@ -4,11 +4,15 @@
 # behaviour: uv's warning lines are dropped from a failed verification's reason
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -196,7 +196,7 @@
+@@ -196,11 +196,7 @@ def failure_tail(done, n=300):
      that are not among them; `warning:` lines are dropped; the result is cut to its first `n`
      characters, which keeps the failing lines.
      """
--    lines = [x for x in f"{done.stdout}\n{done.stderr}".splitlines() if x.strip() and not TOOL_WARNING.match(x)]
+-    lines = [
+-        x
+-        for x in f"{done.stdout}\n{done.stderr}".splitlines()
+-        if x.strip() and not TOOL_WARNING.match(x)
+-    ]
 +    lines = [x for x in f"{done.stdout}\n{done.stderr}".splitlines() if x.strip()]
      failing = [x for x in lines if FAILING_LINE.search(x)][:8]
      last = [x for x in lines[-3:] if x not in failing]

@@ -4,12 +4,12 @@
 # behaviour: the fake gh merge refuses a --match-head-commit that is not the PR head
 --- a/scripts/eval_tasks.py
 +++ b/scripts/eval_tasks.py
-@@ -435,7 +435,7 @@
+@@ -603,7 +603,7 @@ def fake_gh(argv: list) -> int:
              print(f"tests: {verdict}")
              return 0 if verdict == "pass" else 1
          wanted = option(argv, "--match-head-commit")
 -        if wanted != sha:
 +        if not wanted:
-             print(f"fake gh: --match-head-commit {wanted} is not the head {sha}", file=sys.stderr)
-             return 1
-         merge_head(origin, head)
+             print(
+                 f"fake gh: --match-head-commit {wanted} is not the head {sha}",
+                 file=sys.stderr,

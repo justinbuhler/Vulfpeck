@@ -4,12 +4,12 @@
 # behaviour: a setup that made mutant patches stale removes them in its own commit
 --- a/scripts/eval_tasks.py
 +++ b/scripts/eval_tasks.py
-@@ -293,7 +293,7 @@
-         if found != 1:
-             raise Invalid(f"plant text found {found} times in {plant['path']}, need exactly 1")
+@@ -380,7 +380,7 @@ def apply_source(root: Path, case: dict) -> tuple:
+                 f"plant text found {found} times in {plant['path']}, need exactly 1"
+             )
          path.write_text(text.replace(plant["replace"], plant["with"]))
 -    removed = stale_mutants(root)
 +    removed = []
      if removed:
-         git("rm", "--quiet", "--", *[f"mutants/patches/{m}.patch" for m in removed], cwd=root)
-     commit_all(root, f"eval: setup {case['id']}")
+         git(
+             "rm",
