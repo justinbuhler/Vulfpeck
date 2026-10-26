@@ -1,0 +1,27 @@
+{"id": "pr-1", "labeller": "lead", "rationale": "mechanical version bump of a CI action; the required check runs it, so a break is loud but gates main", "tier": "Medium"}
+{"id": "pr-2", "labeller": "lead", "rationale": "mechanical version bump of a CI action in the required check", "tier": "Medium"}
+{"id": "pr-3", "labeller": "lead", "rationale": "provisioner process-group signalling: a wrong pid group means kill(-1) on the host", "tier": "High"}
+{"id": "pr-7", "labeller": "lead", "rationale": "test-only: pins a date so an existing check is deterministic; cannot change any decision", "tier": "Low"}
+{"id": "pr-8", "labeller": "lead", "rationale": "land.sh moves local main; this changes how a conflicted merge is handled", "tier": "High"}
+{"id": "pr-9", "labeller": "lead", "rationale": "verify_commit_landed is a gate deciding whether a commit is believed to exist", "tier": "High"}
+{"id": "pr-10", "labeller": "lead", "rationale": "rewrites the rules every runtime loads: stop rules, review tiers, authority", "tier": "High"}
+{"id": "pr-11", "labeller": "lead", "rationale": "vendors skills and agent definitions that steer review verdicts and commits for every runtime", "tier": "High"}
+{"id": "pr-12", "labeller": "lead", "rationale": "new code that sets which checks run before an agent reports (decision status)", "tier": "High"}
+{"id": "pr-16", "labeller": "lead", "rationale": "readonly_guard snapshot and lander input isolation: what a reviewer or worker may change", "tier": "High"}
+{"id": "pr-17", "labeller": "lead", "rationale": "adds the task loop, which merges pull requests to main with no person in the loop", "tier": "Critical"}
+{"id": "pr-18", "labeller": "lead", "rationale": "mutation runner, mapped-test gate and stop lint: what counts as a kill or a pass", "tier": "High"}
+{"id": "pr-19", "labeller": "lead", "rationale": "changes the condition under which the loop merges unattended", "tier": "Critical"}
+{"id": "pr-20", "labeller": "lead", "rationale": "decides when a worktree is idle and can be removed (destructive if wrong)", "tier": "High"}
+{"id": "pr-21", "labeller": "lead", "rationale": "lander reaps process groups on stop; a wrong group kills unrelated processes", "tier": "High"}
+{"id": "pr-22", "labeller": "lead", "rationale": "makes an lsof warning visible; no decision changes", "tier": "Medium"}
+{"id": "pr-23", "labeller": "lead", "rationale": "pins the base commit and defines the unattended-merge allowlist", "tier": "Critical"}
+{"id": "pr-24", "labeller": "lead", "rationale": "narrows the unattended-merge allowlist and checks the landed commit's parent", "tier": "Critical"}
+{"id": "pr-25", "labeller": "lead", "rationale": "adds a hold on landed commits outside the unattended-merge allowlist", "tier": "Critical"}
+{"id": "pr-26", "labeller": "lead", "rationale": "worker sandbox and a narrower unattended-merge allowlist: the loop's trust boundary", "tier": "Critical"}
+{"id": "pr-29", "labeller": "lead", "rationale": "names existing enqueue flags in agent instructions; no rule changes", "tier": "Low"}
+{"id": "pr-30", "labeller": "lead", "rationale": "integration merge carrying the loop, sandbox, allowlist and four new gates", "tier": "Critical"}
+{"id": "pr-31", "labeller": "lead", "rationale": "test-only additions pinning existing refusals", "tier": "Low"}
+{"id": "pr-33", "labeller": "lead", "rationale": "task loop deletes worker boxes that hold the model key; no merge condition changes", "tier": "High"}
+{"id": "pr-34", "labeller": "lead", "rationale": "rebuilds stale mutant patches and adds a test that they apply; mutation evidence, not a gate", "tier": "Medium"}
+{"id": "pr-35", "labeller": "lead", "rationale": "test fixture portability; no production code", "tier": "Low"}
+{"id": "pr-37", "labeller": "lead", "rationale": "provisioner decides whether a worktree is clean before reuse (data loss if wrong)", "tier": "High"}
