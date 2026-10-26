@@ -176,6 +176,7 @@ for path, want in {
     "mutants/patches/M001.patch": "High",
     "tests/test_jev.py": "High",
     "scripts/eval_consequence.py": "High",
+    "scripts/eval_tasks.py": "High",
     "evals/consequence/labels.jsonl": "High",
     "evals/tasks/cases/budget-cap.json": "High",
     ".github/workflows/tests.yml": "High",
