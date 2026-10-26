@@ -1062,50 +1062,59 @@ check(
     str(out),
 )
 
-# --- Jev advice is appended, advisory --------------------------------------------------------
+# --- the trip messages carry no Jev advice and the guard asks Jev nothing -----------------------
 spec = importlib.util.spec_from_file_location(
     "loop_guard_under_test", ROOT / ".claude" / "hooks" / "loop_guard.py"
 )
 lg = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(lg)
-import jev  # noqa: E402
+check("the guard has no Jev advice step", not hasattr(lg, "jev_advice"))
 
-original = jev.reassess
-jev.reassess = lambda ctx: {
-    "source": "jev",
-    "action": "escalate",
-    "reason": "needs the owner",
-    "attempts": ctx["attempts"],
-}
+# Jev enabled and cache-only: any exchange would add one `jev` line to the decision log.
+JEV_ENV = ("JEV_DISABLE", "JEV_OFFLINE", "JEV_RECORD_DIR")
+saved_env = {name: os.environ.get(name) for name in JEV_ENV}
+os.environ.update(JEV_DISABLE="", JEV_OFFLINE="1", JEV_RECORD_DIR=str(SCRATCH / "jev-records"))
+logged = len(EVENTS.read_text().splitlines()) if EVENTS.exists() else 0
 state = g.fresh_loop()
-entry = {"n": 3, "cmd": "make", "attempts": ["make -> E: x"] * 3}
+entry = {"n": 3, "cmd": "make", "attempts": ["make -> E: x", "make -> E: y", "make -> E: z"]}
 msg = lg.trip_fingerprint(state, "f" * 40, "make", entry, "s9")
+first = lg.trip_no_progress(state, "s9")
+second = lg.trip_no_progress(state, "s9")
+for name, value in saved_env.items():
+    if value is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = value
+new_events = [
+    json.loads(line)
+    for line in (EVENTS.read_text().splitlines() if EVENTS.exists() else [])[logged:]
+]
 check(
-    "Jev's recommendation is appended when Jev answered",
-    "recommends escalate: needs the owner" in msg and "cannot unblock" in msg,
+    "a trip asks Jev nothing: with Jev enabled the decision log gains no jev line",
+    [e for e in new_events if e["hook"] == "jev"] == [],
+    str(new_events),
+)
+check(
+    "the fingerprint trip is the rule quote, the three attempts and the way out, and nothing else",
+    msg
+    == "\n".join(
+        [
+            f"loop_guard: blocked. AGENTS.md: {g.RULE_FINGERPRINT}",
+            "The 3 attempts:\n  1. make -> E: x\n  2. make -> E: y\n  3. make -> E: z",
+            g.way_out("s9"),
+        ]
+    ),
     msg,
 )
-jev.reassess = lambda ctx: {
-    "source": "fallback",
-    "action": "change_approach",
-    "reason": None,
-}
 check(
-    "a fallback Jev answer adds nothing",
-    "Jev" not in lg.trip_fingerprint(g.fresh_loop(), "f" * 40, "make", entry, "s9"),
+    "the no-progress trips are their head and the way out, with no Jev line",
+    first.endswith(g.way_out("s9"))
+    and second.endswith(g.way_out("s9"))
+    and len(first.splitlines()) == 1 + len(g.way_out("s9").splitlines())
+    and len(second.splitlines()) == 1 + len(g.way_out("s9").splitlines())
+    and "Jev" not in first + second,
+    f"{first}\n{second}",
 )
-
-
-def boom(ctx):
-    raise RuntimeError("down")
-
-
-jev.reassess = boom
-check(
-    "a Jev failure adds nothing and does not raise",
-    "Jev" not in lg.trip_fingerprint(g.fresh_loop(), "f" * 40, "make", entry, "s9"),
-)
-jev.reassess = original
 
 
 # --- scope_guard ------------------------------------------------------------------------------

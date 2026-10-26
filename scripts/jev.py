@@ -34,7 +34,10 @@ Decisions, each returning a plain dict with `probabilities` and `source`:
 
     consequence(paths, description)    Low | Medium | High | Critical, floor-bound
     intent_alignment(request, proposed) facts plus a code-computed `drift`
-    reassess(context)                  continue | change_approach | escalate
+
+Callers: scripts/eval_consequence.py scores `consequence` against labelled pull requests, and
+scripts/scope.py asks `intent_alignment`, advisory. The test plan, the task loop and every gate
+decide without Jev (ADR 0021).
 
     python3 scripts/jev.py consequence --path scripts/gate.sh --description "..."
 """
@@ -64,7 +67,6 @@ MODEL = "jev-latest"
 MAX_REQUEST_TOKENS = 4500
 CHARS_PER_TOKEN = 4.0  # measured ~4.3 on JSON payloads; 4.0 errs high
 TIERS = ("Low", "Medium", "High", "Critical")
-ACTIONS = ("continue", "change_approach", "escalate")
 
 # docs/mutation-testing.md section 2, applied by consequence().
 ACCEPT_HIGH = 0.6  # High or Critical at or above this is accepted
@@ -73,8 +75,6 @@ ALTERS_MAX = 0.35  # ... alters-values at or below this, is accepted
 # intent_alignment() drift rule (ported from jev_intent_align.py).
 YES = 0.6
 CORE = 0.5
-# reassess(): a fingerprint seen this often is a stop (AGENTS.md "Stop and reassess").
-STOP_AT = 3
 
 _urlopen = urllib.request.urlopen  # the one HTTP seam; tests replace it
 
@@ -439,16 +439,6 @@ def _exchange(questions, state):
     return answers, key, None
 
 
-def _ask(questions, state):
-    """(answers, None) on success, (None, reason) when Jev is off or failed.
-
-    The two-value form scripts/task_loop.py calls; the decisions here use
-    `_exchange`, which also returns the key of the record.
-    """
-    answers, _, error = _exchange(questions, state)
-    return answers, error
-
-
 # --- consequence --------------------------------------------------------------
 RULES = (
     "Low: docs, formatting, mechanical. Medium: bounded deterministic logic. "
@@ -699,81 +689,6 @@ def intent_alignment(request, proposed):
     return out
 
 
-# --- reassess -------------------------------------------------------------------
-def reassess(context):
-    """Decide continue, change_approach or escalate for a loop that keeps failing.
-
-    The floor is code: a fingerprint seen fewer than 3 times continues, 3 or more
-    is at least change_approach (AGENTS.md "Stop and reassess"). Jev may raise the
-    action (to escalate), never lower it, and only at probability >= 0.6;
-    below that the result is `referred` at the floor.
-
-    Args:
-        context (dict): `fingerprint` (str), `attempts` (int >= 1, times this
-            fingerprint was seen), `last_errors` (list of one-line strings).
-
-    Returns:
-        (dict): action, floor, jev_action, probabilities, status, source, reason,
-        record (the exchange key, None for a fallback).
-    """
-    attempts = context.get("attempts")
-    if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 1:
-        raise ValueError("reassess: attempts must be an integer >= 1")
-    floor = ACTIONS[1] if attempts >= STOP_AT else ACTIONS[0]
-    out = {
-        "decision": "reassess",
-        "action": floor,
-        "floor": floor,
-        "jev_action": None,
-        "probabilities": {},
-        "status": "fallback",
-        "source": "fallback",
-        "reason": None,
-        "record": None,
-    }
-    state = {
-        "fingerprint": str(context.get("fingerprint", ""))[:120],
-        "attempts": attempts,
-        "last_errors": [
-            str(e).splitlines()[0][:200] if str(e) else ""
-            for e in context.get("last_errors", [])[-5:]
-        ],
-    }
-    questions = {
-        "action": _choice(
-            "A repair loop keeps hitting the same failure. What should the agent do next?",
-            {
-                "continue": "the failure is new or the last repair was materially different, so another attempt is sound",
-                "change_approach": "repeating the same repair will not work; a different approach is needed",
-                "escalate": "the cause is outside the agent's reach or needs a decision only the owner can make",
-            },
-        )
-    }
-    answers, record, error = _exchange(questions, state)
-    if answers is None:
-        out["reason"] = error
-        return out
-    probs = {a: float(answers["action"]["probabilities"].get(a, 0.0)) for a in ACTIONS}
-    jev_action, p = _top({"probabilities": probs})
-    out.update(
-        jev_action=jev_action,
-        probabilities=probs,
-        source="jev",
-        record=record,
-        action=ACTIONS[max(ACTIONS.index(floor), ACTIONS.index(jev_action))]
-        if p >= ACCEPT_HIGH
-        else floor,
-    )
-    if p >= ACCEPT_HIGH:
-        out["status"] = "accepted"
-    else:
-        out["status"] = "referred"
-        out["reason"] = (
-            f"Jev says {jev_action} at {p:.2f}, below {ACCEPT_HIGH}; kept the floor"
-        )
-    return out
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Ask Jev one typed question; prints JSON."
@@ -785,23 +700,11 @@ def main():
     a = sub.add_parser("intent")
     a.add_argument("--request", required=True)
     a.add_argument("--proposed", required=True)
-    r = sub.add_parser("reassess")
-    r.add_argument("--fingerprint", required=True)
-    r.add_argument("--attempts", type=int, required=True)
-    r.add_argument("--error", action="append", default=[])
     args = parser.parse_args()
     if args.cmd == "consequence":
         result = consequence(args.path, args.description)
-    elif args.cmd == "intent":
-        result = intent_alignment(args.request, args.proposed)
     else:
-        result = reassess(
-            {
-                "fingerprint": args.fingerprint,
-                "attempts": args.attempts,
-                "last_errors": args.error,
-            }
-        )
+        result = intent_alignment(args.request, args.proposed)
     print(json.dumps(result, indent=2))
     return 0
 

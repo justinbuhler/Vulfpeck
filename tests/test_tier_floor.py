@@ -161,8 +161,8 @@ check(
     str(sorted(shell_helpers())),
 )
 check(
-    "a lazy import inside a function counts: loop_guard reaches jev",
-    "scripts/jev.py" in walk([".claude/hooks/loop_guard.py"])[0],
+    "a lazy import inside a function counts: scope.py reaches jev through one",
+    "scripts/jev.py" in walk(["scripts/scope.py"])[0],
 )
 check(
     "imports are followed transitively: turn_guard reaches harness_events through guard_lib",
