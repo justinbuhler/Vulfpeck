@@ -4,27 +4,25 @@
 # behaviour: verification runs for every change, not only an allowlisted one
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -743,14 +743,15 @@
-             if outside
+@@ -814,13 +814,14 @@
              else None
          )
--        lint = base_lint(root, base_sha)
+         tier, checks, skipped = verification(root, wt, base_sha, paths)
 -        stage(
--            verify_argv(cfg, wt, lint),
+-            verify_argv(cfg, wt, checks),
 -            wt,
--            f"verify `{lint}`",
+-            f"verify the {tier} plan ({len(checks)} checks)",
 -            VERIFY_TIMEOUT,
 -            untrusted=root,
 -        )
 +        if review is None:
-+            lint = base_lint(root, base_sha)
 +            stage(
-+                verify_argv(cfg, wt, lint),
++                verify_argv(cfg, wt, checks),
 +                wt,
-+                f"verify `{lint}`",
++                f"verify the {tier} plan ({len(checks)} checks)",
 +                VERIFY_TIMEOUT,
 +                untrusted=root,
 +            )
-         move(root, n, "verified", f"needs-review: {review}" if review else status)
-         enqueue = next(
-             argv
+         verified = f"verified at {tier} (checks run: {len(checks)})"
+         if skipped:
+             verified += f"; skipped mutation (review owns it): {'; '.join(skipped)}"

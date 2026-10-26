@@ -1,0 +1,15 @@
+# mutant_id: M066
+# target: scripts/task_loop.py
+# operator: drop-flag
+# behaviour: a claude worker is started with --max-budget-usd from [loop] max_usd
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -460,7 +460,7 @@
+     sandboxed = cfg["sandbox"] == "container"
+     argv = shlex.split(cfg["workers"][cfg["runtime"]])
+     if cfg["runtime"] == "claude" and cfg["max_usd"] > 0:
+-        argv += ["--max-budget-usd", str(cfg["max_usd"])]
++        argv += []
+     argv.append(brief(issue, SANDBOX_MOUNT if sandboxed else wt, sandboxed, base_sha))
+     return sandbox_argv(cfg, wt, argv) if sandboxed else argv
+ 

@@ -4,12 +4,12 @@
 # behaviour: a task is provisioned with no gitignored input, so no host-only file reaches the box
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -465,7 +465,7 @@
+@@ -488,7 +488,7 @@
          ("timeline", root, ["gh", "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}",
                              "-F", f"number={n}", "-f", f"query={TIMELINE_QUERY}"]),
          ("fetch", root, ["git", "-C", root, "fetch", "origin", base]),
 -        ("provision", root, [*harness, "provision", "--task", task, "--baseline", base_sha, "--path", wt, "--no-inputs"]),
 +        ("provision", root, [*harness, "provision", "--task", task, "--baseline", base_sha, "--path", wt]),
-         ("worker", wt, worker_command(cfg, issue, wt)),
-         ("verify", wt, verify_argv(cfg, wt, f"<commands.lint from {base_sha}:harness.toml>")),
+         ("worker", wt, worker_command(cfg, issue, wt, base_sha)),
+         ("verify", wt, verify_argv(cfg, wt, [f"<floor-tier checks from {base_sha}:harness.toml>"])),
          ("enqueue", wt, [*harness, "enqueue", "--task", task, "-m", commit_message(issue),

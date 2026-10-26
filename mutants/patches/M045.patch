@@ -4,9 +4,9 @@
 # behaviour: verification runs in the container when the worker is sandboxed
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -357,7 +357,7 @@
-     """The verification command: in a box with no key when sandboxed, else on the host."""
-     command = ["bash", "-c", lint]
+@@ -371,7 +371,7 @@
+     script = "\n".join(["set -e", *(f"bash -c {shlex.quote(c)}" for c in checks)])
+     command = ["bash", "-c", script]
      return (
 -        container_argv(worktree, command) if cfg["sandbox"] == "container" else command
 +        command

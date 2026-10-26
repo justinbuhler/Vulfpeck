@@ -57,6 +57,7 @@ runtime = "claude"                      # key of [loop.workers] used for dispatc
 base = "main"                           # tasks branch from origin/<base>; their PRs target it
 priority = ["priority:high", "priority:medium", "priority:low"]   # most to least urgent; none = last
 sandbox = "container"                   # workers run in Apple `container` with only their worktree; "none" needs --unsandboxed
+max_usd = 10.0                          # dollar cap on one claude worker run (--max-budget-usd); 0 is off; codex and gemini have no cap flag
 
 [loop.workers]                          # the brief is appended as the last argument
 claude = "claude -p"

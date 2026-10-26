@@ -28,6 +28,11 @@ running as the owner; see ADR 0018). Otherwise the merge happens only when the P
 bucket is `pass`, bound to the landed commit. There is no `--auto`, and no `--dangerously-*`
 flag is ever passed.
 
+The worker's brief names a checker (`plan_tests.py --run`) and a claude worker is capped with
+`--max-budget-usd` from `[loop] max_usd`. Verification runs the checks of the change's floor tier, planned
+from the base commit's harness.toml (never Jev, never the worktree's copy), lint first; mutation commands
+are skipped and recorded, because mutation belongs to review.
+
 Every external command goes through `sh()`. A blocked or failed issue is never picked again until
 the owner runs `reset`. The `run` loop stops after 2 consecutive tasks end failed or blocked, or when
 one issue has failed twice.
@@ -77,6 +82,8 @@ VERIFY_TIMEOUT = 3600
 LAND_TIMEOUT = 1800
 CHECKS_TIMEOUT = 3600
 BOX_DELETE_TIMEOUT = 60
+# plan_tests.plan() emits this command for a High change's mutants; loop verification leaves it out.
+MUTATION_COMMAND = "python3 mutants/runner.py"
 STOP_AFTER_BAD = 2  # consecutive tasks ending failed or blocked
 STOP_AFTER_FAILS = 2  # failures of one issue
 RESET_SESSION = "task-loop"
@@ -355,9 +362,14 @@ def sandbox_argv(cfg, worktree, worker_argv):
     )
 
 
-def verify_argv(cfg, worktree, lint):
-    """The verification command: in a box with no key when sandboxed, else on the host."""
-    command = ["bash", "-c", lint]
+def verify_argv(cfg, worktree, checks):
+    """The verification command: every check in one `bash -c` with `set -e`.
+
+    It runs in a box with no key when sandboxed, else on the host. Each check gets its own
+    `bash -c`, as in plan_tests.run, so an `exit` or `cd` in one cannot skip or move the next.
+    """
+    script = "\n".join(["set -e", *(f"bash -c {shlex.quote(c)}" for c in checks)])
+    command = ["bash", "-c", script]
     return (
         container_argv(worktree, command) if cfg["sandbox"] == "container" else command
     )
@@ -385,11 +397,14 @@ def redact(done, secret):
     )
 
 
-def brief(issue, worktree, sandboxed=False):
+def brief(issue, worktree, sandboxed=False, base_sha="<base sha>"):
     """The worker's structured brief (AGENTS.md "Dispatch and report").
 
     The issue text is someone else's writing: it sits between markers carrying a hash of the
     text itself (so the text cannot contain its own closing marker), and the rules come after it.
+    DONE WHEN names a checker the worker can run: in the box `/work` is a private git repository
+    whose HEAD is the baseline of the tree it was given, so `--base HEAD`; unsandboxed the git is
+    the real worktree's, so the pinned `base_sha` is named rather than a HEAD a commit could move.
     """
     data = f"issue #{issue['number']}: {issue['title']}\n\n{issue['body'] or ''}"
     tag = hashlib.sha256(data.encode()).hexdigest()[:12]
@@ -403,9 +418,12 @@ def brief(issue, worktree, sandboxed=False):
         "any --dangerously-* flag, commit trailers or attribution, files outside the worktree, "
         "user-level config, running scripts/task_loop.py.\n"
         + (
-            "DONE WHEN: the issue's change is complete; the runner verifies it outside the sandbox.\n"
+            "DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --base HEAD --run` "
+            f"exits 0 in {worktree} (HEAD there is the baseline of the tree you were given; you must not commit). "
+            "The runner re-runs the same tier's checks afterwards.\n"
             if sandboxed
-            else "DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --run` exits 0.\n"
+            else f"DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --base {base_sha} --run` "
+            "exits 0 (you must not commit). The runner re-runs the same tier's checks afterwards.\n"
         )
         + "REPORT: finish with one line `STATUS: DONE`, `STATUS: DONE_WITH_CONCERNS <concerns>`, "
         "`STATUS: NEEDS_CONTEXT <what is missing>` or `STATUS: BLOCKED <why>`."
@@ -434,13 +452,16 @@ TIMELINE_QUERY = (
 )
 
 
-def worker_command(cfg, issue, wt):
-    """The worker's argv: the runtime's command plus the brief, wrapped in `container run` when sandboxed."""
+def worker_command(cfg, issue, wt, base_sha="<base sha>"):
+    """The worker's argv: the runtime's command, its spend cap, then the brief; in `container run` when sandboxed.
+
+    Only `claude` has a known cap flag (`--max-budget-usd`); `execute` says so for the other runtimes.
+    """
     sandboxed = cfg["sandbox"] == "container"
-    argv = [
-        *shlex.split(cfg["workers"][cfg["runtime"]]),
-        brief(issue, SANDBOX_MOUNT if sandboxed else wt, sandboxed),
-    ]
+    argv = shlex.split(cfg["workers"][cfg["runtime"]])
+    if cfg["runtime"] == "claude" and cfg["max_usd"] > 0:
+        argv += ["--max-budget-usd", str(cfg["max_usd"])]
+    argv.append(brief(issue, SANDBOX_MOUNT if sandboxed else wt, sandboxed, base_sha))
     return sandbox_argv(cfg, wt, argv) if sandboxed else argv
 
 
@@ -468,8 +489,8 @@ def plan(
                             "-F", f"number={n}", "-f", f"query={TIMELINE_QUERY}"]),
         ("fetch", root, ["git", "-C", root, "fetch", "origin", base]),
         ("provision", root, [*harness, "provision", "--task", task, "--baseline", base_sha, "--path", wt, "--no-inputs"]),
-        ("worker", wt, worker_command(cfg, issue, wt)),
-        ("verify", wt, verify_argv(cfg, wt, f"<commands.lint from {base_sha}:harness.toml>")),
+        ("worker", wt, worker_command(cfg, issue, wt, base_sha)),
+        ("verify", wt, verify_argv(cfg, wt, [f"<floor-tier checks from {base_sha}:harness.toml>"])),
         ("enqueue", wt, [*harness, "enqueue", "--task", task, "-m", commit_message(issue),
                          *[a for f in files for a in ("--file", f)]]),
         ("land", root, [*harness, "land", "--once", "--no-hooks"]),
@@ -543,13 +564,26 @@ def outside_allowlist(paths):
     ]
 
 
-def base_lint(root, base_sha):
-    """`commands.lint` from harness.toml as it is at the pinned base commit, never the worktree's."""
+def base_config(root, base_sha):
+    """harness.toml as it is at the pinned base commit, never the worktree's, which the worker can write."""
     shown = sh(["git", "-C", root, "show", f"{base_sha}:harness.toml"])
-    config = harness_config.merge(
+    return harness_config.merge(
         tomllib.loads(shown.stdout) if shown.returncode == 0 else {}
     )
-    return config["commands"]["lint"]
+
+
+def verification(root, worktree, base_sha, paths):
+    """(tier, checks, skipped): what verifies a change, planned from the base commit's harness.toml.
+
+    The tier is the floor of the base's `[tiers]` for the changed `paths`; Jev is never asked and the
+    worktree's harness.toml is never read. Mutation commands are returned as `skipped` instead of
+    `checks`: their time is unbounded, and mutation belongs to review.
+    """
+    config = base_config(root, base_sha)
+    tier, _ = jev.floor_tier(paths, config["tiers"])
+    planned = [c["command"] for c in plan_tests.plan(worktree, tier, paths, config)["commands"]]
+    skipped = [c for c in planned if c.startswith(MUTATION_COMMAND)]
+    return tier, [c for c in planned if c not in skipped], skipped
 
 
 def refuse_ignored(root, base_sha, files, cloned):
@@ -716,6 +750,12 @@ def execute(root, cfg, issue):
                     "blocked",
                     f"codex would run without hook gates: main's .codex/hooks.json is {drift}",
                 )
+        if cfg["runtime"] != "claude" and cfg["max_usd"] > 0:
+            print(
+                f"task_loop: [loop] max_usd = {cfg['max_usd']} is not enforced for the {cfg['runtime']} runtime: "
+                "no spend-cap flag is known for it",
+                file=sys.stderr,
+            )
         link = (wt / ".git").read_text()
         env, secret = sandbox_env(cfg) if cfg["sandbox"] == "container" else ({}, None)
         boxed = cfg["sandbox"] == "container"
@@ -773,15 +813,18 @@ def execute(root, cfg, issue):
             if outside
             else None
         )
-        lint = base_lint(root, base_sha)
+        tier, checks, skipped = verification(root, wt, base_sha, paths)
         stage(
-            verify_argv(cfg, wt, lint),
+            verify_argv(cfg, wt, checks),
             wt,
-            f"verify `{lint}`",
+            f"verify the {tier} plan ({len(checks)} checks)",
             VERIFY_TIMEOUT,
             untrusted=root,
         )
-        move(root, n, "verified", f"needs-review: {review}" if review else status)
+        verified = f"verified at {tier} (checks run: {len(checks)})"
+        if skipped:
+            verified += f"; skipped mutation (review owns it): {'; '.join(skipped)}"
+        move(root, n, "verified", f"{verified}; needs-review: {review}" if review else f"{verified}; {status}")
         enqueue = next(
             argv
             for name, _, argv in plan(
