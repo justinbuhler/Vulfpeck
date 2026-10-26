@@ -1,0 +1,15 @@
+# mutant_id: M094
+# target: .claude/harness/agent_harness.py
+# operator: widen-condition
+# behaviour: a processing claim reads live whenever any lander holds the lock, whoever owns the claim
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -1090,7 +1090,7 @@ def classify(manifest, ledger, queued, processing, holder):
+     waiting = [q for q in queued if q["task"] == task]
+     claimed = [owner for request, owner in processing if request["task"] == task]
+     # A claim is live only while the lander that wrote it still holds the lock.
+-    stale_claims = [o for o in claimed if o is None or str(o["pid"]) != holder]
++    stale_claims = claimed if holder is None else []
+ 
+     if claimed:
+         pids = ", ".join(

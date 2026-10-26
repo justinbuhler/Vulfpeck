@@ -1,0 +1,15 @@
+# mutant_id: M091
+# target: .claude/harness/agent_harness.py
+# operator: drop-check
+# behaviour: acknowledge skips the owner-token check
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -705,7 +705,7 @@ def acknowledge(root, claimed, token):
+     """Move a finished request to `done/`, but only if this lander still owns it."""
+     with meta_lock(root):
+         owner = json.loads(owner_path(claimed).read_text())
+-        if owner["token"] != token:
++        if False:
+             die(f"{claimed.name} is owned by another lander (pid {owner['pid']})")
+         # Owner record first: an interruption then leaves a visible request, not
+         # an owner record with no request.

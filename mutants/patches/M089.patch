@@ -1,0 +1,16 @@
+# mutant_id: M089
+# target: .claude/harness/agent_harness.py
+# operator: invert-lock-order
+# behaviour: cmd_land takes meta_lock before the lander lock and holds it until the lander lock is held
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -996,7 +996,8 @@ def land_one(root, request_path, timeout, lock_tries=LOCK_TRIES, no_hooks=False)
+ def cmd_land(args):
+     """Consume the queue as the single lander, one commit at a time."""
+     root = state_root()
+-    lock_fd = acquire_lander_lock(root)
++    with meta_lock(root):
++        lock_fd = acquire_lander_lock(root)
+     token = secrets.token_hex(8)
+ 
+     def shutdown(signum, _frame):

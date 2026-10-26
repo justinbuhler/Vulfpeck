@@ -1,0 +1,14 @@
+# mutant_id: M084
+# target: .claude/harness/agent_harness.py
+# operator: add-unlink
+# behaviour: cmd_land finally unlinks lander.lock after closing the descriptor
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -1051,6 +1051,7 @@ def cmd_land(args):
+         for sig, handler in previous_handlers.items():
+             signal.signal(sig, handler)
+         os.close(lock_fd)
++        (root / "lander.lock").unlink()
+ 
+     print(f"{landed} landed, {failed} failed")
+     # The process exit code carries the outcome. Nothing is echoed after this.

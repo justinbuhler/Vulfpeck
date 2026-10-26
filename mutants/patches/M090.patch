@@ -1,0 +1,17 @@
+# mutant_id: M090
+# target: .claude/harness/agent_harness.py
+# operator: drop-check
+# behaviour: land_one no longer compares the request generation with the manifest's
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -854,9 +854,7 @@ def land_one(root, request_path, timeout, lock_tries=LOCK_TRIES, no_hooks=False)
+                 f"request {field} {request.get(field)!r} does not match the task "
+                 f"manifest's {manifest.get(field)!r}"
+             )
+-    if request.get("generation") is None or request["generation"] != manifest.get(
+-        "generation"
+-    ):
++    if False:
+         return fail(
+             f"request generation {request.get('generation')!r} does not match the "
+             f"task manifest's {manifest.get('generation')!r}"

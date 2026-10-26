@@ -1,0 +1,31 @@
+# mutant_id: M086
+# target: .claude/harness/agent_harness.py
+# operator: leak-fd
+# behaviour: the lander lock fd is passed into the gate subprocess via pass_fds
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -498,6 +498,7 @@ def resolve_gate(worktree):
+ # to write to the repository. Each gated command therefore gets its own process
+ # group, so the whole tree can be signalled at once.
+ _child = None
++_lock_fd = None
+ 
+ 
+ def _group_gone(pgid):
+@@ -587,6 +588,7 @@ def run_in_group(argv, timeout):
+         text=True,
+         env=clean_env(),
+         start_new_session=True,
++        pass_fds=(_lock_fd,) if _lock_fd else (),
+     )
+     # start_new_session makes the child its own group leader. getpgid() would say
+     # the same, except that on macOS it raises ESRCH for a child that has already
+@@ -648,6 +650,8 @@ def acquire_lander_lock(root):
+         )
+     os.ftruncate(fd, 0)
+     os.pwrite(fd, f"{os.getpid()}\n".encode(), 0)
++    global _lock_fd
++    _lock_fd = fd
+     return fd
+ 
+ 

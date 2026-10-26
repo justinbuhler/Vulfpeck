@@ -1,0 +1,15 @@
+# mutant_id: M085
+# target: .claude/harness/agent_harness.py
+# operator: truncate-early
+# behaviour: acquire_lander_lock opens with O_TRUNC, wiping a live holder's pid before the lock is tried
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -636,7 +636,7 @@ def acquire_lander_lock(root):
+         (int): the descriptor holding the lock; closing it releases the lock.
+     """
+     lock = root / "lander.lock"
+-    fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o644)
++    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o644)
+     try:
+         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+     except BlockingIOError:

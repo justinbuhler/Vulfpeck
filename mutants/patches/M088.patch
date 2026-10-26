@@ -1,0 +1,20 @@
+# mutant_id: M088
+# target: .claude/harness/agent_harness.py
+# operator: widen-lock-scope
+# behaviour: cmd_land holds meta_lock across land_one
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -1030,9 +1030,10 @@ def cmd_land(args):
+                     break
+                 time.sleep(args.poll)
+                 continue
+-            record = land_one(
+-                root, request_path, args.timeout, args.lock_tries, args.no_hooks
+-            )
++            with meta_lock(root):
++                record = land_one(
++                    root, request_path, args.timeout, args.lock_tries, args.no_hooks
++                )
+             acknowledge(root, request_path, token)
+             if record["status"] == "LANDED":
+                 landed += 1

@@ -1,0 +1,15 @@
+# mutant_id: M083
+# target: .claude/harness/agent_harness.py
+# operator: swap-lock-mode
+# behaviour: acquire_lander_lock takes a shared flock, so two landers both hold it
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -638,7 +638,7 @@ def acquire_lander_lock(root):
+     lock = root / "lander.lock"
+     fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o644)
+     try:
+-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
++        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+     except BlockingIOError:
+         holder = os.pread(fd, 32, 0).decode(errors="replace").strip()
+         os.close(fd)

@@ -1,0 +1,15 @@
+# mutant_id: M087
+# target: .claude/harness/agent_harness.py
+# operator: ignore-probe
+# behaviour: lander_holder reports a holder whenever lander.lock exists, ignoring the flock probe
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -658,7 +658,7 @@ def lander_holder(root):
+     except FileNotFoundError:
+         return None
+     try:
+-        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
++        raise BlockingIOError
+     except BlockingIOError:
+         return os.pread(fd, 32, 0).decode(errors="replace").strip() or "unknown"
+     finally:

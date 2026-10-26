@@ -1,0 +1,50 @@
+# mutant_id: M093
+# target: .claude/harness/agent_harness.py
+# operator: drop-lock-reread
+# behaviour: enqueue writes the request outside meta_lock and skips the manifest re-read
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -419,31 +419,18 @@ def cmd_enqueue(args):
+         die("a commit request must name at least one --file")
+ 
+     name = f"{time.time_ns()}-{args.task}-{secrets.token_hex(4)}.json"
+-    with meta_lock(root):
+-        # Re-read under the lock: the task may have been re-provisioned or removed
+-        # while the paths above were being checked.
+-        current = load_manifest(root, args.task)
+-        for field in ("worktree", "branch", "baseline_sha"):
+-            if current.get(field) != manifest.get(field):
+-                die(f"task {args.task!r} manifest {field} changed while queueing")
+-        if "generation" not in current:
+-            die(
+-                f"task {args.task!r} manifest has no generation (provisioned before "
+-                "R1); run the main checkout's harness, or remove the task's "
+-                "manifest and worktree and provision it again"
+-            )
+-        request = {
+-            "task": args.task,
+-            "message": args.message,
+-            "files": files,
+-            "worktree": str(worktree),
+-            "baseline_sha": current["baseline_sha"],
+-            "branch": current["branch"],
+-            "generation": current["generation"],
+-            "queued": now(),
+-            "queued_by_pid": os.getpid(),
+-        }
+-        write_json(root / "queue" / name, request)
++    request = {
++        "task": args.task,
++        "message": args.message,
++        "files": files,
++        "worktree": str(worktree),
++        "baseline_sha": manifest["baseline_sha"],
++        "branch": manifest["branch"],
++        "generation": manifest["generation"],
++        "queued": now(),
++        "queued_by_pid": os.getpid(),
++    }
++    write_json(root / "queue" / name, request)
+     print(f"queued {name}")
+     return 0
+ 

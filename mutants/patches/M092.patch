@@ -1,0 +1,15 @@
+# mutant_id: M092
+# target: .claude/harness/agent_harness.py
+# operator: copy-not-move
+# behaviour: claim_next copies the request into processing/ and leaves it in queue/
+--- a/.claude/harness/agent_harness.py
++++ b/.claude/harness/agent_harness.py
+@@ -689,7 +689,7 @@ def claim_next(root, token):
+         if not pending:
+             return None
+         claimed = root / "processing" / pending[0].name
+-        os.replace(pending[0], claimed)
++        claimed.write_text(pending[0].read_text())
+         write_json(
+             owner_path(claimed),
+             {"pid": os.getpid(), "token": token, "claimed": now()},
