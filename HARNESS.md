@@ -107,6 +107,19 @@ It fails unless each module floors at High. A new helper that a gate imports mus
 
 `evals/consequence/` holds the 27 merged pull requests up to #37 as planner inputs, with tier labels and a rationale per labeller.
 
+`scripts/eval_consequence.py` scores the floor, and Jev where it has recorded answers, against the `gold` labeller. It reports:
+- **under**: cases where gold is above the floor. A raise-only Jev can help only there.
+- **over**: cases where the floor is above gold. Those are extra checks Jev cannot remove.
+- agreement between every other pair of labellers, as Cohen's kappa.
+
+`--check` exits 1 on any under case, so the labels are a regression gate for `[tiers]`. `evals/**` is High.
+
+Jev exchanges are recorded:
+- Each request is stored as `<sha256 of the canonical body>.json` in `JEV_RECORD_DIR`, or else `<git common dir>/harness/jev/`. A record holds the redacted request and the answers, never the key or a header.
+- A payload whose record parses and validates is replayed, never sent again.
+- With `JEV_OFFLINE=1` the cache is the only source: a miss falls back to the floor and never reads as "no".
+- Each exchange adds one `jev` line (`call`, `hit`, `error` or `offline-miss`) to the decision log.
+
 ## Adopting it in another repository
 
 Requirements: git, bash, Python 3.11+ and uv for the harness's own scripts, `rsync`, `lsof`, and `flock` or `lockf`. macOS or Linux.

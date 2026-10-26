@@ -14,7 +14,15 @@ Every script that asks Jev, TypeSafe's judgment model, follows these rules. They
 - **Typed questions.** Jev answers a **Choice** (pick one option, with a probability for each) or a **Noul** (a yes/no probability). It never writes free text that code then parses.
 - **Code decides.** Code builds the shortlist, does the arithmetic and applies fixed thresholds. Jev only judges. It never sums scores, sets a tier or approves anything.
 - **No live call by default.** A script contacts Jev only with `--collect`. The gate, CI and the lander never pass that flag, so they rebuild from recorded answers and stay offline.
-- **Recorded and replayable.** Each request is stored under the SHA-256 of its payload, and a payload that already has an answer is never sent again. `--replay FILE` re-applies the policy to recorded answers. A failed call is `ERROR` ("unknown"), never "no".
+- **Recorded and replayable.** *In place for `scripts/jev.py`.*
+  - Each request body is canonical JSON, stored as `<sha256>.json` in `JEV_RECORD_DIR`, or else `<git common dir>/harness/jev/`.
+  - A record holds the redacted request and the answers, never the key or a header.
+  - A payload whose record parses and validates is replayed and never sent again. Replay re-applies the current policy to the recorded answers.
+  - `JEV_OFFLINE=1` turns a miss into an error the caller falls back on.
+  - A failed call is `ERROR` ("unknown"), never "no".
+  - `scripts/eval_consequence.py` replays the labelled consequence cases offline.
+  - `jev.py` sends the alias `jev-latest`, so a replay reproduces the recorded answer, not what the alias would answer today.
+  - The standalone `--replay FILE` command is still to build.
 - **No authority.** Every output is a proposal, reading or observation. Only a person, or an approved review, turns it into a decision.
 
 These are the same properties the rest of the harness demands of a gate: deterministic, replayable, and never deriving its verdict from the thing it checks (Rule 11). A live model call inside `./scripts/gate.sh` would break all three, so none is allowed there.
