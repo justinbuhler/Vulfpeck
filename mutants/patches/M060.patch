@@ -1,0 +1,15 @@
+# mutant_id: M060
+# target: scripts/harness_events.py
+# operator: widen-set
+# behaviour: --weeks N opens the window N-1 weeks before the current ISO week
+--- a/scripts/harness_events.py
++++ b/scripts/harness_events.py
+@@ -238,7 +238,7 @@
+         monday = (now - timedelta(days=now.weekday())).replace(
+             hour=0, minute=0, second=0, microsecond=0
+         )
+-        since = monday - timedelta(weeks=weeks - 1)
++        since = monday - timedelta(weeks=weeks)
+     records, malformed, files = read_records(log)
+     kept = [r for r in records if since is None or r[0] >= since]
+     cells = {}

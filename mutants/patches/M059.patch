@@ -1,0 +1,15 @@
+# mutant_id: M059
+# target: scripts/harness_events.py
+# operator: narrow-set
+# behaviour: a block decision counts as a gate firing, like a deny
+--- a/scripts/harness_events.py
++++ b/scripts/harness_events.py
+@@ -132,7 +132,7 @@
+         return False
+ 
+ 
+-FIRING = frozenset({"deny", "block"})
++FIRING = frozenset({"deny"})
+ # A registered command names its script as `.claude/hooks/<stem>.py` or
+ # `scripts/<stem>.py`; the crash-closing wrapper repeats the bare file name, which
+ # has no directory and so does not match.

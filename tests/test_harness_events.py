@@ -7,9 +7,11 @@ HARNESS_EVENTS_LOG; nothing here touches the real record in .git/harness/.
 import json
 import multiprocessing
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -370,6 +372,434 @@ done = subprocess.run(
 )
 check("record CLI exits 0 even when it cannot write", done.returncode == 0, done.stderr)
 check("record CLI prints nothing to stdout", done.stdout == "", done.stdout)
+
+# --- report: fire rates over the live log and its .1 backup ----------------------
+# Fixtures carry literal timestamps so every expected count and week label below
+# is a literal too. 2026-03-02 is a Monday: ISO 2026-W10 runs 03-02..03-08 and
+# 2026-W11 runs 03-09..03-15.
+SCRIPT = ROOT / "scripts" / "harness_events.py"
+NO_PYTHONPATH = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+
+
+def event_line(ts, hook, decision):
+    return json.dumps(
+        {
+            "v": 1,
+            "ts": ts,
+            "hook": hook,
+            "decision": decision,
+            "reason": "",
+            "subject": "",
+            "session": "",
+            "agent_id": "",
+            "agent_type": "",
+        },
+        sort_keys=True,
+    )
+
+
+def registration(name, kind, script):
+    # The real registrations wrap the script path in a crash-closing shell
+    # command; the wrapper names the script a second time without a directory.
+    stem = script.rsplit("/", 1)[1]
+    return (
+        "[[hook]]\n"
+        f'name = "{name}"\nevent = "PreToolUse"\nkind = "{kind}"\n'
+        "command = '''python3 \"${CLAUDE_PROJECT_DIR}/" + script + '" || { rc=$?; '
+        'echo "' + stem + " crashed (rc=$rc); failing closed\" >&2; exit 2; }'''\n\n"
+    )
+
+
+FIXTURE_TOML = "".join(
+    registration(*args)
+    for args in (
+        ("loop_guard_PreToolUse", "gate", ".claude/hooks/loop_guard.py"),
+        ("loop_guard_PostToolUse", "gate", ".claude/hooks/loop_guard.py"),
+        ("model_router_PreToolUse", "gate", ".claude/hooks/model_router.py"),
+        (
+            "require_agent_model_PreToolUse",
+            "gate",
+            ".claude/hooks/require_agent_model.py",
+        ),
+        (
+            "verify_commit_landed_PreToolUse",
+            "advisory",
+            ".claude/hooks/verify_commit_landed.py",
+        ),
+        (
+            "verify_commit_landed_PostToolUse",
+            "gate",
+            ".claude/hooks/verify_commit_landed.py",
+        ),
+        # Named for nothing the log knows: only its command ties it to turn_guard.
+        ("renamed_gate_Stop", "gate", ".claude/hooks/turn_guard.py"),
+        ("budget_guard_PreToolUse", "gate", ".claude/hooks/budget_guard.py"),
+        ("queue_guard_PreToolUse", "advisory", ".claude/hooks/queue_guard.py"),
+        ("readonly_guard_SubagentStart", "advisory", ".claude/hooks/readonly_guard.py"),
+        ("harness_doctor_SessionStart", "advisory", "scripts/harness_doctor.py"),
+    )
+)
+
+# 8 valid records, all in 2026-W11, and 2 malformed lines.
+LIVE_LINES = [
+    event_line("2026-03-09T00:00:00+00:00", "loop_guard", "block"),
+    event_line("2026-03-10T10:00:00+00:00", "loop_guard", "block"),
+    event_line("2026-03-10T11:00:00+00:00", "model_router", "allow"),
+    event_line("2026-03-11T09:00:00+00:00", "model_router", "deny"),
+    event_line("2026-03-11T09:05:00+00:00", "land", "landed"),
+    event_line("2026-03-12T09:00:00+00:00", "turn_guard", "block"),
+    event_line("2026-03-12T09:30:00+00:00", "queue_guard", "allow"),
+    event_line("2026-03-12T10:00:00+00:00", "verify_commit_landed", "pass"),
+    '{"v": 1, "ts": "2026-03-12T10:30:00+00:00", "hook": "loop_gu',
+    "[1, 2]",
+]
+# 5 valid records, all in 2026-W10, and 1 malformed line (no ts).
+BACKUP_LINES = [
+    event_line("2026-03-02T08:00:00+00:00", "loop_guard", "block"),
+    event_line("2026-03-08T23:00:00+00:00", "model_router", "allow"),
+    event_line("2026-03-05T08:00:00+00:00", "task_loop", "reset"),
+    event_line("2026-03-04T08:00:00+00:00", "require_agent_model", "allow"),
+    event_line("2026-03-06T08:00:00+00:00", "verify_commit_landed", "block"),
+    '{"hook": "loop_guard", "decision": "block"}',
+]
+
+
+def make_project(name, toml):
+    """A repository-shaped folder: its own scripts/ copy decides where harness.toml is."""
+    proj = SCRATCH / name
+    (proj / "scripts").mkdir(parents=True)
+    for module in ("harness_events.py", "paths.py"):
+        shutil.copy2(ROOT / "scripts" / module, proj / "scripts")
+    if toml == "DIR":
+        (proj / "harness.toml").mkdir()
+    elif toml is not None:
+        (proj / "harness.toml").write_text(toml)
+    return proj
+
+
+def write_lines(path, lines):
+    path.write_text("".join(line + "\n" for line in lines))
+
+
+def run_report(proj, log, *args):
+    # HARNESS_EVENTS_LOG stays set to an unrelated file: --log must win over it.
+    return subprocess.run(
+        [sys.executable, str(proj / "scripts" / "harness_events.py"), "report"]
+        + ["--log", str(log)]
+        + list(args),
+        capture_output=True,
+        text=True,
+        env=NO_PYTHONPATH,
+        cwd=SCRATCH,
+    )
+
+
+def section(text, header):
+    """The indented lines under one `header:` line of the text report."""
+    lines = text.splitlines()
+    out = []
+    for line in lines[lines.index(header) + 1 :]:
+        if not line.startswith("  "):
+            break
+        out.append(line.strip())
+    return out
+
+
+def table(text):
+    """The rows of the counts table as token lists, header first."""
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("hook "))
+    rows = []
+    for line in lines[start:]:
+        if not line.strip():
+            break
+        rows.append(line.split())
+    return rows
+
+
+proj = make_project("report", FIXTURE_TOML)
+log = proj / "events.jsonl"
+write_lines(log, LIVE_LINES)
+write_lines(log.with_name("events.jsonl.1"), BACKUP_LINES)
+before = {p.name: p.read_bytes() for p in proj.iterdir() if p.is_file()}
+done = run_report(proj, log)
+after = {p.name: p.read_bytes() for p in proj.iterdir() if p.is_file()}
+text = done.stdout
+check("report exits 0 on a readable log", done.returncode == 0, done.stderr)
+check(
+    "report never writes, rotates or locks the log",
+    before == after
+    and sorted(p.name for p in proj.iterdir())
+    == ["events.jsonl", "events.jsonl.1", "harness.toml", "scripts"],
+    str(sorted(p.name for p in proj.iterdir())),
+)
+check(
+    "report counts per hook and decision per ISO week, from the live log and the .1 backup",
+    table(text)
+    == [
+        ["hook", "decision", "2026-W10", "2026-W11", "total"],
+        ["land", "landed", "-", "1", "1"],
+        ["loop_guard", "block", "1", "2", "3"],
+        ["model_router", "allow", "1", "1", "2"],
+        ["model_router", "deny", "-", "1", "1"],
+        ["queue_guard", "allow", "-", "1", "1"],
+        ["require_agent_model", "allow", "1", "-", "1"],
+        ["task_loop", "reset", "1", "-", "1"],
+        ["turn_guard", "block", "-", "1", "1"],
+        ["verify_commit_landed", "block", "1", "-", "1"],
+        ["verify_commit_landed", "pass", "-", "1", "1"],
+    ],
+    text,
+)
+check(
+    "report states how many records it counted and how many lines were malformed",
+    "records in window: 13; malformed lines: 3" in text.splitlines(),
+    text,
+)
+check(
+    "report names the files it read, backup first",
+    f"read: {log}.1, {log}" in text.splitlines(),
+    text,
+)
+check(
+    "report lists registered hooks with no record, mapped from the command path",
+    section(text, "registered, no records in window:")
+    == [
+        "budget_guard_PreToolUse  (budget_guard)",
+        "readonly_guard_SubagentStart  (readonly_guard)",
+        "harness_doctor_SessionStart  (harness_doctor)",
+    ],
+    text,
+)
+check(
+    "report lists a gate that has records but no deny or block, and one with no records",
+    section(text, "registered gates with no deny or block in window:")
+    == [
+        "require_agent_model_PreToolUse  (require_agent_model)",
+        "budget_guard_PreToolUse  (budget_guard)",
+    ],
+    text,
+)
+
+done = run_report(proj, log, "--json")
+data = json.loads(done.stdout)
+check(
+    "report --json prints one object with a stable key order",
+    list(data)
+    == ["files", "malformed", "records", "registered", "rows", "weeks", "window"],
+    done.stdout,
+)
+check(
+    "report --json carries the same counts as the text report",
+    (data["records"], data["malformed"], data["weeks"])
+    == (13, 3, ["2026-W10", "2026-W11"])
+    and data["rows"][1]
+    == {
+        "hook": "loop_guard",
+        "decision": "block",
+        "weeks": {"2026-W10": 1, "2026-W11": 2},
+        "total": 3,
+    },
+    done.stdout,
+)
+check(
+    "report --json maps a registration to the script its command names, not its name",
+    {r["name"]: r["script"] for r in data["registered"]["no_records"]}
+    == {
+        "budget_guard_PreToolUse": "budget_guard",
+        "readonly_guard_SubagentStart": "readonly_guard",
+        "harness_doctor_SessionStart": "harness_doctor",
+    }
+    and "renamed_gate_Stop"
+    not in [r["name"] for r in data["registered"]["gates_without_deny_or_block"]],
+    done.stdout,
+)
+
+# The window needs a fixed clock, so it is driven through the function the CLI calls.
+assert hasattr(harness_events, "report_data"), "report_data is the seam under test"
+noon = datetime(2026, 3, 12, 12, 0, tzinfo=timezone.utc)  # a Thursday in 2026-W11
+week = harness_events.report_data(log, proj / "harness.toml", weeks=1, now=noon)
+check(
+    "report --weeks 1 opens at Monday 00:00 UTC of the current ISO week",
+    (week["records"], week["weeks"], week["window"])
+    == (
+        8,
+        ["2026-W11"],
+        {"weeks": 1, "since": "2026-03-09T00:00:00+00:00"},
+    ),
+    str(week),
+)
+check(
+    "report --weeks keeps a record at the opening instant and drops one an hour before it",
+    {(r["hook"], r["decision"]): r["total"] for r in week["rows"]}
+    == {
+        ("land", "landed"): 1,
+        ("loop_guard", "block"): 2,
+        ("model_router", "allow"): 1,
+        ("model_router", "deny"): 1,
+        ("queue_guard", "allow"): 1,
+        ("turn_guard", "block"): 1,
+        ("verify_commit_landed", "pass"): 1,
+    },
+    str(week["rows"]),
+)
+check(
+    "report --weeks 2 reaches back to Monday of the previous ISO week",
+    harness_events.report_data(log, proj / "harness.toml", weeks=2, now=noon)["records"]
+    == 13,
+)
+check(
+    "the text report says where a --weeks window opens",
+    "decision log: --weeks 1, since 2026-03-09T00:00:00+00:00"
+    in harness_events.render_report(week).splitlines(),
+)
+check(
+    "report with no --weeks has no window",
+    harness_events.report_data(log, proj / "harness.toml", now=noon)["window"]
+    == {"weeks": None, "since": None},
+)
+check(
+    "a window changes the registered lists: a gate whose only block is older is listed",
+    [r["name"] for r in week["registered"]["gates_without_deny_or_block"]]
+    == [
+        "require_agent_model_PreToolUse",
+        "verify_commit_landed_PostToolUse",
+        "budget_guard_PreToolUse",
+    ]
+    and [r["name"] for r in week["registered"]["no_records"]]
+    == [
+        "require_agent_model_PreToolUse",
+        "budget_guard_PreToolUse",
+        "readonly_guard_SubagentStart",
+        "harness_doctor_SessionStart",
+    ],
+    str(week["registered"]),
+)
+utc_now = datetime.now(timezone.utc)
+clock_log = SCRATCH / "clock.jsonl"
+write_lines(
+    clock_log,
+    [
+        event_line(utc_now.isoformat(timespec="seconds"), "h", "allow"),
+        event_line(
+            (utc_now - timedelta(days=60)).isoformat(timespec="seconds"), "h", "allow"
+        ),
+    ],
+)
+done = run_report(proj, clock_log, "--weeks", "2", "--json")
+check(
+    "report --weeks on the command line uses the real clock",
+    json.loads(done.stdout)["records"] == 1,
+    done.stdout + done.stderr,
+)
+check(
+    "report refuses --weeks 0",
+    run_report(proj, clock_log, "--weeks", "0").returncode == 2,
+)
+
+edge_log = SCRATCH / "edge.jsonl"
+write_lines(
+    edge_log,
+    [
+        event_line("2025-12-31T12:00:00+00:00", "h", "allow"),
+        event_line("2026-03-08T23:30:00-05:00", "h", "allow"),
+        # No UTC offset: the week is unknowable, so it is malformed, not guessed.
+        event_line("2026-03-09T12:00:00", "h", "allow"),
+    ],
+)
+edge = json.loads(run_report(proj, edge_log, "--json").stdout)
+check(
+    "report buckets by UTC ISO week: the ISO year, and an offset time after the UTC week turns",
+    edge["weeks"] == ["2026-W01", "2026-W11"] and edge["records"] == 2,
+    str(edge),
+)
+check(
+    "report counts a timestamp with no UTC offset as malformed",
+    edge["malformed"] == 1,
+    str(edge),
+)
+
+absent = run_report(proj, SCRATCH / "absent.jsonl", "--json")
+check(
+    "report on a log that does not exist counts zero records and exits 0",
+    absent.returncode == 0
+    and json.loads(absent.stdout)["records"] == 0
+    and json.loads(absent.stdout)["files"] == [],
+    absent.stdout + absent.stderr,
+)
+
+# An unreadable harness.toml still gives the counts.
+for label, toml in (
+    ("missing", None),
+    ("a directory", "DIR"),
+    ("not TOML", "[[hook\nname = "),
+    ("a hook entry with no command", '[[hook]]\nname = "x"\nkind = "gate"\n'),
+):
+    bad = make_project("bad-" + label.replace(" ", "-"), toml)
+    badlog = bad / "events.jsonl"
+    write_lines(badlog, LIVE_LINES)
+    done = run_report(bad, badlog)
+    check(
+        f"report with harness.toml {label} prints the counts and says the registered list is unavailable",
+        done.returncode == 0
+        and "records in window: 8; malformed lines: 2" in done.stdout.splitlines()
+        and any(
+            line.startswith("registered hooks: unavailable")
+            for line in done.stdout.splitlines()
+        )
+        and "registered, no records in window:" not in done.stdout,
+        done.stdout + done.stderr,
+    )
+    data = json.loads(run_report(bad, badlog, "--json").stdout)
+    check(
+        f"report --json with harness.toml {label} has registered.available false and no lists",
+        data["registered"]["available"] is False
+        and bool(data["registered"]["error"])
+        and data["registered"]["no_records"] is None
+        and data["registered"]["gates_without_deny_or_block"] is None
+        and data["records"] == 8,
+        str(data["registered"]),
+    )
+
+# A log over the rotation cap is only read: rotating is record()'s job.
+big = make_project("big", FIXTURE_TOML)
+biglog = big / "events.jsonl"
+write_lines(
+    biglog, [event_line("2026-03-09T00:00:00+00:00", "h", "allow") + " " * 1000] * 5300
+)
+size = biglog.stat().st_size
+done = run_report(big, biglog, "--json")
+check(
+    "report leaves a log over MAX_BYTES in place and creates no backup",
+    size >= harness_events.MAX_BYTES
+    and biglog.is_file()
+    and biglog.stat().st_size == size
+    and not biglog.with_name("events.jsonl.1").exists()
+    and json.loads(done.stdout)["records"] == 5300,
+    f"{size} {done.stderr}",
+)
+
+# Hooks import this module from a bare copy: no harness_config, paths or tomllib.
+lone = SCRATCH / "lone"
+lone.mkdir()
+shutil.copy2(SCRIPT, lone)
+probe = subprocess.run(
+    [
+        sys.executable,
+        "-I",
+        "-c",
+        "import sys; sys.path.insert(0, sys.argv[1]); import harness_events; "
+        "print(sorted({'harness_config', 'paths', 'tomllib'} & set(sys.modules)))",
+        str(lone),
+    ],
+    capture_output=True,
+    text=True,
+)
+check(
+    "the module imports from a bare copy without harness_config, paths or tomllib",
+    probe.returncode == 0 and probe.stdout.strip() == "[]",
+    probe.stdout + probe.stderr,
+)
 
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)
