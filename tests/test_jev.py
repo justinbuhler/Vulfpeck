@@ -170,6 +170,7 @@ for path, want in {
     "scripts/harness_config.py": "High",
     "scripts/jev.py": "High",
     "scripts/plan_tests.py": "High",
+    "scripts/task_loop.py": "Critical",
     "scripts/standalone_tests.sh": "High",
     "scripts/gate.sh": "High",
     "mutants/runner.py": "High",
