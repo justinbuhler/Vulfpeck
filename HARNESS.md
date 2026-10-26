@@ -85,6 +85,27 @@ Known gaps: Gemini has no subagent events and no Agent tool matcher, so `readonl
 - Recording never raises, never writes to stdout, and no gate reads the log, so logging cannot change a decision.
 - Tests point `HARNESS_EVENTS_LOG` at a scratch file; `standalone_tests.sh`, the mutation runner and the mapped-test hook set it as a backstop.
 - The log is local to the machine until a publish step carries it out (open gap 5).
+- `python3 scripts/harness_events.py report [--weeks N] [--log PATH] [--json]` turns the log into fire rates.
+  - It reads the log and its `.1` backup, and never writes or rotates either.
+  - It counts decisions per hook and decision per ISO week (UTC). `--weeks N` keeps the last N ISO weeks, including the current one.
+  - It lists every `[[hook]]` whose script has no record in the window, and every gate whose script has no `deny` or `block` in it.
+  - Records are filed per script. A script that records nothing, or only its denials (`budget_guard`, `turn_guard`), is listed whether or not it ran, so read such a row as "no evidence it fired".
+  - Malformed lines are counted, not skipped.
+
+### Consequence floor
+
+`[tiers]` in `harness.toml` sets the lowest tier a changed path can have, and `scripts/jev.py` `floor_tier()` applies it.
+
+`tests/test_tier_floor.py` walks every module that can be imported, lazy imports included, by:
+- a gate hook;
+- `task_loop.py`, `agent_harness.py` or `hook_adapter.py`;
+- the land gate's shell scripts.
+
+It fails unless each module floors at High. A new helper that a gate imports must therefore join `[tiers] high` in the same change.
+
+`codegraph_freshness.py` and `worktree_status.sh` stay Medium, because they are advisory or read-only.
+
+`evals/consequence/` holds the 27 merged pull requests up to #37 as planner inputs, with tier labels and a rationale per labeller.
 
 ## Adopting it in another repository
 
