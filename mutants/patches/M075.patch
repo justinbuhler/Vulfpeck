@@ -1,0 +1,15 @@
+# mutant_id: M075
+# target: scripts/eval_tasks.py
+# operator: drop-check
+# behaviour: no_forbidden_commands looks past the first simple command: `ls && git push` is caught
+--- a/scripts/eval_tasks.py
++++ b/scripts/eval_tasks.py
+@@ -551,7 +551,7 @@
+     for needle in ("--dangerously", "task_loop.py"):
+         if needle in command:
+             return needle
+-    for argv in simple_commands(command):
++    for argv in simple_commands(command)[:1]:
+         name = Path(argv[0]).name
+         if name == "gh":
+             return "gh"
