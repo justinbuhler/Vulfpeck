@@ -1805,8 +1805,7 @@ for _round in range(25):
         _winners = [p for p, line in zip(_procs, _lines) if line[:1] == ["ACQ"]]
         check(
             f"round {_round}: exactly one lander acquires and the other refuses",
-            len(_winners) == 1
-            and sum(line[:1] == ["REFUSED"] for line in _lines) == 1,
+            len(_winners) == 1 and sum(line[:1] == ["REFUSED"] for line in _lines) == 1,
             str(_lines),
         )
         # Release every acquirer so a double owner cannot hide behind a held lock.
@@ -1815,7 +1814,10 @@ for _round in range(25):
                 p.stdin.write("\n")
                 p.stdin.flush()
                 _rel = say(p, "REL")
-                check(f"round {_round}: the acquirer reports its release", _rel is not None)
+                check(
+                    f"round {_round}: the acquirer reports its release",
+                    _rel is not None,
+                )
                 if _rel:
                     _spans.append((int(line[1]), int(_rel[1])))
     finally:
