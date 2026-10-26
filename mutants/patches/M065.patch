@@ -4,12 +4,12 @@
 # behaviour: verification plans the checks from the base commit's harness.toml, never the worktree's
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -579,7 +579,7 @@
-     worktree's harness.toml is never read. Mutation commands are returned as `skipped` instead of
-     `checks`: their time is unbounded, and mutation belongs to review.
+@@ -591,7 +591,7 @@
+     worktree's harness.toml is never read. The plan is made with `mutation=False`: its time is unbounded,
+     and mutation belongs to review. `skipped` is the plan's own record of that.
      """
 -    config = base_config(root, base_sha)
 +    config = harness_config.load(worktree)
      tier, _ = jev.floor_tier(paths, config["tiers"])
-     planned = [c["command"] for c in plan_tests.plan(worktree, tier, paths, config)["commands"]]
-     skipped = [c for c in planned if c.startswith(MUTATION_COMMAND)]
+     planned = plan_tests.plan(worktree, tier, paths, config, mutation=False)
+     skipped = [s for s in planned["skipped"] if s.startswith("mutation:")]

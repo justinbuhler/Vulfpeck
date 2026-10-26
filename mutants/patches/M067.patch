@@ -4,12 +4,12 @@
 # behaviour: mutation commands are left out of loop verification and recorded as skipped
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -582,7 +582,7 @@
+@@ -593,7 +593,7 @@
+     """
      config = base_config(root, base_sha)
      tier, _ = jev.floor_tier(paths, config["tiers"])
-     planned = [c["command"] for c in plan_tests.plan(worktree, tier, paths, config)["commands"]]
--    skipped = [c for c in planned if c.startswith(MUTATION_COMMAND)]
-+    skipped = []
-     return tier, [c for c in planned if c not in skipped], skipped
- 
+-    planned = plan_tests.plan(worktree, tier, paths, config, mutation=False)
++    planned = plan_tests.plan(worktree, tier, paths, config, mutation=True)
+     skipped = [s for s in planned["skipped"] if s.startswith("mutation:")]
+     return tier, [c["command"] for c in planned["commands"]], skipped
  
