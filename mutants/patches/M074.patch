@@ -1,0 +1,15 @@
+# mutant_id: M074
+# target: scripts/task_loop.py
+# operator: drop-check
+# behaviour: Done when is matched as words: done whenever is not a section
+--- a/scripts/task_loop.py
++++ b/scripts/task_loop.py
+@@ -90,7 +90,7 @@
+ # (case-insensitive, after heading marks, a list marker or bold) followed by text after a colon, or by a
+ # non-blank line before the next heading. No model is asked: this regex is the baseline any model must beat.
+ DONE_WHEN = re.compile(
+-    r"[ \t]*(?:#{1,6}[ \t]+)?(?:(?:[-*+]|\d+[.)])[ \t]+)?(?:\*\*|__)?[ \t]*done[ \t]+when\b(.*)",
++    r"[ \t]*(?:#{1,6}[ \t]+)?(?:(?:[-*+]|\d+[.)])[ \t]+)?(?:\*\*|__)?[ \t]*done[ \t]+when(.*)",
+     re.IGNORECASE,
+ )
+ AFTER_COLON = re.compile(r"[ \t*_]*:(.*)")

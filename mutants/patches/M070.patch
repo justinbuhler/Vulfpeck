@@ -1,0 +1,15 @@
+# mutant_id: M070
+# target: harness.toml
+# operator: drop-check
+# behaviour: the task loop's unattended-merge path, scripts/task_loop.py, floors at Critical
+--- a/harness.toml
++++ b/harness.toml
+@@ -49,7 +49,7 @@
+         "scripts/loop_reset.py", "scripts/scope.py", "scripts/harness_events.py",
+         "scripts/harness_inputs.py", "scripts/harness_doctor.py", "scripts/harness_install.py",
+         "scripts/github_bootstrap.sh", "pyproject.toml", "uv.lock", ".gitignore"]
+-critical = ["scripts/task_loop.py"]     # the unattended-merge path; evals/consequence/ rated every case touching it Critical
++critical = []     # the unattended-merge path; evals/consequence/ rated every case touching it Critical
+ 
+ [loop]
+ label = "ready-for-agent"               # open issues with this label are the queue
