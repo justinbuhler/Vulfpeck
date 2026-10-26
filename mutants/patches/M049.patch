@@ -4,25 +4,23 @@
 # behaviour: verification runs for every change, not only an allowlisted one
 --- a/scripts/task_loop.py
 +++ b/scripts/task_loop.py
-@@ -831,13 +831,14 @@
+@@ -852,12 +852,13 @@
              else None
          )
          tier, checks, skipped = verification(root, wt, base_sha, paths)
--        stage(
--            verify_argv(cfg, wt, checks),
--            wt,
--            f"verify the {tier} plan ({len(checks)} checks)",
--            VERIFY_TIMEOUT,
--            untrusted=root,
--        )
+-        ran = sh(verify_argv(cfg, wt, checks), wt, VERIFY_TIMEOUT, untrusted=root)
+-        if ran.returncode:
+-            raise Halt(
+-                "failed",
+-                f"verify the {tier} plan ({len(checks)} checks) exited {ran.returncode}: {failure_tail(ran)}",
+-            )
 +        if review is None:
-+            stage(
-+                verify_argv(cfg, wt, checks),
-+                wt,
-+                f"verify the {tier} plan ({len(checks)} checks)",
-+                VERIFY_TIMEOUT,
-+                untrusted=root,
-+            )
++            ran = sh(verify_argv(cfg, wt, checks), wt, VERIFY_TIMEOUT, untrusted=root)
++            if ran.returncode:
++                raise Halt(
++                    "failed",
++                    f"verify the {tier} plan ({len(checks)} checks) exited {ran.returncode}: {failure_tail(ran)}",
++                )
          verified = f"verified at {tier} (checks run: {len(checks)})"
          if skipped:
              verified += f"; {'; '.join(skipped)}"

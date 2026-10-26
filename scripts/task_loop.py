@@ -36,6 +36,7 @@ The worker's brief names a checker (`plan_tests.py --no-mutation --run`) and a c
 `--max-budget-usd` from `[loop] max_usd`. Verification runs the checks of the change's floor tier, planned
 from the base commit's harness.toml (never Jev, never the worktree's copy), lint first, with `plan_tests.plan`
 told `mutation=False`: mutation is unbounded in time and belongs to review, and the plan records that it was skipped.
+A failed verification's reason leads with the failing lines of its output (up to 8), then its last 3 lines, without uv's warnings.
 
 Every external command goes through `sh()`. A blocked or failed issue is never picked again until
 the owner runs `reset`. The `run` loop stops after 2 consecutive tasks end failed or blocked, or when
@@ -179,6 +180,26 @@ def sh(argv, cwd=None, timeout=None, untrusted=None, extra_env=None):
 def tail(done, n=300):
     """The end of a command's output, for a reason string."""
     return (done.stderr.strip() or done.stdout.strip())[-n:]
+
+
+# A line of test output that names a failure: a standalone test's `FAIL name`, unittest's `FAIL: test`,
+# the suite's `<file> FAILED`, a traceback or an exception. `^warning: ` is uv's deprecation noise.
+FAILING_LINE = re.compile(r"^\s*FAIL\b|\bFAILED\b|Traceback|Error:")
+TOOL_WARNING = re.compile(r"^warning: ")
+
+
+def failure_tail(done, n=300):
+    """A failed verification's output for a reason string: its failing lines first, then its last lines.
+
+    The suite's per-file list ends in `passed` lines and uv's warnings fill stderr, so the end of the
+    output alone can name nothing. Up to 8 failing lines come first, in order, then the last 3 lines
+    that are not among them; `warning:` lines are dropped; the result is cut to its first `n`
+    characters, which keeps the failing lines.
+    """
+    lines = [x for x in f"{done.stdout}\n{done.stderr}".splitlines() if x.strip() and not TOOL_WARNING.match(x)]
+    failing = [x for x in lines if FAILING_LINE.search(x)][:8]
+    last = [x for x in lines[-3:] if x not in failing]
+    return "\n".join(x.strip() for x in failing + last)[:n]
 
 
 # --- state --------------------------------------------------------------------
@@ -831,13 +852,12 @@ def execute(root, cfg, issue):
             else None
         )
         tier, checks, skipped = verification(root, wt, base_sha, paths)
-        stage(
-            verify_argv(cfg, wt, checks),
-            wt,
-            f"verify the {tier} plan ({len(checks)} checks)",
-            VERIFY_TIMEOUT,
-            untrusted=root,
-        )
+        ran = sh(verify_argv(cfg, wt, checks), wt, VERIFY_TIMEOUT, untrusted=root)
+        if ran.returncode:
+            raise Halt(
+                "failed",
+                f"verify the {tier} plan ({len(checks)} checks) exited {ran.returncode}: {failure_tail(ran)}",
+            )
         verified = f"verified at {tier} (checks run: {len(checks)})"
         if skipped:
             verified += f"; {'; '.join(skipped)}"
