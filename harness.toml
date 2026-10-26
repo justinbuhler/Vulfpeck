@@ -41,6 +41,7 @@ medium = ["docs/adr/**"]
 high = [".claude/**", ".agents/**", ".codex/**", ".gemini/**", ".github/**", ".githooks/**",
         "AGENTS.md", "CLAUDE.md", "**/AGENTS.md", "**/CLAUDE.md", "harness.toml",
         "scripts/paths.py", "scripts/harness_config.py", "scripts/jev.py", "scripts/plan_tests.py",
+        "evals/**", "scripts/eval_consequence.py",
         "scripts/standalone_tests.sh", "scripts/land.sh", "scripts/gate.sh", "scripts/run.sh",
         "mutants/**", "tests/**", "scripts/harness_env.sh", "scripts/adr.py",
         "docs/agents/**", "docs/mutation-testing.md", "scripts/task_loop.py", ".agents/sandbox/**",

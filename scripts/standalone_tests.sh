@@ -12,11 +12,13 @@ cd "$(dirname "$0")/.." || exit 1
 export PYTHONPATH="$PWD:$PWD/scripts${PYTHONPATH:+:$PYTHONPATH}"
 PY="uv run --no-sync python3"
 # Tests run real hooks from inside this checkout; keep their decisions out of
-# the real record (scripts/harness_events.py). A test that checks logging sets
-# its own path.
+# the real record (scripts/harness_events.py), and any Jev exchange out of the
+# real record directory (scripts/jev.py). A test that checks logging or recording
+# sets its own path.
 events_dir=$(mktemp -d "${TMPDIR:-/tmp}/harness-test-events.XXXXXX")
 trap 'rm -rf "$events_dir"' EXIT
 export HARNESS_EVENTS_LOG="${HARNESS_EVENTS_LOG:-$events_dir/events.jsonl}"
+export JEV_RECORD_DIR="${JEV_RECORD_DIR:-$events_dir/jev}"
 
 fail=0
 checks=0
