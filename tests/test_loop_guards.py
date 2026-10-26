@@ -1073,10 +1073,16 @@ check("the guard has no Jev advice step", not hasattr(lg, "jev_advice"))
 # Jev enabled and cache-only: any exchange would add one `jev` line to the decision log.
 JEV_ENV = ("JEV_DISABLE", "JEV_OFFLINE", "JEV_RECORD_DIR")
 saved_env = {name: os.environ.get(name) for name in JEV_ENV}
-os.environ.update(JEV_DISABLE="", JEV_OFFLINE="1", JEV_RECORD_DIR=str(SCRATCH / "jev-records"))
+os.environ.update(
+    JEV_DISABLE="", JEV_OFFLINE="1", JEV_RECORD_DIR=str(SCRATCH / "jev-records")
+)
 logged = len(EVENTS.read_text().splitlines()) if EVENTS.exists() else 0
 state = g.fresh_loop()
-entry = {"n": 3, "cmd": "make", "attempts": ["make -> E: x", "make -> E: y", "make -> E: z"]}
+entry = {
+    "n": 3,
+    "cmd": "make",
+    "attempts": ["make -> E: x", "make -> E: y", "make -> E: z"],
+}
 msg = lg.trip_fingerprint(state, "f" * 40, "make", entry, "s9")
 first = lg.trip_no_progress(state, "s9")
 second = lg.trip_no_progress(state, "s9")

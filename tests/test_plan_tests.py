@@ -205,7 +205,9 @@ check(
 check(
     "Low and Medium never plan mutation, so mutation=False leaves their plans as they are",
     plan_tests.plan(root, "Low", ["scripts/a.py"], CONFIG, mutation=False) == low
-    and plan_tests.plan(root, "Medium", ["scripts/a.py", "scripts/b.py"], CONFIG, mutation=False)
+    and plan_tests.plan(
+        root, "Medium", ["scripts/a.py", "scripts/b.py"], CONFIG, mutation=False
+    )
     == med,
 )
 
@@ -453,7 +455,8 @@ check(
 )
 check(
     "--no-mutation keeps the lint and the full suite",
-    [c["command"] for c in data["commands"]] == ["uvx ruff check .", "./scripts/run.sh --tests"],
+    [c["command"] for c in data["commands"]]
+    == ["uvx ruff check .", "./scripts/run.sh --tests"],
     str(data["commands"]),
 )
 status, out, err = cli("--base", "main", "--tier", "Critical", "--no-mutation")

@@ -159,7 +159,9 @@ def issue(number, title, *labels, body=DONE_WHEN):
     }
 
 
-def scenario(issues, codex_hooks=False, ignore="tmp/\n", toml=HARNESS_TOML, seed=(), **env):
+def scenario(
+    issues, codex_hooks=False, ignore="tmp/\n", toml=HARNESS_TOML, seed=(), **env
+):
     """A fresh repo, remote and shim state; returns (repo path, log path, events path).
 
     `seed` is (path, text) pairs committed in the base alongside the stubs.
@@ -1415,6 +1417,7 @@ text = log.read_text()
 check("VERIFY: a change outside the docs allowlist is verified, and a failing lint stops it before any push",
       final == "failed" and "lint\n" in text and " push " not in text, f"{final} {text}")  # fmt: skip
 
+
 # --- the worker's checker, the verification plan and the spend cap -------------
 def history_reason(repo, number, state):
     """The reason recorded when the task entered `state`, or None."""
@@ -1429,7 +1432,11 @@ def verify_script(ev):
 
 
 def worker_argv(repo, **over):
-    return next(a for n, _, a in task_loop.plan(repo, cfg_for(repo, **over), plain(1)) if n == "worker")
+    return next(
+        a
+        for n, _, a in task_loop.plan(repo, cfg_for(repo, **over), plain(1))
+        if n == "worker"
+    )
 
 
 def command_part(script):
@@ -1444,7 +1451,10 @@ repo, log, ev = scenario([])
 attempt(191, repo)
 open_brief = (ev.parent / "brief.txt").read_text()
 pinned = subprocess.run(
-    [REAL_GIT, "-C", str(repo), "rev-parse", "origin/main"], capture_output=True, text=True, check=True
+    [REAL_GIT, "-C", str(repo), "rev-parse", "origin/main"],
+    capture_output=True,
+    text=True,
+    check=True,
 ).stdout.strip()
 check("BRIEF: the sandboxed DONE WHEN names the checker against HEAD, the box's baseline commit, without mutation",
       "DONE WHEN: the issue's change is complete and `python3 scripts/plan_tests.py --base HEAD --no-mutation --run` exits 0" in box_brief, box_brief[-500:])  # fmt: skip
@@ -1458,14 +1468,21 @@ check("BRIEF: the unsandboxed DONE WHEN names the checker against the pinned bas
 # GIT_DIR and GIT_WORK_TREE set, a `.git` link to a host path that does not exist, one baseline commit.
 area = Path(tempfile.mkdtemp(prefix="box.", dir=TMP))
 work, gitdir = area / "work", area / "gitdir"
-shutil.copytree(ROOT / "scripts", work / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
+shutil.copytree(
+    ROOT / "scripts", work / "scripts", ignore=shutil.ignore_patterns("__pycache__")
+)
 shutil.copy(ROOT / "harness.toml", work / "harness.toml")
 (work / "docs").mkdir()
 (work / "docs" / "a.md").write_text("baseline\n")
 (work / ".git").write_text("gitdir: /host/only/path/does/not/exist\n")
 box_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 # No bytecode: the box fixture has no .gitignore, and a __pycache__ would read as the worker's change.
-box_env.update(GIT_DIR=str(gitdir), GIT_WORK_TREE=str(work), JEV_DISABLE="1", PYTHONDONTWRITEBYTECODE="1")
+box_env.update(
+    GIT_DIR=str(gitdir),
+    GIT_WORK_TREE=str(work),
+    JEV_DISABLE="1",
+    PYTHONDONTWRITEBYTECODE="1",
+)
 
 
 def in_box(*argv):
@@ -1482,7 +1499,9 @@ for step in (
     assert in_box(*step).returncode == 0, step
 (work / "docs" / "a.md").write_text("edited\n")
 (work / "docs" / "new.md").write_text("new\n")
-planned = in_box(sys.executable, "scripts/plan_tests.py", "--base", "HEAD", "--no-mutation")
+planned = in_box(
+    sys.executable, "scripts/plan_tests.py", "--base", "HEAD", "--no-mutation"
+)
 try:
     reported = json.loads(planned.stdout)
 except ValueError:
@@ -1544,7 +1563,9 @@ repo, log, ev = scenario([], FAKE_SUITE_RC=1, FAKE_WORKER_EXTRA="echo x > script
 final = attempt(212, repo)
 check("VERIFY: a scripts/ change whose full suite fails ends failed with nothing pushed",
       final == "failed" and "exited 1" in task_loop.load(repo, 212)["reason"] and " push " not in log.read_text(), f"{final} {task_loop.load(repo, 212)['reason']}")  # fmt: skip
-repo, log, ev = scenario([], FAKE_VERIFY_RC=1, FAKE_WORKER_EXTRA="echo x > scripts/x.py")
+repo, log, ev = scenario(
+    [], FAKE_VERIFY_RC=1, FAKE_WORKER_EXTRA="echo x > scripts/x.py"
+)
 final = attempt(213, repo)
 check("VERIFY: a failing lint stops the plan before the full suite runs",
       final == "failed" and "run.sh" not in log.read_text(), f"{final} {log.read_text()}")  # fmt: skip
@@ -1563,13 +1584,19 @@ check("VERIFY: the box gets one `bash -c` that starts with set -e and runs lint,
       script.splitlines()[4:8] == ["vulfpeck-worker", "bash", "-c", "set -e"] and "echo lint" in script and "./scripts/run.sh --tests" in script
       and script.index("echo lint") < script.index("./scripts/run.sh --tests") and str(wt) not in command_part(script), script)  # fmt: skip
 
-repo, log, ev = scenario([], FAKE_WORKER_EXTRA="printf '[tiers]\\nlow = [\"**\"]\\n' > harness.toml; echo x > scripts/x.py")
+repo, log, ev = scenario(
+    [],
+    FAKE_WORKER_EXTRA="printf '[tiers]\\nlow = [\"**\"]\\n' > harness.toml; echo x > scripts/x.py",
+)
 boxed(216, repo)
 script = verify_script(ev)
 check("VERIFY: a worker that rates everything Low in the worktree's harness.toml is still verified at the base commit's tier",
       "./scripts/run.sh --tests" in script and str(history_reason(repo, 216, "verified")).startswith("verified at High (checks run: 2)"), f"{history_reason(repo, 216, 'verified')} {script}")  # fmt: skip
 
-PATCH = ("mutants/patches/M900.patch", "--- a/scripts/x.py\n+++ b/scripts/x.py\n@@ -1 +1 @@\n-a\n+b\n")
+PATCH = (
+    "mutants/patches/M900.patch",
+    "--- a/scripts/x.py\n+++ b/scripts/x.py\n@@ -1 +1 @@\n-a\n+b\n",
+)
 repo, log, ev = scenario([], seed=[PATCH], FAKE_WORKER_EXTRA="echo x > scripts/x.py")
 final = boxed(217, repo)
 script, reason = verify_script(ev), str(history_reason(repo, 217, "verified"))
@@ -1583,7 +1610,10 @@ final = attempt(218, repo)
 check("VERIFY: unsandboxed, the mutation command is not run on the host either",
       final == "blocked" and "run.sh --tests" in log.read_text(), f"{final} {task_loop.load(repo, 218)['reason']}")  # fmt: skip
 
-repo, log, ev = scenario([], FAKE_WORKER_EXTRA="rm -rf docs; mkdir -p src tests; echo x > src/app.py; echo x > tests/test_app.py")
+repo, log, ev = scenario(
+    [],
+    FAKE_WORKER_EXTRA="rm -rf docs; mkdir -p src tests; echo x > src/app.py; echo x > tests/test_app.py",
+)
 boxed(219, repo)
 wt = repo / "tmp" / "worktrees" / "issue-219-a1"
 script = verify_script(ev)
@@ -1592,7 +1622,9 @@ check("VERIFY: a Medium change runs lint and its mapped test, named relative to 
       and str(history_reason(repo, 219, "verified")).startswith("verified at Medium (checks run: 2)"), f"{history_reason(repo, 219, 'verified')} {script}")  # fmt: skip
 
 real_consequence = task_loop.jev.consequence
-task_loop.jev.consequence = lambda *a, **k: (_ for _ in ()).throw(AssertionError("Jev was asked"))
+task_loop.jev.consequence = lambda *a, **k: (_ for _ in ()).throw(
+    AssertionError("Jev was asked")
+)
 repo, log, ev = scenario([], FAKE_WORKER_EXTRA="echo x > scripts/x.py")
 final = attempt(220, repo)
 task_loop.jev.consequence = real_consequence
@@ -1607,13 +1639,17 @@ VERIFY_PREFIX = "verify the High plan (2 checks) exited 1: "
 
 def failing_suite(out, err=()):
     """A `scripts/run.sh` seed that prints `out` on stdout and `err` on stderr, then exits 1."""
-    body = "".join(f"echo {shlex.quote(line)} >&2\n" for line in err) + "".join(f"echo {shlex.quote(line)}\n" for line in out)
+    body = "".join(f"echo {shlex.quote(line)} >&2\n" for line in err) + "".join(
+        f"echo {shlex.quote(line)}\n" for line in out
+    )
     return ("scripts/run.sh", f"#!/bin/sh\n{body}exit 1\n")
 
 
 def verify_reason(number, suite):
     """The reason of a High-tier task whose full suite is `suite`: the loop must end it failed."""
-    repo, log, ev = scenario([], seed=[suite], FAKE_WORKER_EXTRA="echo x > scripts/x.py")
+    repo, log, ev = scenario(
+        [], seed=[suite], FAKE_WORKER_EXTRA="echo x > scripts/x.py"
+    )
     final = attempt(number, repo)
     return final, task_loop.load(repo, number)["reason"], log.read_text()
 
@@ -1626,24 +1662,43 @@ check("VERIFY: a failing suite with warnings, a passing file list and one FAIL l
       final == "failed" and "tests/test_b.py   FAILED\nFAIL  the widget frobs\n" in reason and "warning:" not in reason, f"{final} {reason!r}")  # fmt: skip
 check("VERIFY: the failing lines come first, then the last three lines that are not failing lines, and nothing else",
       reason == VERIFY_PREFIX + "tests/test_b.py   FAILED\nFAIL  the widget frobs\ntests/test_c.py   4 passed\ntests/test_d.py   5 passed\ntests/test_e.py   6 passed", repr(reason))  # fmt: skip
-check("VERIFY: a failed verification publishes nothing", " push " not in text and "gh pr create" not in text, text)
+check(
+    "VERIFY: a failed verification publishes nothing",
+    " push " not in text and "gh pr create" not in text,
+    text,
+)
 
-final, reason, _ = verify_reason(222, failing_suite([f"step {i}" for i in range(1, 6)], err=[UV_WARNING]))
+final, reason, _ = verify_reason(
+    222, failing_suite([f"step {i}" for i in range(1, 6)], err=[UV_WARNING])
+)
 check("VERIFY: a failure with no FAIL line still shows its last three lines, without the warning",
       final == "failed" and reason == VERIFY_PREFIX + "step 3\nstep 4\nstep 5", f"{final} {reason!r}")  # fmt: skip
 
-final, reason, _ = verify_reason(223, failing_suite([f"FAIL  case {i:02d}" for i in range(1, 11)] + ["done 1", "done 2", "done 3"]))
+final, reason, _ = verify_reason(
+    223,
+    failing_suite(
+        [f"FAIL  case {i:02d}" for i in range(1, 11)] + ["done 1", "done 2", "done 3"]
+    ),
+)
 check("VERIFY: at most eight failing lines are kept, in order, followed by the last three lines",
       reason == VERIFY_PREFIX + "\n".join(f"FAIL  case {i:02d}" for i in range(1, 9)) + "\ndone 1\ndone 2\ndone 3", repr(reason))  # fmt: skip
 
 LONG = ["FAIL  " + "a" * 94, "FAIL  " + "b" * 94]
-final, reason, _ = verify_reason(224, failing_suite(LONG + ["c" * 100, "d" * 100, "e" * 100]))
-shown = reason[len(VERIFY_PREFIX):]
+final, reason, _ = verify_reason(
+    224, failing_suite(LONG + ["c" * 100, "d" * 100, "e" * 100])
+)
+shown = reason[len(VERIFY_PREFIX) :]
 check("VERIFY: the reason stays inside 300 characters, cut after the failing lines and not before them",
       reason.startswith(VERIFY_PREFIX) and shown == LONG[0] + "\n" + LONG[1] + "\n" + "c" * 98, f"{len(shown)} {shown!r}")  # fmt: skip
 
-for marker, word in (("Traceback (most recent call last):", "Traceback"), ("ValueError: boom", "Error:"), ("FAIL: test_x (mod.Case)", "FAIL:")):
-    final, reason, _ = verify_reason(225, failing_suite([marker] + [f"pad {i}" for i in range(1, 6)]))
+for marker, word in (
+    ("Traceback (most recent call last):", "Traceback"),
+    ("ValueError: boom", "Error:"),
+    ("FAIL: test_x (mod.Case)", "FAIL:"),
+):
+    final, reason, _ = verify_reason(
+        225, failing_suite([marker] + [f"pad {i}" for i in range(1, 6)])
+    )
     check(f"VERIFY: a line with {word!r} is a failing line and leads the reason",
           reason == VERIFY_PREFIX + marker + "\npad 3\npad 4\npad 5", repr(reason))  # fmt: skip
 
@@ -1713,22 +1768,41 @@ check("INTAKE: after the owner resets a refused issue and its body gains the sec
       (first, second) == ("blocked", "published") and task_loop.load(repo, 330)["attempts"] == 2, f"{first} {second}")  # fmt: skip
 
 for what, body, want in (
-    ("a heading, a blank line, then text", "### DONE WHEN\n\nthe widget renders\n\n## Notes\nx", True),
-    ("a numbered bold label before its colon", "1. **Done when**: the widget renders", True),
+    (
+        "a heading, a blank line, then text",
+        "### DONE WHEN\n\nthe widget renders\n\n## Notes\nx",
+        True,
+    ),
+    (
+        "a numbered bold label before its colon",
+        "1. **Done when**: the widget renders",
+        True,
+    ),
     ("a bullet label", "* Done when: the widget renders", True),
     ("an indented label", "  Done when: the widget renders", True),
     ("CRLF line ends", "## Done when\r\n- the widget renders\r\n", True),
-    ("a label with its text on the next line", "Done when:\n- the widget renders", True),
+    (
+        "a label with its text on the next line",
+        "Done when:\n- the widget renders",
+        True,
+    ),
     ("a bold label whose colon has nothing after it", "**Done when:**", False),
     ("a heading straight into another heading", "## Done when\n## Notes\nx", False),
     ("Done and when run together", "Donewhen: x", False),
     ("a body of None", None, False),
 ):
-    check(f"INTAKE: has_done_when is {want} for {what}", task_loop.has_done_when(body) is want, repr(body))
+    check(
+        f"INTAKE: has_done_when is {want} for {what}",
+        task_loop.has_done_when(body) is want,
+        repr(body),
+    )
 
 # --dry-run shows the refusal and the comment it would post, and runs nothing.
 repo, log, ev = scenario([issue(4, "Vague", body="Make it better.")])
-outputs = {argv[0]: quiet(task_loop.main, argv, repo)[1] for argv in (["next", "--dry-run"], ["run-one", "--dry-run"])}
+outputs = {
+    argv[0]: quiet(task_loop.main, argv, repo)[1]
+    for argv in (["next", "--dry-run"], ["run-one", "--dry-run"])
+}
 check("INTAKE: a dry run shows the refusal and the comment it would post, and none of the task's stages",
       all(
           f"next: #4 Vague" in out and NEEDS_INFO in out and "gh issue comment 4 --body" in out

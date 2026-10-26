@@ -196,7 +196,11 @@ def failure_tail(done, n=300):
     that are not among them; `warning:` lines are dropped; the result is cut to its first `n`
     characters, which keeps the failing lines.
     """
-    lines = [x for x in f"{done.stdout}\n{done.stderr}".splitlines() if x.strip() and not TOOL_WARNING.match(x)]
+    lines = [
+        x
+        for x in f"{done.stdout}\n{done.stderr}".splitlines()
+        if x.strip() and not TOOL_WARNING.match(x)
+    ]
     failing = [x for x in lines if FAILING_LINE.search(x)][:8]
     last = [x for x in lines[-3:] if x not in failing]
     return "\n".join(x.strip() for x in failing + last)[:n]
@@ -756,7 +760,10 @@ def execute(root, cfg, issue):
         if not has_done_when(issue["body"]):
             sent = sh(refusal_command(issue), root)
             if sent.returncode:
-                print(f"task_loop: could not comment on #{n}: {tail(sent)}", file=sys.stderr)
+                print(
+                    f"task_loop: could not comment on #{n}: {tail(sent)}",
+                    file=sys.stderr,
+                )
             raise Halt("blocked", NEEDS_INFO)
         why = stale_issue_text(root, cfg, plans)
         if why:
@@ -861,7 +868,14 @@ def execute(root, cfg, issue):
         verified = f"verified at {tier} (checks run: {len(checks)})"
         if skipped:
             verified += f"; {'; '.join(skipped)}"
-        move(root, n, "verified", f"{verified}; needs-review: {review}" if review else f"{verified}; {status}")
+        move(
+            root,
+            n,
+            "verified",
+            f"{verified}; needs-review: {review}"
+            if review
+            else f"{verified}; {status}",
+        )
         enqueue = next(
             argv
             for name, _, argv in plan(

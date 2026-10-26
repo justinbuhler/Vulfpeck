@@ -316,7 +316,9 @@ def merge(raw):
                 if (
                     isinstance(value, bool)
                     or not isinstance(value, (int, float))
-                    or not 0 <= value < float("inf")  # also refuses nan, which would read as "off"
+                    or not 0
+                    <= value
+                    < float("inf")  # also refuses nan, which would read as "off"
                 ):
                     raise ConfigError("loop.max_usd must be a number >= 0 (0 is off)")
             elif section == "budget":

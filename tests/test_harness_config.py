@@ -300,7 +300,9 @@ check(
 )
 check(
     "the repository's harness.toml sets [loop] max_usd = 10.0",
-    __import__("tomllib").loads((REPO / "harness.toml").read_text())["loop"].get("max_usd")
+    __import__("tomllib")
+    .loads((REPO / "harness.toml").read_text())["loop"]
+    .get("max_usd")
     == 10.0,
 )
 for toml, want in (
@@ -314,7 +316,11 @@ for toml, want in (
         got = harness_config.load(d)["loop"]["max_usd"]
     except harness_config.ConfigError as exc:
         got = str(exc)
-    check(f"{toml.splitlines()[1]!r} is read as {want}", got == want and not isinstance(got, bool), repr(got))
+    check(
+        f"{toml.splitlines()[1]!r} is read as {want}",
+        got == want and not isinstance(got, bool),
+        repr(got),
+    )
 for toml in (
     "[loop]\nmax_usd = -1\n",
     "[loop]\nmax_usd = -0.01\n",

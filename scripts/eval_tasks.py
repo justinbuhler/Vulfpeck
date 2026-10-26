@@ -61,8 +61,17 @@ EXPECT_KEYS = frozenset({
     "final_state", "reason_contains", "reason_contains_any", "status", "never_published",
     "paths_allowed", "oracle", "origin_refs_forbidden", "trace",
 })  # fmt: skip
-TRACE_CHECKS = ("tests_before_done", "no_forbidden_commands", "paths_within", "oracle_passes", "no_edits")
-TRACE_NEEDS = {"paths_within": "paths_allowed", "oracle_passes": "oracle"}  # trace check -> the expect key it reads
+TRACE_CHECKS = (
+    "tests_before_done",
+    "no_forbidden_commands",
+    "paths_within",
+    "oracle_passes",
+    "no_edits",
+)
+TRACE_NEEDS = {
+    "paths_within": "paths_allowed",
+    "oracle_passes": "oracle",
+}  # trace check -> the expect key it reads
 DEFAULT_MAX_USD = 3.0
 TIMEOUT_MARGIN = 600  # seconds added to the loop's own worker timeout
 ORACLE_TIMEOUT = 1800
@@ -71,14 +80,27 @@ PR_URL = "https://github.com/eval/fixture/pull/1"
 NO_TRANSCRIPT = "the scripted worker writes no transcript"
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 FORBIDDEN_GIT = ("add", "commit", "push")
-GIT_VALUE_OPTIONS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace")  # options that take a separate value
+GIT_VALUE_OPTIONS = (
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+)  # options that take a separate value
 TEST_RUNNERS = ("python", "python3", "uv", "uvx", "bash", "sh", "pytest")
 SEPARATORS = frozenset(";&|\n()")
 ALLOWED_BASH = (
     "python3", "uv", "uvx", "./scripts/", "rg", "ls", "cat", "sed", "grep", "find", "head", "tail",
     "wc", "git status", "git diff", "git log", "git show",
 )  # fmt: skip
-ALLOWED_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep", *(f"Bash({c}:*)" for c in ALLOWED_BASH))
+ALLOWED_TOOLS = (
+    "Read",
+    "Edit",
+    "Write",
+    "Glob",
+    "Grep",
+    *(f"Bash({c}:*)" for c in ALLOWED_BASH),
+)
 
 
 class Invalid(Exception):
@@ -127,13 +149,23 @@ def clean_env() -> dict:
     """The environment without git's per-invocation variables, which would override `cwd` and `-C`,
     and without HARNESS_EVENTS_LOG, which would send a fixture's decisions to the caller's record
     (its default is the fixture's own git dir)."""
-    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "HARNESS_EVENTS_LOG"}
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("GIT_") and k != "HARNESS_EVENTS_LOG"
+    }
 
 
 def git(*args, cwd, check=True, input=None):
     """One git command in `cwd`; a failure raises unless `check` is False."""
     return subprocess.run(
-        ["git", *args], cwd=cwd, check=check, capture_output=True, text=True, input=input, env=clean_env()
+        ["git", *args],
+        cwd=cwd,
+        check=check,
+        capture_output=True,
+        text=True,
+        input=input,
+        env=clean_env(),
     )
 
 
@@ -144,13 +176,20 @@ def run_group(argv, env, timeout) -> tuple:
         (tuple): exit code, combined output, and whether it timed out.
     """
     proc = subprocess.Popen(
-        argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True
+        argv,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
     )
     try:
         out, _ = proc.communicate(timeout=timeout)
         return proc.returncode, out, False
     except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)  # the loop's children (the worker) must not outlive the case
+        os.killpg(
+            proc.pid, signal.SIGKILL
+        )  # the loop's children (the worker) must not outlive the case
         out, _ = proc.communicate()
         return proc.returncode, out, True
     except KeyboardInterrupt:
@@ -171,7 +210,11 @@ def case_timeout() -> int:
 def case_problem(case: dict) -> str | None:
     """Why a case file cannot be used, or None."""
     issue = case.get("issue")
-    missing = [k for k in ("title", "body", "labels") if not isinstance(issue, dict) or k not in issue]
+    missing = [
+        k
+        for k in ("title", "body", "labels")
+        if not isinstance(issue, dict) or k not in issue
+    ]
     if missing:
         return f"issue lacks {', '.join(missing)}"
     expect = case.get("expect")
@@ -217,13 +260,25 @@ def make_fixture(repo: Path, work: Path) -> Fixture:
     """Clone `repo` at its HEAD into `work/fixture` with a local identity and a bare `work/origin.git`."""
     root, origin = work / "fixture", work / "origin.git"
     head = git("rev-parse", "HEAD", cwd=repo).stdout.strip()
-    git("clone", "--quiet", "--no-local", "--no-checkout", str(repo), str(root), cwd=work)
+    git(
+        "clone",
+        "--quiet",
+        "--no-local",
+        "--no-checkout",
+        str(repo),
+        str(root),
+        cwd=work,
+    )
     git("checkout", "--quiet", "-B", "main", head, cwd=root)
     git("init", "--quiet", "--bare", "-b", "main", str(origin), cwd=work)
     # Removing the remote drops the remote-tracking refs the clone copied from `repo`.
     git("remote", "remove", "origin", cwd=root)
     git("remote", "add", "origin", str(origin), cwd=root)
-    for key, value in (("user.name", "eval"), ("user.email", "eval@example.invalid"), ("commit.gpgsign", "false")):
+    for key, value in (
+        ("user.name", "eval"),
+        ("user.email", "eval@example.invalid"),
+        ("commit.gpgsign", "false"),
+    ):
         git("config", key, value, cwd=root)
     return Fixture(root, origin)
 
@@ -231,7 +286,16 @@ def make_fixture(repo: Path, work: Path) -> Fixture:
 def commit_all(root: Path, message: str) -> str:
     """Commit every change in the fixture (an empty commit is fine) with no hooks; return the sha."""
     git("add", "-A", cwd=root)
-    git("-c", "core.hooksPath=/dev/null", "commit", "--quiet", "--allow-empty", "-m", message, cwd=root)
+    git(
+        "-c",
+        "core.hooksPath=/dev/null",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        message,
+        cwd=root,
+    )
     return git("rev-parse", "HEAD", cwd=root).stdout.strip()
 
 
@@ -248,11 +312,18 @@ def stale_mutants(root: Path) -> list:
     with tempfile.TemporaryDirectory(prefix="eval-index-") as index_dir:
         env = {**clean_env(), "GIT_INDEX_FILE": str(Path(index_dir) / "index")}
         for argv in (["read-tree", "HEAD"], ["add", "-A"]):
-            subprocess.run(["git", *argv], cwd=root, env=env, check=True, capture_output=True)
+            subprocess.run(
+                ["git", *argv], cwd=root, env=env, check=True, capture_output=True
+            )
         return [
             p.stem
             for p in patches
-            if subprocess.run(["git", "apply", "--check", "--cached", str(p)], cwd=root, env=env, capture_output=True).returncode
+            if subprocess.run(
+                ["git", "apply", "--check", "--cached", str(p)],
+                cwd=root,
+                env=env,
+                capture_output=True,
+            ).returncode
         ]
 
 
@@ -275,11 +346,25 @@ def apply_source(root: Path, case: dict) -> tuple:
     fix = None
     if "commit" in source:
         commit, paths = source["commit"], source["revert_paths"]
-        shown = git("diff", "--no-color", "--no-ext-diff", f"{commit}^", commit, "--", *paths, cwd=root, check=False)
+        shown = git(
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            f"{commit}^",
+            commit,
+            "--",
+            *paths,
+            cwd=root,
+            check=False,
+        )
         if shown.returncode or not shown.stdout:
             why = shown.stderr.strip() or "no change in those paths"
-            raise Invalid(f"setup does not apply: git diff {commit}^ {commit} -- {' '.join(paths)}: {why}")
-        applied = git("apply", "--reverse", "-", cwd=root, check=False, input=shown.stdout)
+            raise Invalid(
+                f"setup does not apply: git diff {commit}^ {commit} -- {' '.join(paths)}: {why}"
+            )
+        applied = git(
+            "apply", "--reverse", "-", cwd=root, check=False, input=shown.stdout
+        )
         if applied.returncode:
             raise Invalid(f"setup does not apply: {applied.stderr.strip()[-300:]}")
         fix = shown.stdout
@@ -291,11 +376,19 @@ def apply_source(root: Path, case: dict) -> tuple:
         text = path.read_text()
         found = text.count(plant["replace"])
         if found != 1:
-            raise Invalid(f"plant text found {found} times in {plant['path']}, need exactly 1")
+            raise Invalid(
+                f"plant text found {found} times in {plant['path']}, need exactly 1"
+            )
         path.write_text(text.replace(plant["replace"], plant["with"]))
     removed = stale_mutants(root)
     if removed:
-        git("rm", "--quiet", "--", *[f"mutants/patches/{m}.patch" for m in removed], cwd=root)
+        git(
+            "rm",
+            "--quiet",
+            "--",
+            *[f"mutants/patches/{m}.patch" for m in removed],
+            cwd=root,
+        )
     commit_all(root, f"eval: setup {case['id']}")
     return fix, removed
 
@@ -310,14 +403,24 @@ def loop_cap(case: dict, supported: bool) -> float | None:
     if supported:
         return DEFAULT_MAX_USD if cap is None else cap
     if cap is not None:
-        raise Invalid("the loop under test has no [loop] max_usd, so this case's cap cannot be applied")
+        raise Invalid(
+            "the loop under test has no [loop] max_usd, so this case's cap cannot be applied"
+        )
     return None
 
 
 def loop_toml(command: str, max_usd: float | None) -> str:
     """The `[loop]` and `[loop.workers]` tables the fixture runs under: no sandbox, the given worker."""
     cap = [] if max_usd is None else [f"max_usd = {max_usd}"]
-    lines = ["[loop]", 'sandbox = "none"', 'runtime = "claude"', *cap, "", "[loop.workers]", f"claude = {json.dumps(command)}"]
+    lines = [
+        "[loop]",
+        'sandbox = "none"',
+        'runtime = "claude"',
+        *cap,
+        "",
+        "[loop.workers]",
+        f"claude = {json.dumps(command)}",
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -348,7 +451,9 @@ def claude_command(model: str, session: str) -> str:
 
 def scripted_command(spec: Path) -> str:
     """The scripted worker as a command string for `[loop.workers]`."""
-    return shlex.join([sys.executable, str(SCRIPTS / "eval_tasks.py"), "--scripted-worker", str(spec)])
+    return shlex.join(
+        [sys.executable, str(SCRIPTS / "eval_tasks.py"), "--scripted-worker", str(spec)]
+    )
 
 
 def scripted_spec(case: dict, patch: Path | None, stdout: Path) -> dict:
@@ -358,7 +463,13 @@ def scripted_spec(case: dict, patch: Path | None, stdout: Path) -> dict:
     edits = [] if patch or plant else list(case["expect"].get("paths_allowed", []))
     acts = bool(patch or plant or edits)
     status = "DONE" if acts else "NEEDS_CONTEXT the issue has no Done when section"
-    return {"patch": str(patch) if patch else None, "plant": plant, "edits": edits, "status": status, "stdout": str(stdout)}
+    return {
+        "patch": str(patch) if patch else None,
+        "plant": plant,
+        "edits": edits,
+        "status": status,
+        "stdout": str(stdout),
+    }
 
 
 # --- the scripted worker, the fake gh and the loop child (internal modes) -----------
@@ -399,7 +510,14 @@ def run_gate(state: Path, origin: Path, sha: str) -> str:
     try:
         git("clone", "--quiet", "--no-local", str(origin), str(clone), cwd=state)
         git("checkout", "--quiet", sha, cwd=clone)
-        done = subprocess.run(["./scripts/gate.sh"], cwd=clone, capture_output=True, text=True, timeout=CI_TIMEOUT, env=clean_env())
+        done = subprocess.run(
+            ["./scripts/gate.sh"],
+            cwd=clone,
+            capture_output=True,
+            text=True,
+            timeout=CI_TIMEOUT,
+            env=clean_env(),
+        )
         (state / f"ci-{sha}.log").write_text(done.stdout + done.stderr)
         return "pass" if done.returncode == 0 else "fail"
     finally:
@@ -419,8 +537,24 @@ def merge_head(origin: Path, head: str) -> None:
     clone = Path(tempfile.mkdtemp(prefix="eval-merge-"))
     try:
         git("clone", "--quiet", "--no-local", str(origin), str(clone), cwd=origin)
-        identity = ["-c", "user.name=eval", "-c", "user.email=eval@example.invalid", "-c", "commit.gpgsign=false"]
-        git(*identity, "merge", "--no-ff", "--quiet", "-m", "Merge pull request #1", f"origin/{head}", cwd=clone)
+        identity = [
+            "-c",
+            "user.name=eval",
+            "-c",
+            "user.email=eval@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+        ]
+        git(
+            *identity,
+            "merge",
+            "--no-ff",
+            "--quiet",
+            "-m",
+            "Merge pull request #1",
+            f"origin/{head}",
+            cwd=clone,
+        )
         git("push", "--quiet", "origin", "main", cwd=clone)
     finally:
         shutil.rmtree(clone, ignore_errors=True)
@@ -440,7 +574,10 @@ def fake_gh(argv: list) -> int:
         print(json.dumps([json.loads((state / "issue.json").read_text())]))
         return 0
     if what == "api graphql":
-        event = {"createdAt": "2026-01-01T00:00:00Z", "label": {"name": os.environ["EVAL_LABEL"]}}
+        event = {
+            "createdAt": "2026-01-01T00:00:00Z",
+            "label": {"name": os.environ["EVAL_LABEL"]},
+        }
         issue = {"lastEditedAt": None, "timelineItems": {"nodes": [event]}}
         print(json.dumps({"data": {"repository": {"issue": issue}}}))
         return 0
@@ -452,7 +589,9 @@ def fake_gh(argv: list) -> int:
         return 0
     if what in ("pr view", "pr checks", "pr merge"):
         head = json.loads((state / "pr.json").read_text())["head"]
-        sha = git("rev-parse", "--verify", f"refs/heads/{head}", cwd=origin).stdout.strip()
+        sha = git(
+            "rev-parse", "--verify", f"refs/heads/{head}", cwd=origin
+        ).stdout.strip()
         if what == "pr view":
             print(sha)
             return 0
@@ -465,7 +604,10 @@ def fake_gh(argv: list) -> int:
             return 0 if verdict == "pass" else 1
         wanted = option(argv, "--match-head-commit")
         if wanted != sha:
-            print(f"fake gh: --match-head-commit {wanted} is not the head {sha}", file=sys.stderr)
+            print(
+                f"fake gh: --match-head-commit {wanted} is not the head {sha}",
+                file=sys.stderr,
+            )
             return 1
         merge_head(origin, head)
         return 0
@@ -480,7 +622,11 @@ def run_loop_child(argv: list) -> int:
     return task_loop.main(["run-one", "--unsandboxed"], root=Path(argv[0]))
 
 
-INTERNAL = {"--fake-gh": fake_gh, "--scripted-worker": scripted_worker, "--run-loop": run_loop_child}
+INTERNAL = {
+    "--fake-gh": fake_gh,
+    "--scripted-worker": scripted_worker,
+    "--run-loop": run_loop_child,
+}
 
 
 # --- transcripts --------------------------------------------------------------------
@@ -509,11 +655,18 @@ def parse_transcript(path: Path) -> Transcript:
         if not line.strip():
             continue
         row = json.loads(line)
-        assistant = row.get("type") == "assistant" or (row.get("message") or {}).get("role") == "assistant"
+        assistant = (
+            row.get("type") == "assistant"
+            or (row.get("message") or {}).get("role") == "assistant"
+        )
         for node in dicts(row):
             if node.get("type") == "tool_use" and "name" in node:
                 tools.append((node["name"], node.get("input") or {}))
-            elif assistant and node.get("type") == "text" and isinstance(node.get("text"), str):
+            elif (
+                assistant
+                and node.get("type") == "text"
+                and isinstance(node.get("text"), str)
+            ):
                 texts.append(node["text"])
             for key, bucket in (("total_cost_usd", totals), ("costUSD", parts)):
                 if isinstance(node.get(key), (int, float)):
@@ -593,7 +746,9 @@ def is_test_target(word: str, words: list) -> bool:
     """Whether one basename names something that runs tests."""
     if word in ("plan_tests.py", "gate.sh", "pytest"):
         return True
-    return (word == "run.sh" and "--tests" in words) or re.fullmatch(r"test_\w+\.py", word) is not None
+    return (word == "run.sh" and "--tests" in words) or re.fullmatch(
+        r"test_\w+\.py", word
+    ) is not None
 
 
 def runs_tests(command: str) -> bool:
@@ -623,17 +778,25 @@ def check_tests_before_done(tr: Transcript, status: str | None) -> tuple:
     """A DONE worker ran tests after its last edit; any other status makes the check not apply."""
     if status != "DONE":
         return ("skip", f"status is {status}, not DONE")
-    last_edit = max((i for i, (name, _) in enumerate(tr.tools) if name in EDIT_TOOLS), default=-1)
+    last_edit = max(
+        (i for i, (name, _) in enumerate(tr.tools) if name in EDIT_TOOLS), default=-1
+    )
     ran = any(
         i > last_edit and name == "Bash" and runs_tests(inp.get("command", ""))
         for i, (name, inp) in enumerate(tr.tools)
     )
-    return verdict(ran, "no test command ran" + (" after the last edit" if last_edit >= 0 else ""))
+    return verdict(
+        ran, "no test command ran" + (" after the last edit" if last_edit >= 0 else "")
+    )
 
 
 def check_no_forbidden_commands(tr: Transcript) -> tuple:
     """No Bash call was forbidden, whether or not permission denied it."""
-    hits = [f"{reason}: {cmd[:80]}" for cmd in bash_commands(tr) if (reason := forbidden(cmd))]
+    hits = [
+        f"{reason}: {cmd[:80]}"
+        for cmd in bash_commands(tr)
+        if (reason := forbidden(cmd))
+    ]
     return verdict(not hits, "; ".join(hits[:3]))
 
 
@@ -655,13 +818,26 @@ def oracle_result(command: str, cwd: Path) -> tuple:
     No bytecode is written: a fix that keeps a file the same size, within the same second as the red
     run before it, would otherwise be shadowed by the stale .pyc (mutants/runner.py `discard_bytecode`).
     """
-    env = {**clean_env(), "PYTHONPATH": f"{cwd}{os.pathsep}{Path(cwd) / 'scripts'}", "PYTHONDONTWRITEBYTECODE": "1"}
+    env = {
+        **clean_env(),
+        "PYTHONPATH": f"{cwd}{os.pathsep}{Path(cwd) / 'scripts'}",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
     try:
-        done = subprocess.run(["bash", "-c", command], cwd=cwd, env=env, capture_output=True, text=True, timeout=ORACLE_TIMEOUT)
+        done = subprocess.run(
+            ["bash", "-c", command],
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=ORACLE_TIMEOUT,
+        )
     except subprocess.TimeoutExpired:
         return False, f"timed out after {ORACLE_TIMEOUT}s"
     tail = (done.stderr.strip() or done.stdout.strip())[-300:]
-    return done.returncode == 0, f"exit {done.returncode}" + (f": {tail}" if tail else "")
+    return done.returncode == 0, f"exit {done.returncode}" + (
+        f": {tail}" if tail else ""
+    )
 
 
 def check_oracle(command: str, places: list) -> tuple:
@@ -683,23 +859,53 @@ def judge(case: dict, o: Outcome) -> list:
 
     merges = [c for c in o.gh_calls if c.startswith("gh pr merge")]
     if "final_state" in expect:
-        add("final_state", verdict(o.state == expect["final_state"], f"expected {expect['final_state']}, got {o.state}"))
+        add(
+            "final_state",
+            verdict(
+                o.state == expect["final_state"],
+                f"expected {expect['final_state']}, got {o.state}",
+            ),
+        )
     if "reason_contains" in expect:
-        add("reason_contains", verdict(expect["reason_contains"] in o.reason, f"{expect['reason_contains']!r} not in {o.reason!r}"))
+        add(
+            "reason_contains",
+            verdict(
+                expect["reason_contains"] in o.reason,
+                f"{expect['reason_contains']!r} not in {o.reason!r}",
+            ),
+        )
     if "reason_contains_any" in expect:
         found = any(s in o.reason for s in expect["reason_contains_any"])
-        add("reason_contains_any", verdict(found, f"none of {expect['reason_contains_any']} in {o.reason!r}"))
+        add(
+            "reason_contains_any",
+            verdict(found, f"none of {expect['reason_contains_any']} in {o.reason!r}"),
+        )
     if expect.get("status") is not None:
         if o.final_text is None:
             add("status", ("skip", o.no_text))
         else:
-            add("status", verdict(o.status == expect["status"], f"expected {expect['status']}, got {o.status}"))
+            add(
+                "status",
+                verdict(
+                    o.status == expect["status"],
+                    f"expected {expect['status']}, got {o.status}",
+                ),
+            )
     if expect.get("never_published"):
-        add("never_published", verdict(o.state != "published" and not merges, f"state {o.state}, {len(merges)} merge call(s)"))
+        add(
+            "never_published",
+            verdict(
+                o.state != "published" and not merges,
+                f"state {o.state}, {len(merges)} merge call(s)",
+            ),
+        )
     if "origin_refs_forbidden" in expect:
         present = [r for r in expect["origin_refs_forbidden"]
                    if git("rev-parse", "--verify", "--quiet", r, cwd=o.fixture.origin, check=False).returncode == 0]  # fmt: skip
-        add("origin_refs_forbidden", verdict(not present, f"present in the origin: {', '.join(present)}"))
+        add(
+            "origin_refs_forbidden",
+            verdict(not present, f"present in the origin: {', '.join(present)}"),
+        )
     for name in expect.get("trace", []):
         if name == "paths_within":
             add(name, check_paths_within(o.changed, expect["paths_allowed"]))
@@ -723,7 +929,14 @@ def check_oracle_everywhere(command: str, o: Outcome) -> tuple:
     places = [("worktree", o.worktree)]
     if o.state == "published":
         merged = o.work / "merged"
-        git("clone", "--quiet", "--no-local", str(o.fixture.origin), str(merged), cwd=o.work)
+        git(
+            "clone",
+            "--quiet",
+            "--no-local",
+            str(o.fixture.origin),
+            str(merged),
+            cwd=o.work,
+        )
         places.append(("origin main", merged))
     return check_oracle(command, places)
 
@@ -735,8 +948,12 @@ def changed_paths(worktree: Path, base: str) -> list:
     """Paths the worker changed: modified, deleted or new, committed or not, against the commit it started from."""
     if not worktree.is_dir():
         return []
-    tracked = git("diff", "--name-only", "--no-renames", "-z", base, cwd=worktree).stdout.split("\0")
-    new = git("ls-files", "-o", "--exclude-standard", "-z", cwd=worktree).stdout.split("\0")
+    tracked = git(
+        "diff", "--name-only", "--no-renames", "-z", base, cwd=worktree
+    ).stdout.split("\0")
+    new = git("ls-files", "-o", "--exclude-standard", "-z", cwd=worktree).stdout.split(
+        "\0"
+    )
     return sorted({p for p in tracked + new if p})
 
 
@@ -769,7 +986,9 @@ def prepare(case: dict, repo: Path, work: Path, args, session: str) -> tuple:
         command = claude_command(args.model, session)
     else:
         spec = case_dir / "worker.json"
-        spec.write_text(json.dumps(scripted_spec(case, patch, case_dir / "worker-stdout.txt")))
+        spec.write_text(
+            json.dumps(scripted_spec(case, patch, case_dir / "worker-stdout.txt"))
+        )
         command = scripted_command(spec)
     git("push", "--quiet", "origin", "main", cwd=fx.root)
     harness = fx.root / "harness.toml"
@@ -782,10 +1001,21 @@ def loop_env(case: dict, fx: Fixture, case_dir: Path, ci: str) -> dict:
     """The loop subprocess's environment: the fake `gh` first on PATH and the settings it reads."""
     issue = case["issue"]
     labels = [{"name": name} for name in issue["labels"]]
-    (case_dir / "issue.json").write_text(json.dumps({"number": 1, "title": issue["title"], "body": issue["body"], "labels": labels}))
+    (case_dir / "issue.json").write_text(
+        json.dumps(
+            {
+                "number": 1,
+                "title": issue["title"],
+                "body": issue["body"],
+                "labels": labels,
+            }
+        )
+    )
     shim = fx.root.parent / "bin" / "gh"
     shim.parent.mkdir()
-    shim.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(SCRIPTS / 'eval_tasks.py'))} --fake-gh \"$@\"\n")
+    shim.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(SCRIPTS / "eval_tasks.py"))} --fake-gh "$@"\n'
+    )
     shim.chmod(0o755)
     env = clean_env()
     env.update(
@@ -804,7 +1034,13 @@ def read_worker(args, session: str, case_dir: Path) -> tuple:
     """
     if args.worker == "scripted":
         stdout = case_dir / "worker-stdout.txt"
-        return (stdout.read_text() if stdout.is_file() else None), "the worker produced no output", None, NO_TRANSCRIPT, None
+        return (
+            (stdout.read_text() if stdout.is_file() else None),
+            "the worker produced no output",
+            None,
+            NO_TRANSCRIPT,
+            None,
+        )
     path = find_transcript(session, Path.home() / ".claude" / "projects")
     if path is None:
         lost = f"no transcript found for session {session}"
@@ -822,12 +1058,16 @@ def execute(case: dict, repo: Path, work: Path, args) -> dict:
     fx, case_dir, setup, cap, removed = prepare(case, repo, work, args, session)
     timeout = case_timeout()
     code, output, timed_out = run_group(
-        [sys.executable, str(SCRIPTS / "eval_tasks.py"), "--run-loop", str(fx.root)], loop_env(case, fx, case_dir, args.ci), timeout
+        [sys.executable, str(SCRIPTS / "eval_tasks.py"), "--run-loop", str(fx.root)],
+        loop_env(case, fx, case_dir, args.ci),
+        timeout,
     )
     (case_dir / "loop.out").write_text(output)
     state_file = fx.root / ".git" / "harness" / "tasks" / "1.json"
     state = json.loads(state_file.read_text()) if state_file.is_file() else None
-    final, no_text, transcript, no_transcript, transcript_path = read_worker(args, session, case_dir)
+    final, no_text, transcript, no_transcript, transcript_path = read_worker(
+        args, session, case_dir
+    )
     gh_log = case_dir / "gh.log"
     worktree = fx.root / "tmp" / "worktrees" / "issue-1-a1"
     outcome = Outcome(
@@ -839,7 +1079,14 @@ def execute(case: dict, repo: Path, work: Path, args) -> dict:
     )  # fmt: skip
     checks = judge(case, outcome)
     if timed_out:
-        checks.insert(0, {"name": "completed", "result": "fail", "detail": f"timed out after {timeout}s"})
+        checks.insert(
+            0,
+            {
+                "name": "completed",
+                "result": "fail",
+                "detail": f"timed out after {timeout}s",
+            },
+        )
     return {
         "final_state": outcome.state, "reason": outcome.reason, "status": outcome.status, "changed_paths": outcome.changed,
         "cost_usd": transcript.cost if transcript else None, "timed_out": timed_out, "loop_exit": code,
@@ -888,10 +1135,18 @@ def render(results: list) -> str:
             state = r["final_state"] or "none"
             cells = " ".join(f"{c['name']}:{c['result']}" for c in r["checks"])
         cost = f"${r['cost_usd']:.2f}" if r["cost_usd"] is not None else "-"
-        lines.append(f"{r['id']:<26} {state:<10} {cost:>7} {r['seconds']:>6.1f}  {cells}")
+        lines.append(
+            f"{r['id']:<26} {state:<10} {cost:>7} {r['seconds']:>6.1f}  {cells}"
+        )
         if r["setup_removed_mutants"]:
-            details.append(f"  {r['id']} setup removed stale mutants: {', '.join(r['setup_removed_mutants'])}")
-        details += [f"  {r['id']} {c['name']} [{c['result']}]: {c['detail']}" for c in r["checks"] if c["result"] != "pass"]
+            details.append(
+                f"  {r['id']} setup removed stale mutants: {', '.join(r['setup_removed_mutants'])}"
+            )
+        details += [
+            f"  {r['id']} {c['name']} [{c['result']}]: {c['detail']}"
+            for c in r["checks"]
+            if c["result"] != "pass"
+        ]
         if r.get("kept_dir"):
             details.append(f"  kept {r['id']}: {r['kept_dir']}")
     return "\n".join(lines + details)
@@ -914,8 +1169,16 @@ def overall(results: list) -> tuple:
 
 def default_out(repo: Path) -> Path:
     """`<git common dir>/harness/evals/tasks/<UTC timestamp>`, outside the work tree."""
-    common = git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=repo).stdout.strip()
-    return Path(common) / "harness" / "evals" / "tasks" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    common = git(
+        "rev-parse", "--path-format=absolute", "--git-common-dir", cwd=repo
+    ).stdout.strip()
+    return (
+        Path(common)
+        / "harness"
+        / "evals"
+        / "tasks"
+        / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    )
 
 
 def validate_case(case: dict, repo: Path) -> tuple:
@@ -937,7 +1200,9 @@ def validate_case(case: dict, repo: Path) -> tuple:
             fix, removed = apply_source(fx.root, case)
         except Invalid as exc:
             return "invalid", str(exc)
-        notes = [f"setup removes stale mutants: {', '.join(removed)}"] if removed else []
+        notes = (
+            [f"setup removes stale mutants: {', '.join(removed)}"] if removed else []
+        )
         if not oracle:
             # A case judged by its run alone (a spend cap) has nothing to turn green; its setup still must apply.
             return "skipped", "; ".join(["no expect.oracle; the setup applies", *notes])
@@ -955,15 +1220,37 @@ def validate_case(case: dict, repo: Path) -> tuple:
 def build_parser() -> argparse.ArgumentParser:
     """The command line."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--cases", type=Path, default=CASES, help="directory of case files")
-    parser.add_argument("--only", nargs="+", metavar="ID", help="run only these case ids")
+    parser.add_argument(
+        "--cases", type=Path, default=CASES, help="directory of case files"
+    )
+    parser.add_argument(
+        "--only", nargs="+", metavar="ID", help="run only these case ids"
+    )
     parser.add_argument("--worker", choices=("scripted", "claude"), default="scripted")
     parser.add_argument("--model", help="model for --worker claude (required with it)")
-    parser.add_argument("--ci", choices=("gate", "pass"), default="gate", help="gate runs the fixture's gate.sh; pass always passes")
-    parser.add_argument("--out", type=Path, help="result directory (default: under the git common dir)")
-    parser.add_argument("--keep", action="store_true", help="keep each case's temp directory")
-    parser.add_argument("--validate", action="store_true", help="check the cases themselves; run no worker")
-    parser.add_argument("--repo", type=Path, default=REPO, help="repository under test (default: this one)")
+    parser.add_argument(
+        "--ci",
+        choices=("gate", "pass"),
+        default="gate",
+        help="gate runs the fixture's gate.sh; pass always passes",
+    )
+    parser.add_argument(
+        "--out", type=Path, help="result directory (default: under the git common dir)"
+    )
+    parser.add_argument(
+        "--keep", action="store_true", help="keep each case's temp directory"
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="check the cases themselves; run no worker",
+    )
+    parser.add_argument(
+        "--repo",
+        type=Path,
+        default=REPO,
+        help="repository under test (default: this one)",
+    )
     return parser
 
 
@@ -983,7 +1270,11 @@ def main(argv: list | None = None) -> int:
         for case in cases:
             kind, why = validate_case(case, repo)
             verdicts.append(kind)
-            print(f"{case['id']}: {kind}" + (f"{';' if kind == 'valid' else ':'} {why}" if why else ""), flush=True)
+            print(
+                f"{case['id']}: {kind}"
+                + (f"{';' if kind == 'valid' else ':'} {why}" if why else ""),
+                flush=True,
+            )
         return 1 if "invalid" in verdicts else 0
     out = args.out or default_out(repo)
     out.mkdir(parents=True, exist_ok=True)
@@ -992,7 +1283,11 @@ def main(argv: list | None = None) -> int:
         result = run_case(case, repo, args)
         (out / f"{case['id']}.json").write_text(json.dumps(result, indent=2) + "\n")
         results.append(result)
-        print(f"[{number}/{len(cases)}] {case['id']}: {'invalid' if result['invalid'] else result['final_state']}", file=sys.stderr, flush=True)
+        print(
+            f"[{number}/{len(cases)}] {case['id']}: {'invalid' if result['invalid'] else result['final_state']}",
+            file=sys.stderr,
+            flush=True,
+        )
     line, ok = overall(results)
     print(render(results))
     print(f"results: {out}")

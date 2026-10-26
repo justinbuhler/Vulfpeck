@@ -153,7 +153,9 @@ def sweep(answered, gold_labels):
     def axis(value):
         return [round(value + step * SWEEP_STEP, 2) for step in (-1, 0, 1)]
 
-    shipped = tuple(round(v, 2) for v in (jev.ACCEPT_HIGH, jev.ACCEPT_LOW, jev.ALTERS_MAX))
+    shipped = tuple(
+        round(v, 2) for v in (jev.ACCEPT_HIGH, jev.ACCEPT_LOW, jev.ALTERS_MAX)
+    )
     rows = []
     for high, low, alters_max in itertools.product(
         axis(jev.ACCEPT_HIGH), axis(jev.ACCEPT_LOW), axis(jev.ALTERS_MAX)
@@ -220,7 +222,9 @@ def build_report(cases, labels, gold, tiers):
         "with_gold": len(labelled),
         "without_gold": len(unlabelled),
         "without_gold_ids": unlabelled,
-        "floor_vs_gold": compare([(cid, gold_labels[cid], r["floor"]) for cid, r in labelled]),
+        "floor_vs_gold": compare(
+            [(cid, gold_labels[cid], r["floor"]) for cid, r in labelled]
+        ),
         "jev": {
             "answered": len(answered),
             "fallback": len(results) - len(answered),
@@ -279,26 +283,26 @@ def render(rep):
         f'consequence eval: {rep["cases"]} cases, gold labeller "{rep["gold"]}"',
         rep["note"],
         "",
-        f'with a gold label: {rep["with_gold"]}',
-        f'without a gold label: {rep["without_gold"]}'
-        + (f' {_ids(rep["without_gold_ids"])}' if rep["without_gold_ids"] else ""),
+        f"with a gold label: {rep['with_gold']}",
+        f"without a gold label: {rep['without_gold']}"
+        + (f" {_ids(rep['without_gold_ids'])}" if rep["without_gold_ids"] else ""),
         "",
-        f'floor vs gold: {floor["exact"]} of {floor["of"]} exact',
+        f"floor vs gold: {floor['exact']} of {floor['of']} exact",
         *_matrix_lines(floor["matrix"], "floor"),
-        f'under (gold above floor): {len(floor["under"])} {_ids(floor["under"])}',
+        f"under (gold above floor): {len(floor['under'])} {_ids(floor['under'])}",
         "  the most a raise-only Jev can help",
         *[
-            f'  {cid}  gold {rows[cid]["gold"]}, floor {rows[cid]["floor"]}'
+            f"  {cid}  gold {rows[cid]['gold']}, floor {rows[cid]['floor']}"
             for cid in floor["under"]
         ],
-        f'over (floor above gold): {len(floor["over"])} {_ids(floor["over"])}',
+        f"over (floor above gold): {len(floor['over'])} {_ids(floor['over'])}",
         "  extra checks Jev cannot remove by design",
         *[
-            f'  {cid}  gold {rows[cid]["gold"]}, floor {rows[cid]["floor"]}'
+            f"  {cid}  gold {rows[cid]['gold']}, floor {rows[cid]['floor']}"
             for cid in floor["over"]
         ],
         "",
-        f'Jev: {jev_rep["answered"]} answered, {jev_rep["fallback"]} fallback',
+        f"Jev: {jev_rep['answered']} answered, {jev_rep['fallback']} fallback",
     ]
     if jev_rep["fallback_reasons"]:
         out.append(
@@ -306,7 +310,7 @@ def render(rep):
             + "; ".join(f"{k}: {v}" for k, v in jev_rep["fallback_reasons"].items())
         )
     out.append(
-        f'  status: accepted {jev_rep["status"]["accepted"]}, referred {jev_rep["status"]["referred"]}'
+        f"  status: accepted {jev_rep['status']['accepted']}, referred {jev_rep['status']['referred']}"
     )
     for label, key, column in (
         ("jev_tier", "jev_vs_gold", "jev_tier"),
@@ -314,8 +318,8 @@ def render(rep):
     ):
         part = jev_rep[key]
         out += [
-            f'{label} vs gold: {part["exact"]} of {part["of"]} exact, '
-            f'under {_ids(part["under"])}, over {_ids(part["over"])}',
+            f"{label} vs gold: {part['exact']} of {part['of']} exact, "
+            f"under {_ids(part['under'])}, over {_ids(part['over'])}",
             *_matrix_lines(part["matrix"], column),
         ]
     out.append("")
@@ -323,23 +327,23 @@ def render(rep):
         out.append("threshold sweep: skipped, no case was answered")
     else:
         out += [
-            f'threshold sweep over the acceptance rule ({jev_rep["answered"]} answered; '
+            f"threshold sweep over the acceptance rule ({jev_rep['answered']} answered; "
             "exact, under and over count accepted cases with a gold label; * is the shipped point)",
             "  high  low   alters  *  accepted  referred  exact  under  over",
             *[
-                f'  {s["accept_high"]:.2f}  {s["accept_low"]:.2f}  {s["alters_max"]:.2f}  '
-                f'{"*" if s["shipped"] else " "}  {s["accepted"]:>8}  {s["referred"]:>8}  '
-                f'{s["accepted_exact"]:>5}  {s["accepted_under"]:>5}  {s["accepted_over"]:>4}'
+                f"  {s['accept_high']:.2f}  {s['accept_low']:.2f}  {s['alters_max']:.2f}  "
+                f"{'*' if s['shipped'] else ' '}  {s['accepted']:>8}  {s['referred']:>8}  "
+                f"{s['accepted_exact']:>5}  {s['accepted_under']:>5}  {s['accepted_over']:>4}"
                 for s in rep["sweep"]
             ],
         ]
     out += ["", f'inter-labeller agreement (gold labeller "{rep["gold"]}" excluded)']
     for a in rep["agreement"]:
-        percent = "n/a" if a["percent"] is None else f'{a["percent"]:.1f}%'
-        kappa = "n/a" if a["kappa"] is None else f'{a["kappa"]:.4f}'
+        percent = "n/a" if a["percent"] is None else f"{a['percent']:.1f}%"
+        kappa = "n/a" if a["kappa"] is None else f"{a['kappa']:.4f}"
         out.append(
-            f'  {a["a"]} vs {a["b"]}: {a["shared"]} shared, {percent} agree, '
-            f'kappa {kappa}, disagree {", ".join(a["disagreements"]) or "none"}'
+            f"  {a['a']} vs {a['b']}: {a['shared']} shared, {percent} agree, "
+            f"kappa {kappa}, disagree {', '.join(a['disagreements']) or 'none'}"
         )
     if not rep["agreement"]:
         out.append("  none: fewer than two labellers besides the gold one")
@@ -371,9 +375,7 @@ def main(argv=None):
         os.environ["JEV_OFFLINE"] = "1"
     cases = load_cases(args.cases)
     labels = load_labels(args.labels, {c["id"] for c in cases})
-    rep = build_report(
-        cases, labels, args.gold, harness_config.load(REPO)["tiers"]
-    )
+    rep = build_report(cases, labels, args.gold, harness_config.load(REPO)["tiers"])
     print(json.dumps(rep, indent=2) if args.json else render(rep))
     if not args.check:
         return 0

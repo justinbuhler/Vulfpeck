@@ -516,7 +516,15 @@ check(
 for name in ("reassess", "_ask", "ACTIONS", "STOP_AT"):
     check(f"jev no longer has {name}", not hasattr(jev, name))
 done = subprocess.run(
-    [sys.executable, str(Path(jev.__file__)), "reassess", "--fingerprint", "f", "--attempts", "1"],
+    [
+        sys.executable,
+        str(Path(jev.__file__)),
+        "reassess",
+        "--fingerprint",
+        "f",
+        "--attempts",
+        "1",
+    ],
     capture_output=True,
     text=True,
     check=False,
@@ -614,7 +622,9 @@ jev.evaluate({"a": 2}, Q)
 check("a different payload is a miss and is sent", len(sent) == 2)
 
 # A decision's own record: each decision function names it.
-sent = serve({"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}})
+sent = serve(
+    {"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}}
+)
 r = cons(["scripts/x.py"])
 check(
     "consequence names the record of its exchange",
@@ -624,7 +634,9 @@ check(
 )
 sent = serve({k: {"noul": v} for k, v in GOOD.items()})
 r = jev.intent_alignment("fix the gate", "fix the gate and rewrite land.sh")
-check("intent_alignment names the record of its exchange", r["record"] == key_of(sent[0]))
+check(
+    "intent_alignment names the record of its exchange", r["record"] == key_of(sent[0])
+)
 serve(error=urllib.error.HTTPError(jev.URL, 500, "boom", {}, None))
 check(
     "a fallback has no record",
@@ -652,7 +664,9 @@ check(
     raises(lambda: jev.evaluate({"a": 1}, Q)) == "not recorded (offline)",
 )
 os.environ["JEV_OFFLINE"] = ""
-sent = serve({"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}})
+sent = serve(
+    {"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}}
+)
 cons(["scripts/x.py"])
 os.environ["JEV_OFFLINE"] = "1"
 del os.environ["TYPESAFE_API_KEY"]
@@ -674,7 +688,9 @@ check(
 )
 
 # A record that does not parse, or whose answers fail validation, is a miss.
-sent = serve({"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}})
+sent = serve(
+    {"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}}
+)
 cons(["scripts/x.py"])
 records = Path(os.environ["JEV_RECORD_DIR"])
 path = records / f"{key_of(sent[0])}.json"
@@ -748,7 +764,9 @@ check(
 # The decision log: one line per exchange, never the request content.
 DESCRIPTION = "UNIQUE_DESCRIPTION_7c1e"
 mark = len(events())
-sent = serve({"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}})
+sent = serve(
+    {"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}}
+)
 cons(["scripts/x.py"], DESCRIPTION)
 cons(["scripts/x.py"], DESCRIPTION)
 key = key_of(sent[0])
@@ -800,7 +818,9 @@ check(
 blocker = SCRATCH / "not-a-directory"
 blocker.write_text("a file where the record directory should be")
 mark = len(events())
-sent = serve({"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}})
+sent = serve(
+    {"tier": tier_answers(High=0.7, Medium=0.3), "alters_values": {"noul": 0.9}}
+)
 os.environ["JEV_RECORD_DIR"] = str(blocker / "records")
 stderr = io.StringIO()
 with contextlib.redirect_stderr(stderr):

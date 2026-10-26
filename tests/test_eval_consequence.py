@@ -151,7 +151,12 @@ def fake_urlopen(request, timeout):
         raise urllib.error.URLError("no route")
     tiers, alters = JEV[description]
     return Reply(
-        {"answers": {"tier": {"probabilities": tiers}, "alters_values": {"noul": alters}}}
+        {
+            "answers": {
+                "tier": {"probabilities": tiers},
+                "alters_values": {"noul": alters},
+            }
+        }
     )
 
 
@@ -587,7 +592,8 @@ check(
 
 # --- the data files are validated -----------------------------------------------------
 bad = write_jsonl(
-    "bad-tier.jsonl", [{"id": "c1", "labeller": "gold", "tier": "Severe", "rationale": "x"}]
+    "bad-tier.jsonl",
+    [{"id": "c1", "labeller": "gold", "tier": "Severe", "rationale": "x"}],
 )
 check("an unknown tier is refused", "unknown tier" in (exits(labels=bad) or ""))
 dup = write_jsonl(
@@ -601,7 +607,10 @@ check("a duplicate label is refused", "duplicate label" in (exits(labels=dup) or
 stray = write_jsonl(
     "stray.jsonl", [{"id": "zzz", "labeller": "gold", "tier": "Low", "rationale": "x"}]
 )
-check("a label for an unknown case is refused", "unknown case" in (exits(labels=stray) or ""))
+check(
+    "a label for an unknown case is refused",
+    "unknown case" in (exits(labels=stray) or ""),
+)
 
 # --- the shipped files and the command line ---------------------------------------------
 fresh_records()
@@ -616,7 +625,8 @@ shipped_cases = len(
 )
 check(
     "the shipped cases and labels load and every case is scored",
-    shipped["cases"] == shipped_cases and shipped["with_gold"] + shipped["without_gold"] == shipped_cases,
+    shipped["cases"] == shipped_cases
+    and shipped["with_gold"] + shipped["without_gold"] == shipped_cases,
     str(shipped["cases"]),
 )
 
@@ -668,10 +678,12 @@ check(
 gate_env = {
     k: v
     for k, v in env.items()
-    if k not in ("TYPESAFE_API_KEY", "JEV_RECORD_DIR", "HARNESS_EVENTS_LOG", "JEV_DISABLE")
+    if k
+    not in ("TYPESAFE_API_KEY", "JEV_RECORD_DIR", "HARNESS_EVENTS_LOG", "JEV_DISABLE")
 }
 gate_env.update(
-    JEV_RECORD_DIR=str(fresh_records()), HARNESS_EVENTS_LOG=str(SCRATCH / "gate-events.jsonl")
+    JEV_RECORD_DIR=str(fresh_records()),
+    HARNESS_EVENTS_LOG=str(SCRATCH / "gate-events.jsonl"),
 )
 done = subprocess.run(
     [
