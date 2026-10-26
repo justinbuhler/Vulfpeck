@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from paths import REPO, SCRIPTS  # noqa: E402
 import harness_config  # noqa: E402
+from jev import floor_tier  # noqa: E402
 
 # These tests run real hooks, which record decisions (scripts/harness_events.py).
 # Point the record at a scratch file so fixtures never enter the real one.
@@ -134,6 +135,34 @@ check(
     "scripts/harness_inputs.py" in harness_config.load(REPO)["hooks"]["watched_files"],
 )
 
+# Expected floors are independent of both DEFAULTS and the shipped TOML.
+protected = {
+    "scripts/task_loop.py": "Critical",
+    "evals/tasks/cases/budget-cap.json": "High",
+    "scripts/eval_consequence.py": "High",
+    "scripts/eval_tasks.py": "High",
+    "scripts/guard_lib.py": "High",
+    "scripts/hook_adapter.py": "High",
+    "scripts/render_hooks.py": "High",
+    "scripts/loop_reset.py": "High",
+    "scripts/scope.py": "High",
+    "scripts/harness_events.py": "High",
+    "scripts/harness_inputs.py": "High",
+    "scripts/harness_doctor.py": "High",
+    "scripts/harness_install.py": "High",
+    "scripts/github_bootstrap.sh": "High",
+    "pyproject.toml": "High",
+    "uv.lock": "High",
+    ".gitignore": "High",
+}
+partial = Path(tempfile.mkdtemp(prefix="harness-config-partial."))
+(partial / "harness.toml").write_text('[tiers]\nlow = ["notes/**"]\n')
+for label, root in (("missing config", empty), ("partial config", partial)):
+    tiers = harness_config.load(root)["tiers"]
+    for path, expected in protected.items():
+        actual = floor_tier([path], tiers)[0]
+        check(f"{label} preserves {expected} floor for {path}", actual == expected, actual)
+
 # --- overrides merge; unknown or mistyped keys are refused -------------------
 over = Path(tempfile.mkdtemp(prefix="harness-config-over."))
 (over / "harness.toml").write_text(
@@ -204,10 +233,10 @@ check(
     d0["jev"]["enabled"] is True and d0["jev"]["timeout"] == 8.0,
 )
 check(
-    "no harness.toml: only plain docs are Low, ADRs are Medium",
+    "no harness.toml: docs are Low, ADRs Medium, task loop Critical",
     d0["tiers"]["low"] == ["README.md", "ENGINEERING_LOG.md", "HARNESS.md", "docs/**"]
     and d0["tiers"]["medium"] == ["docs/adr/**"]
-    and d0["tiers"]["critical"] == [],
+    and d0["tiers"]["critical"] == ["scripts/task_loop.py"],
 )
 check(
     "no harness.toml: rules and machinery are High",

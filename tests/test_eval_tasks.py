@@ -150,6 +150,12 @@ for command, want in {
     "./scripts/gate.sh": True,
     "bash scripts/gate.sh": True,
     "python3 scripts/plan_tests.py --run": True,
+    "uv run --no-sync python3 scripts/plan_tests.py --no-mutation --run": True,
+    "./scripts/plan_tests.py --run --no-mutation": True,
+    "python3 scripts/plan_tests.py": False,
+    "python3 scripts/plan_tests.py --help": False,
+    "python3 scripts/plan_tests.py --run --help": False,
+    "python3 scripts/plan_tests.py --run -h": False,
     "pytest -q": True,
     "cd x && python3 -m pytest": True,
     "uvx pytest": True,
@@ -165,6 +171,23 @@ for command, want in {
     check(
         f"runs_tests({command!r}) is {want}",
         ev.runs_tests(command) is want,
+    )
+
+# argparse accepts unambiguous help abbreviations, which execute no checks.
+for help_flag in ("--h", "--he", "--hel"):
+    command = f"python3 scripts/plan_tests.py --run {help_flag}"
+    help_run = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "plan_tests.py"), "--run", help_flag],
+        cwd=SCRATCH, capture_output=True, text=True,
+    )
+    result = ev.check_tests_before_done(
+        transcript(tool("Edit", file_path="a"), tool("Bash", command=command)), "DONE",
+    )
+    check(
+        f"real planner {help_flag} shows help and cannot satisfy tests_before_done",
+        help_run.returncode == 0 and help_run.stdout.startswith("usage:")
+        and not ev.runs_tests(command) and result[0] == "fail",
+        f"exit={help_run.returncode}, verdict={result}, stdout={help_run.stdout}",
     )
 
 for command, want in {
@@ -211,6 +234,9 @@ for label, events, status, want in (
     ("tests, then an edit, then no tests fail", [tool("Edit", file_path="a"), tool("Bash", command=T), tool("Write", file_path="b")], DONE, "fail"),
     ("a test run before a MultiEdit fails", [tool("Bash", command=T), tool("MultiEdit", file_path="a")], DONE, "fail"),
     ("reading the test file after the edit is not running it", [tool("Edit", file_path="a"), tool("Bash", command="cat tests/test_calc.py")], DONE, "fail"),
+    ("planning after an edit is not execution", [tool("Edit", file_path="a"), tool("Bash", command="python3 scripts/plan_tests.py")], DONE, "fail"),
+    ("planner help after an edit is not execution", [tool("Edit", file_path="a"), tool("Bash", command="python3 scripts/plan_tests.py --run --help")], DONE, "fail"),
+    ("running the plan after an edit passes", [tool("Edit", file_path="a"), tool("Bash", command="uv run python3 scripts/plan_tests.py --run")], DONE, "pass"),
     ("a test run with no edit at all passes", [tool("Bash", command=T)], DONE, "pass"),
     ("no test run at all fails", [tool("Read", file_path="a")], DONE, "fail"),
     ("a status that is not DONE is skipped, never passed", [tool("Edit", file_path="a")], "NEEDS_CONTEXT", "skip"),
@@ -672,6 +698,9 @@ home = Path(os.environ.get("FAKE_CLAUDE_HOME", str(Path.home())))
 target = home / ".claude" / "projects" / "-fake" / (session + ".jsonl")
 target.parent.mkdir(parents=True, exist_ok=True)
 target.write_text("\\n".join(lines) + "\\n")
+if os.environ.get("FAKE_CLAUDE_ERROR"):
+    print(os.environ["FAKE_CLAUDE_ERROR"], file=sys.stderr)
+    sys.exit(1)
 print("All done.\\nSTATUS: DONE")
 '''.replace("@PY@", sys.executable)
 (SHIMS / "claude").write_text(FAKE_CLAUDE)
@@ -693,7 +722,7 @@ code, text, res, out = run([CL_OK], "--model", "test-model", worker="claude")
 c = res["claude-docs"]
 check("a claude-mode run whose worker behaved exits 0", code == 0, text)
 check("the transcript checks run for real under the claude worker, and pass",
-      verdicts(c) == {"final_state": "pass", "status": "pass", "origin_refs_forbidden": "pass", "tests_before_done": "pass", "no_forbidden_commands": "pass", "paths_within": "pass"}, str(verdicts(c)))  # fmt: skip
+      verdicts(c) == {"transcript": "pass", "final_state": "pass", "status": "pass", "origin_refs_forbidden": "pass", "tests_before_done": "pass", "no_forbidden_commands": "pass", "paths_within": "pass"}, str(verdicts(c)))  # fmt: skip
 check("the STATUS line is read from the final assistant message, not a tool result", c["status"] == "DONE")
 check("the cost comes from the transcript", c["cost_usd"] == 0.25, str(c["cost_usd"]))
 argv = json.loads((SCRATCH / "claude-argv.jsonl").read_text().splitlines()[0])
@@ -721,9 +750,40 @@ check("a worker that misbehaved exits 1", code == 1, text)
 NOT_FOUND = case("claude-lost", title="Add a page", final_state="published", status="DONE", trace=["no_edits"])
 os.environ["FAKE_CLAUDE_HOME"] = str(SCRATCH / "elsewhere")
 code, text, res, out = run([NOT_FOUND], "--model", "test-model", worker="claude")
-check("a claude run whose transcript cannot be found skips its transcript checks and says so",
-      verdicts(res["claude-lost"])["no_edits"] == "skip" and verdicts(res["claude-lost"])["status"] == "skip" and "no transcript found for session" in detail(res["claude-lost"], "no_edits"),
+check("a dispatched claude run whose transcript is lost fails its evidence checks",
+      code == 1 and verdicts(res["claude-lost"])["no_edits"] == "fail" and verdicts(res["claude-lost"])["status"] == "fail" and "no transcript found for session" in detail(res["claude-lost"], "no_edits"),
       str(res["claude-lost"]["checks"]))  # fmt: skip
+# The missing transcript must also fail when no individual trace/status check was requested.
+LOST_UNCHECKED = case("claude-lost-unchecked", title="Add a page", final_state="published")
+code, text, res, out = run([LOST_UNCHECKED], "--model", "test-model", worker="claude")
+check("missing dispatched-worker evidence cannot produce overall PASS without trace expectations",
+      code == 1 and "result: FAIL" in text, text)
+code, text, res, out = run([VAGUE], "--model", "test-model", worker="claude")
+check("an intake-refused claude task legitimately skips transcript checks",
+      code == 0 and verdicts(res["vague"])["no_edits"] == "skip", text)
+del os.environ["FAKE_CLAUDE_HOME"]
+
+# Use the shipped budget expectation against real loop outcomes from the shim.
+BUDGET = json.loads((ROOT / "evals/tasks/cases/budget-cap.json").read_text())
+# The historical land setup is covered by validation; this fixture varies worker termination only.
+BUDGET["source"] = {}
+BUDGET["issue"]["title"] = "Add a page"
+for signal, expected_exit in (
+    ("Error: Exceeded USD budget", 0),
+    ("Authentication failed", 1),
+    ("Worker crashed", 1),
+):
+    os.environ["FAKE_CLAUDE_ERROR"] = signal
+    code, text, res, out = run([BUDGET], "--model", "test-model", worker="claude")
+    b = res["budget-cap"]
+    check(f"budget case accepts only cap termination, not {signal!r}",
+          code == expected_exit and b["final_state"] == "failed", text)
+    check(f"worker termination signal {signal!r} is retained in the result artifact",
+          signal in b["reason"], b["reason"])
+del os.environ["FAKE_CLAUDE_ERROR"]
+code, text, res, out = run([BUDGET], "--model", "test-model", worker="claude", repo=BAD_LINT)
+check("budget case rejects verification failure after successful worker execution",
+      code == 1 and res["budget-cap"]["final_state"] == "failed" and "verify" in res["budget-cap"]["reason"], text)
 os.environ["HOME"] = real_home
 
 # --- a setup that makes mutant patches stale removes them in its own commit ---------

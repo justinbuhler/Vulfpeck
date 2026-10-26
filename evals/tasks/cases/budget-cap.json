@@ -20,6 +20,7 @@
   },
   "expect": {
     "final_state": "failed",
+    "reason_contains": "Error: Exceeded USD budget",
     "never_published": true,
     "paths_allowed": [
       "scripts/land.sh",
