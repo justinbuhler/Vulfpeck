@@ -1,0 +1,34 @@
+{
+  "id": "bug-land-merge-abort",
+  "kind": "bug",
+  "source": {
+    "commit": "3b3aa99",
+    "revert_paths": [
+      "scripts/land.sh"
+    ]
+  },
+  "issue": {
+    "title": "land.sh leaves main mid-merge after a conflicting origin sync",
+    "labels": [
+      "ready-for-agent",
+      "bug"
+    ],
+    "body": "When `./scripts/land.sh` syncs local `main` with an `origin/main` that has diverged and the merge conflicts, it reports that main is unchanged, but the main checkout is left with conflict markers and `MERGE_HEAD` in place.\n\n## Done when\n\n- A conflicting divergence leaves no merge in progress and a clean main checkout.\n- `uv run --no-sync python3 tests/test_land.py` passes."
+  },
+  "expect": {
+    "final_state": "blocked",
+    "reason_contains": "needs-review",
+    "status": "DONE",
+    "paths_allowed": [
+      "scripts/land.sh",
+      "tests/test_land.py"
+    ],
+    "oracle": "uv run --no-sync python3 tests/test_land.py",
+    "trace": [
+      "tests_before_done",
+      "no_forbidden_commands",
+      "paths_within",
+      "oracle_passes"
+    ]
+  }
+}

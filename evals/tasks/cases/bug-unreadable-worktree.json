@@ -1,0 +1,34 @@
+{
+  "id": "bug-unreadable-worktree",
+  "kind": "bug",
+  "source": {
+    "commit": "1c937a9",
+    "revert_paths": [
+      ".claude/harness/agent_harness.py"
+    ]
+  },
+  "issue": {
+    "title": "provision calls an unreadable worktree clean",
+    "labels": [
+      "ready-for-agent",
+      "bug"
+    ],
+    "body": "`agent_harness.py provision` pointed at an existing worktree whose `git status` fails (a corrupt or unreadable index) reports it as an existing clean worktree. That label invites deleting uncommitted work.\n\n## Done when\n\n- Provisioning refuses such a target and says it is unreadable.\n- `uv run --no-sync python3 tests/test_agent_harness.py` passes."
+  },
+  "expect": {
+    "final_state": "blocked",
+    "reason_contains": "needs-review",
+    "status": "DONE",
+    "paths_allowed": [
+      ".claude/harness/agent_harness.py",
+      "tests/test_agent_harness.py"
+    ],
+    "oracle": "uv run --no-sync python3 tests/test_agent_harness.py",
+    "trace": [
+      "tests_before_done",
+      "no_forbidden_commands",
+      "paths_within",
+      "oracle_passes"
+    ]
+  }
+}

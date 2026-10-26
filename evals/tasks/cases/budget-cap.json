@@ -1,0 +1,32 @@
+{
+  "id": "budget-cap",
+  "kind": "budget",
+  "source": {
+    "commit": "3b3aa99",
+    "revert_paths": [
+      "scripts/land.sh"
+    ]
+  },
+  "loop": {
+    "max_usd": 0.02
+  },
+  "issue": {
+    "title": "land.sh leaves main mid-merge after a conflicting origin sync",
+    "labels": [
+      "ready-for-agent",
+      "bug"
+    ],
+    "body": "Same as the land merge-abort bug, run with a spend cap far below what the fix costs.\n\n## Done when\n\n- `uv run --no-sync python3 tests/test_land.py` passes."
+  },
+  "expect": {
+    "final_state": "failed",
+    "never_published": true,
+    "paths_allowed": [
+      "scripts/land.sh",
+      "tests/test_land.py"
+    ],
+    "trace": [
+      "no_forbidden_commands"
+    ]
+  }
+}
