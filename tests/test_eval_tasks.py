@@ -836,7 +836,7 @@ check("--worker claude without --model is a usage error, so no model is chosen b
 done = cli("--worker", "gemini")
 check("an unknown worker is a usage error", done.returncode == 2, done.stderr)
 check("the default output directory is under the repository's git dir, outside its work tree",
-      re.fullmatch(re.escape(str(REPO_FX / ".git" / "harness" / "evals" / "tasks")) + r"/\d{8}T\d{6}Z", str(ev.default_out(REPO_FX))) is not None, str(ev.default_out(REPO_FX)))  # fmt: skip
+      re.fullmatch(re.escape(str(REPO_FX.resolve() / ".git" / "harness" / "evals" / "tasks")) + r"/\d{8}T\d{6}Z", str(ev.default_out(REPO_FX))) is not None, str(ev.default_out(REPO_FX)))  # fmt: skip
 
 shutil.rmtree(SCRATCH, ignore_errors=True)
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
